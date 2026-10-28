@@ -12,6 +12,13 @@ Returns
 -------
 None
     Defines the Rust analyzer and its factory.
+
+Notes
+-----
+Read Tree-sitter points through their tuple interface. In tree-sitter 0.26.0,
+the ``row`` and ``column`` attribute getters return borrowed references, which
+can free coordinate integers still owned by the point and corrupt memory.
+Tuple indexing retains the integers correctly on both 0.25 and 0.26.
 """
 
 from __future__ import annotations
@@ -276,8 +283,8 @@ def _calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
                 CallSite(
                     kind=kind,
                     target=target,
-                    lineno=function.start_point.row + 1,
-                    col_offset=function.start_point.column,
+                    lineno=function.start_point[0] + 1,
+                    col_offset=function.start_point[1],
                     base=base,
                     external_target_kind="rust_expression"
                     if kind == "unresolved"
@@ -294,8 +301,8 @@ def _calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
                 CallSite(
                     kind="unresolved",
                     target=target,
-                    lineno=macro.start_point.row + 1,
-                    col_offset=macro.start_point.column,
+                    lineno=macro.start_point[0] + 1,
+                    col_offset=macro.start_point[1],
                     external_target_kind="rust_macro",
                     external_target_name=target,
                 )
@@ -348,8 +355,8 @@ def _function(
     return FunctionArtifact(
         name=name,
         stable_id=f"rust:function:{owner}{stable_owner}:{name}",
-        lineno=node.start_point.row + 1,
-        end_lineno=body.end_point.row + 1 if body is not None else None,
+        lineno=node.start_point[0] + 1,
+        end_lineno=body.end_point[0] + 1 if body is not None else None,
         signature=signature,
         docstring=None,
         has_docstring=0,
@@ -402,7 +409,7 @@ def _enum_members(
                 ordinal=ordinal,
                 name=name,
                 signature=_normalized(child, source),
-                lineno=child.start_point.row + 1,
+                lineno=child.start_point[0] + 1,
             )
         )
     return tuple(members)
@@ -428,7 +435,7 @@ def _import(node: Node, source: bytes) -> ImportArtifact:
     return ImportArtifact(
         name=target,
         alias=alias if separator else None,
-        lineno=node.start_point.row + 1,
+        lineno=node.start_point[0] + 1,
     )
 
 
@@ -464,7 +471,7 @@ def _macro_declaration(
         name=name,
         stable_id=f"rust:macro:{owner}:{name}",
         kind="macro",
-        lineno=node.start_point.row + 1,
+        lineno=node.start_point[0] + 1,
         signature=_normalized(node, source),
     )
 
@@ -716,7 +723,7 @@ class RustAnalyzer:
     """
 
     name = "rust"
-    version = "3"
+    version = "4"
     discovery_globs: tuple[str, ...] = ("*.rs",)
     default_coverage_roots: tuple[str, ...] = ("src", "tests", "benches", "examples")
 
@@ -913,7 +920,7 @@ class RustAnalyzer:
                         name=name,
                         stable_id=stable_id,
                         kind=declaration_kind,
-                        lineno=node.start_point.row + 1,
+                        lineno=node.start_point[0] + 1,
                         signature=_normalized(node, source),
                         enum_members=(
                             _enum_members(
@@ -950,8 +957,8 @@ class RustAnalyzer:
                     ClassArtifact(
                         name=owner_name,
                         stable_id=f"rust:{owner_kind}:{owner}:{owner_name}",
-                        lineno=node.start_point.row + 1,
-                        end_lineno=node.end_point.row + 1,
+                        lineno=node.start_point[0] + 1,
+                        end_lineno=node.end_point[0] + 1,
                         docstring=None,
                         has_docstring=0,
                         methods=methods,
