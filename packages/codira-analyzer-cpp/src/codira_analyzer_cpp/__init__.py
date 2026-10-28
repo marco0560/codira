@@ -11,8 +11,9 @@ Responsibilities
 Design principles
 -----------------
 Tree-sitter remains the default. An explicitly selected shared Clang frontend
-can supply a source-written declaration and call subset when its exact compile
-profile and dependency closure are complete.
+can supply source-written declarations and calls plus source-invoked variable
+and constant declarations with compiler-observed provenance when its exact
+compile profile and dependency closure are complete.
 
 Architectural role
 ------------------
@@ -49,6 +50,7 @@ if TYPE_CHECKING:
         CompilationContext,
         CompileProfile,
         FrontendCallable,
+        FrontendDeclaration,
         FrontendPreprocessorEvent,
         FrontendResult,
         HeaderProjectionResolution,
@@ -124,6 +126,7 @@ from codira.contracts import (
 from codira.generated import (
     CompilerObservedCallableProvenance,
     CompilerObservedCallableProvenanceV3,
+    CompilerObservedDeclarationProvenance,
     CompilerObservedMacroInvocation,
     CompilerObservedSourceCoordinate,
     GeneratedCallableEvidence,
@@ -920,6 +923,223 @@ def _clang_distinct_prototype_rows(
     return tuple(row for row in candidates if row[0] is not canonical_callable)
 
 
+def _clang_macro_invocation_for_declaration(
+    declaration: FrontendDeclaration,
+    result: FrontendResult,
+    *,
+    path: Path,
+    root: Path,
+    source_bytes: bytes,
+    source_sha256: str,
+    context_identity: str | None,
+) -> tuple[CompilerObservedDeclarationProvenance, FrontendPreprocessorEvent] | None:
+    """Build bounded evidence for one source-invoked C++ variable or constant declaration.
+
+    Parameters
+    ----------
+    declaration : codira_clang_frontend.FrontendDeclaration
+        Eligible file-scope, namespace, or record variable or constant emitted by Clang.
+    result : codira_clang_frontend.FrontendResult
+        Native preprocessing events and their captured output identity.
+    path : pathlib.Path
+        Translation unit whose bytes were captured by Clang.
+    root : pathlib.Path
+        Repository root used to make evidence coordinates portable.
+    source_bytes : bytes
+        Current translation-unit bytes verified against the dependency closure.
+    source_sha256 : str
+        Captured digest of the translation unit.
+    context_identity : str or None
+        Analyzer input fingerprint binding the native result.
+
+    Returns
+    -------
+    tuple[CompilerObservedDeclarationProvenance, FrontendPreprocessorEvent] or None
+        Complete declaration evidence and its unique invocation event, or ``None``
+        when any source, identity, or event join is incomplete or ambiguous.
+    """
+    origin = declaration.provenance
+    supported_decl_kind = declaration.decl_kind == "Var" or (
+        declaration.decl_kind == "Field"
+        and declaration.owner_usr is not None
+        and declaration.owner_name is not None
+        and declaration.owner_kind in {"Record", "CXXRecord"}
+        and declaration.owner_location is not None
+    )
+    if (
+        (origin != "macro_argument" and origin != "macro_replacement")
+        or (declaration.kind != "variable" and declaration.kind != "constant")
+        or not supported_decl_kind
+        or declaration.usr is None
+        or not context_identity
+        or hashlib.sha256(source_bytes).hexdigest() != source_sha256
+    ):
+        return None
+    location = declaration.location
+    expansion = location.expansion if location is not None else None
+    expansion_coordinate = _clang_compiler_source_coordinate(expansion, root)
+    if (
+        expansion is None
+        or expansion_coordinate is None
+        or expansion.path is None
+        or Path(expansion.path).resolve() != path.resolve()
+    ):
+        return None
+
+    matching_events: list[FrontendPreprocessorEvent] = []
+    for event in result.preprocessing:
+        begin = event.span.begin if event.span is not None else None
+        begin_position = (
+            begin.expansion or begin.spelling if begin is not None else None
+        )
+        if (
+            event.kind == "macro_expansion"
+            and event.name
+            and event.invocation
+            and begin_position is not None
+            and begin_position.path is not None
+            and begin_position.offset == expansion.offset
+            and Path(begin_position.path).resolve() == path.resolve()
+        ):
+            matching_events.append(event)
+    if len(matching_events) != 1:
+        return None
+    event = matching_events[0]
+    if event.name is None or event.invocation is None or event.span is None:
+        return None
+    begin = event.span.begin
+    end = event.span.end
+    if begin is None or end is None:
+        return None
+    begin_position = begin.expansion or begin.spelling
+    end_position = end.expansion or end.spelling
+    if (
+        begin_position is None
+        or end_position is None
+        or begin_position.path is None
+        or end_position.path is None
+        or begin_position.offset is None
+        or end_position.offset is None
+        or begin_position.offset < 0
+        or end_position.offset < begin_position.offset
+        or Path(begin_position.path).resolve() != path.resolve()
+        or Path(end_position.path).resolve() != path.resolve()
+    ):
+        return None
+    start = begin_position.offset
+    try:
+        source_invocation = event.invocation.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    half_open_end = start + len(source_invocation)
+    if (
+        not source_invocation
+        or not start <= end_position.offset < half_open_end
+        or source_bytes[start:half_open_end] != source_invocation
+    ):
+        return None
+    spelling_coordinate = _clang_compiler_source_coordinate(
+        location.spelling if location is not None else None, root
+    )
+    invocation = CompilerObservedMacroInvocation(
+        name=event.name,
+        path=expansion_coordinate.path,
+        byte_range=(start, half_open_end),
+        text=event.invocation,
+    )
+
+    def observed_point(point: SourcePoint | None) -> dict[str, object] | None:
+        """Serialize compiler spelling and expansion points without absolutes.
+
+        Parameters
+        ----------
+        point : codira_clang_frontend.SourcePoint or None
+            Native point to retain in the opaque receipt.
+
+        Returns
+        -------
+        dict[str, object] or None
+            Portable coordinates and the native macro-location flag.
+        """
+        if point is None:
+            return None
+        spelling = _clang_compiler_source_coordinate(point.spelling, root)
+        expansion_point = _clang_compiler_source_coordinate(point.expansion, root)
+        return {
+            "spelling": asdict(spelling) if spelling is not None else None,
+            "expansion": (
+                asdict(expansion_point) if expansion_point is not None else None
+            ),
+            "is_macro": point.is_macro,
+        }
+
+    owner_location = observed_point(declaration.owner_location)
+    source_span = None
+    if declaration.span is not None:
+        source_span = {
+            "begin": observed_point(declaration.span.begin),
+            "end": observed_point(declaration.span.end),
+        }
+    receipt = {
+        "schema": "clang.frontend.declaration-observation.v1",
+        "context": {
+            "profile_identity": result.profile_identity,
+            "cache_fingerprint": result.cache_fingerprint,
+            "analyzer_context_identity": context_identity,
+            "source_sha256": source_sha256,
+            "stdout_sha256": result.stdout_sha256,
+        },
+        "declaration": {
+            "usr": declaration.usr,
+            "entity_kind": declaration.kind,
+            "name": declaration.name,
+            "qualified_name": declaration.qualified_name,
+            "decl_kind": declaration.decl_kind,
+            "type_text": declaration.type_text,
+            "provenance": declaration.provenance,
+            "is_definition": declaration.is_definition,
+            "is_file_scope": declaration.is_file_scope,
+            "owner_usr": declaration.owner_usr,
+            "owner_name": declaration.owner_name,
+            "owner_kind": declaration.owner_kind,
+            "owner_location": owner_location,
+            "access": declaration.access,
+            "location": observed_point(declaration.location),
+            "range": source_span,
+        },
+        "macro_expansion": {
+            "name": event.name,
+            "invocation": event.invocation,
+            "byte_range": (start, half_open_end),
+        },
+    }
+    try:
+        receipt_json = json.dumps(
+            receipt,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        if len(receipt_json.encode("utf-8")) > 64 * 1024:
+            return None
+    except (TypeError, ValueError, UnicodeEncodeError):
+        return None
+    return (
+        CompilerObservedDeclarationProvenance(
+            origin=origin,
+            declaration_kind=cast("Literal['variable', 'constant']", declaration.kind),
+            source_sha256=source_sha256,
+            context_identity=context_identity,
+            receipt_namespace="clang.frontend.declaration-observation.v1",
+            receipt_json=receipt_json,
+            spelling_location=spelling_coordinate,
+            expansion_location=expansion_coordinate,
+            invocation=invocation,
+        ),
+        event,
+    )
+
+
 def _clang_captured_source(
     path: Path, result: FrontendResult
 ) -> tuple[str, bytes] | None:
@@ -966,7 +1186,7 @@ def _analysis_from_clang_result(
     *,
     context_identity: str | None = None,
 ) -> AnalysisResult | None:
-    """Map supported source-written Clang declarations and calls into C++ DTOs.
+    """Map supported C++ declarations and calls into analyzer DTOs.
 
     Parameters
     ----------
@@ -985,6 +1205,8 @@ def _analysis_from_clang_result(
     codira.models.AnalysisResult or None
         Clang-backed output, or ``None`` when required ownership, visibility,
         or physical source coordinates cannot be represented faithfully.
+        Eligible macro variables and constants carry bounded compiler-observed
+        provenance.
     """
     if result.status != "parsed" or result.coverage_state != "complete":
         return None
@@ -1132,6 +1354,10 @@ def _analysis_from_clang_result(
         if any(
             item.provenance in {"macro_argument", "macro_replacement"}
             for item in result.callables
+        )
+        or any(
+            item.provenance in {"macro_argument", "macro_replacement"}
+            for item in result.declarations
         )
         else None
     )
@@ -1502,6 +1728,138 @@ def _analysis_from_clang_result(
         for item in result.declarations
         if getattr(item, "usr", None) is not None and item.kind == "enum"
     }
+
+    def declaration_scope_is_projected(
+        declaration: FrontendDeclaration,
+    ) -> bool:
+        """Check whether the existing C++ declaration projection includes scope.
+
+        Parameters
+        ----------
+        declaration : codira_clang_frontend.FrontendDeclaration
+            Compiler declaration to classify before applying provenance policy.
+
+        Returns
+        -------
+        bool
+            Whether the current C++ artifact projection includes this declaration
+            scope when its provenance is source-written.
+        """
+        if declaration.decl_kind == "Field" or declaration.kind == "field":
+            return (
+                _clang_source_position(
+                    declaration.location,
+                    path,
+                    prefer_expansion=declaration.provenance
+                    in {"macro_argument", "macro_replacement", "unknown"},
+                )
+                is not None
+            )
+        if declaration.kind not in {"class", "struct", "union"} | declaration_kinds:
+            return (
+                declaration.is_file_scope
+                or declaration.owner_kind in {"CXXRecord", "Record"}
+                or declaration.owner_kind in {"Namespace", "NamespaceAlias"}
+            ) and _clang_source_position(
+                declaration.location,
+                path,
+                prefer_expansion=declaration.provenance
+                in {"macro_argument", "macro_replacement", "unknown"},
+            ) is not None
+        if declaration.kind == "constant" and declaration.owner_usr in enum_names:
+            return (
+                _clang_source_position(
+                    declaration.location,
+                    path,
+                    prefer_expansion=declaration.provenance
+                    in {"macro_argument", "macro_replacement", "unknown"},
+                )
+                is not None
+            )
+        if declaration.kind in {"variable", "constant"} and not (
+            declaration.is_file_scope
+            or declaration.owner_kind in {"CXXRecord", "Record"}
+            or declaration.owner_kind in {"Namespace", "NamespaceAlias"}
+        ):
+            return False
+        return (
+            _clang_source_position(
+                declaration.location,
+                path,
+                prefer_expansion=declaration.provenance
+                in {"macro_argument", "macro_replacement", "unknown"},
+            )
+            is not None
+        )
+
+    usr_counts: dict[str, int] = {}
+    artifact_identity_counts: dict[tuple[str, str], int] = {}
+    for item in result.declarations:
+        item_usr = getattr(item, "usr", None)
+        if item_usr is not None:
+            usr_counts[item_usr] = usr_counts.get(item_usr, 0) + 1
+        if item.kind in {"class", "struct", "union"}:
+            artifact_kind = "type"
+        else:
+            artifact_kind = item.kind
+        artifact_name = item.qualified_name or item.name
+        identity = (artifact_kind, artifact_name)
+        artifact_identity_counts[identity] = (
+            artifact_identity_counts.get(identity, 0) + 1
+        )
+
+    declaration_evidence_by_id: dict[int, CompilerObservedDeclarationProvenance] = {}
+    omitted_generated_declaration = False
+    for declaration in result.declarations:
+        if declaration.provenance not in {
+            "macro_argument",
+            "macro_replacement",
+            "unknown",
+        }:
+            continue
+        if not declaration_scope_is_projected(declaration):
+            continue
+        is_enum_member = declaration.decl_kind in {
+            "EnumConstant",
+            "EnumConstantDecl",
+        } or (declaration.kind == "constant" and declaration.owner_usr in enum_names)
+        is_owned_field = (
+            declaration.decl_kind == "Field"
+            and declaration.kind == "variable"
+            and declaration.owner_usr is not None
+            and declaration.owner_name is not None
+            and declaration.owner_kind in {"CXXRecord", "Record"}
+            and declaration.owner_location is not None
+        )
+        supported_kind = (
+            declaration.kind in {"variable", "constant"}
+            and declaration.decl_kind == "Var"
+            or is_owned_field
+        ) and not is_enum_member
+        identity = (declaration.kind, declaration.qualified_name or declaration.name)
+        unique_identity = (
+            declaration.usr is not None
+            and usr_counts.get(declaration.usr) == 1
+            and artifact_identity_counts.get(identity) == 1
+        )
+        declaration_observation = (
+            _clang_macro_invocation_for_declaration(
+                declaration,
+                result,
+                path=path,
+                root=root,
+                source_bytes=captured_source[1],
+                source_sha256=captured_source[0],
+                context_identity=context_identity,
+            )
+            if supported_kind and unique_identity and captured_source is not None
+            else None
+        )
+        if declaration_observation is None:
+            omitted_generated_declaration = True
+            continue
+        declaration_evidence_by_id[id(declaration)] = declaration_observation[0]
+
     for member in result.declarations:
         if (
             member.kind != "constant"
@@ -1541,7 +1899,8 @@ def _analysis_from_clang_result(
     ] = {}
     namespace_usrs_by_stable_id: dict[str, str] = {}
     for declaration in result.declarations:
-        if declaration.provenance != "source_written":
+        declaration_evidence = declaration_evidence_by_id.get(id(declaration))
+        if declaration.provenance != "source_written" and declaration_evidence is None:
             continue
         if declaration.kind in {"class", "struct", "union"}:
             continue
@@ -1555,12 +1914,18 @@ def _analysis_from_clang_result(
             or declaration.owner_kind in {"Namespace", "NamespaceAlias"}
         ):
             continue
-        position = _clang_source_position(declaration.location, path)
+        position = _clang_source_position(
+            declaration.location,
+            path,
+            prefer_expansion=declaration_evidence is not None,
+        )
         if position is None:
             return None
         qualified_name = declaration.qualified_name or declaration.name
         signature = (
-            declaration.signature
+            declaration.type_text or declaration.name
+            if declaration_evidence is not None
+            else declaration.signature
             or (declaration.source_text if declaration.kind != "namespace" else None)
             or declaration.type_text
             or declaration.name
@@ -1602,6 +1967,7 @@ def _analysis_from_clang_result(
             owner_name=getattr(declaration, "owner_name", None),
             owner_stable_id=owner_stable_id,
             access=getattr(declaration, "access", None),
+            generated=declaration_evidence,
         )
         if declaration.kind == "namespace":
             namespace_usr = declaration.usr
@@ -1713,13 +2079,17 @@ def _analysis_from_clang_result(
                 ),
             ),
         )
-    omitted_generated = (
-        any(
-            item.provenance in {"macro_argument", "macro_replacement", "unknown"}
-            for item in result.declarations
+    if omitted_generated_declaration:
+        status_diagnostics += (
+            AnalysisDiagnostic(
+                category="clang_generated_provenance",
+                message=(
+                    "compiler-observed macro declaration evidence was ambiguous, "
+                    "unsupported, or exceeded the receipt bound"
+                ),
+            ),
         )
-        or omitted_generated_callable
-    )
+    omitted_generated = omitted_generated_declaration or omitted_generated_callable
     omitted_categories: list[str] = []
     if omitted_generated:
         omitted_categories.append("generated_declaration")
@@ -5843,7 +6213,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "47"
+    version = "48"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -6671,6 +7041,9 @@ class CppAnalyzer:
                 if any(
                     item.provenance in {"macro_argument", "macro_replacement"}
                     for item in clang_result.callables
+                ) or any(
+                    item.provenance in {"macro_argument", "macro_replacement"}
+                    for item in clang_result.declarations
                 ):
                     try:
                         context_identity = self.analysis_input_fingerprint(path, root)

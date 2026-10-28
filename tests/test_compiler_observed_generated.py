@@ -1,4 +1,4 @@
-"""Exercise truthful compiler-observed generated callable evidence.
+"""Exercise truthful compiler-observed generated callable and declaration evidence.
 
 Parameters
 ----------
@@ -7,38 +7,51 @@ None
 Returns
 -------
 None
-    Compiler-observed v2 and v3 evidence remains distinct from token-derived v1.
+    Declaration and callable evidence remain distinct from token-derived v1.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import pickle
 from argparse import Namespace
-from dataclasses import asdict
+from dataclasses import asdict, replace
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
 from codira_backend_duckdb import DuckDBIndexBackend
 from codira_backend_sqlite import SQLiteIndexBackend
 
+from codira.config import profile_config, render_config_toml
 from codira.contracts import BackendPersistAnalysisRequest, EmbeddingIndexingPolicy
 from codira.generated import (
     CompilerObservedCallableProvenance,
     CompilerObservedCallableProvenanceV3,
+    CompilerObservedDeclarationProvenance,
     CompilerObservedMacroInvocation,
     CompilerObservedSourceCoordinate,
     generated_provenance_payload,
+    generated_provenance_rows,
 )
+from codira.index_generation import IndexGeneration
+from codira.indexer import _AnalysisTaskResult
 from codira.models import (
     AnalysisResult,
+    DeclarationArtifact,
     FileMetadataSnapshot,
     FunctionArtifact,
     ModuleArtifact,
     OverloadArtifact,
     SemanticIdentity,
 )
-from codira.query.evidence import _attach_generated_evidence
+from codira.query.evidence import (
+    _attach_generated_evidence,
+    expand_symbol,
+    symbol_identity,
+)
+from codira.query.exact import find_symbol
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -163,6 +176,104 @@ def _request(
             size=len(source),
             analyzer_name="fixture",
             analyzer_version="1",
+            analysis_input_fingerprint=provenance.context_identity,
+        ),
+        analysis=analysis,
+        embedding_indexing=EmbeddingIndexingPolicy(object_types=frozenset()),
+        defer_embeddings=True,
+    )
+
+
+def _declaration_provenance(source: bytes) -> CompilerObservedDeclarationProvenance:
+    """Build one valid compiler-observed variable declaration receipt.
+
+    Parameters
+    ----------
+    source : bytes
+        Translation-unit bytes bound to the evidence digest.
+
+    Returns
+    -------
+    CompilerObservedDeclarationProvenance
+        Declaration evidence with an exact observed invocation span.
+    """
+    invocation_text = "OBSERVED_VALUE(foo)"
+    return CompilerObservedDeclarationProvenance(
+        origin="macro_argument",
+        declaration_kind="variable",
+        source_sha256=hashlib.sha256(source).hexdigest(),
+        context_identity="b" * 64,
+        receipt_namespace="clang.frontend.declaration-observation.v1",
+        receipt_json=json.dumps(
+            {"declaration": {"kind": "variable", "name": "foo"}},
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        expansion_location=CompilerObservedSourceCoordinate(
+            "src/main.c", invocation_text.index("foo")
+        ),
+        invocation=CompilerObservedMacroInvocation(
+            name="OBSERVED_VALUE",
+            path="src/main.c",
+            byte_range=(0, len(invocation_text.encode("utf-8"))),
+            text=invocation_text,
+        ),
+    )
+
+
+def _declaration_request(
+    root: Path,
+    path: Path,
+    source: bytes,
+    provenance: CompilerObservedDeclarationProvenance,
+) -> BackendPersistAnalysisRequest:
+    """Build a real backend write request containing one declaration receipt.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Disposable repository and backend root.
+    path : pathlib.Path
+        Source path indexed by the backend.
+    source : bytes
+        Exact source bytes bound to the declaration evidence.
+    provenance : CompilerObservedDeclarationProvenance
+        Compiler-observed macro origin attached to the declaration.
+
+    Returns
+    -------
+    BackendPersistAnalysisRequest
+        Fresh structural persistence request.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(source)
+    analysis = AnalysisResult(
+        source_path=path,
+        module=ModuleArtifact("main", "module:main", None, 0),
+        classes=(),
+        functions=(),
+        declarations=(
+            DeclarationArtifact(
+                name="foo",
+                stable_id="declaration:foo",
+                kind="variable",
+                lineno=1,
+                signature="int foo",
+                generated=provenance,
+            ),
+        ),
+        imports=(),
+    )
+    return BackendPersistAnalysisRequest(
+        root=root,
+        file_metadata=FileMetadataSnapshot(
+            path=path,
+            sha256=hashlib.sha256(source).hexdigest(),
+            mtime=path.stat().st_mtime,
+            size=len(source),
+            analyzer_name="fixture",
+            analyzer_version="1",
+            analysis_input_fingerprint=provenance.context_identity,
         ),
         analysis=analysis,
         embedding_indexing=EmbeddingIndexingPolicy(object_types=frozenset()),
@@ -288,6 +399,297 @@ def test_compiler_observed_provenance_persists_as_opaque_json(
     }
     assert "tokens" not in stored
     assert "parameter_types" not in stored
+
+
+@pytest.mark.parametrize("backend_name", ["sqlite", "duckdb"])
+def test_compiler_observed_declaration_persists_and_survives_worker_pickle(
+    tmp_path: Path, backend_name: str
+) -> None:
+    """Roundtrip declaration evidence through worker and generic backend JSON.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable repository and database root.
+    backend_name : str
+        Structural backend under test.
+
+    Returns
+    -------
+    None
+        Declaration DTOs survive pickle and the unchanged provenance table.
+    """
+    source = b"OBSERVED_VALUE(foo);\n"
+    path = tmp_path / "src" / "main.c"
+    provenance = _declaration_provenance(source)
+    request = _declaration_request(tmp_path, path, source, provenance)
+    worker_result = _AnalysisTaskResult(
+        ordinal=0,
+        parsed_file=(path, request.file_metadata, request.analysis),
+        failure=None,
+        warnings=(),
+    )
+    worker_roundtrip = pickle.loads(pickle.dumps(worker_result))
+    assert worker_roundtrip.parsed_file is not None
+    _, _, worker_analysis = worker_roundtrip.parsed_file
+    assert isinstance(
+        worker_analysis.declarations[0].generated,
+        CompilerObservedDeclarationProvenance,
+    )
+    serialized_rows = generated_provenance_rows(worker_analysis)
+    assert len(serialized_rows) == 1
+    assert serialized_rows[0][0] == "declaration:foo"
+    serialized_payload = generated_provenance_payload(serialized_rows[0][1])
+    assert serialized_payload["variant"] == "compiler_observed_declaration"
+    assert serialized_payload["declaration_kind"] == "variable"
+
+    backend = SQLiteIndexBackend() if backend_name == "sqlite" else DuckDBIndexBackend()
+    backend.initialize(tmp_path)
+    session = backend.begin_index_session(tmp_path)
+    try:
+        session.prepare(full=True, indexed_paths=[str(path)], deleted_paths=[])
+        session.persist_analysis(request)
+        session.rebuild_derived_indexes()
+        session.commit()
+    except BaseException:
+        session.abort()
+        raise
+    finally:
+        session.close()
+
+    if isinstance(backend, SQLiteIndexBackend):
+        sqlite_conn = backend.open_connection(tmp_path)
+        try:
+            rows = sqlite_conn.execute(
+                "SELECT stable_id, payload FROM artifact_provenance WHERE stable_id = ?",
+                ("declaration:foo",),
+            ).fetchall()
+        finally:
+            backend.close_connection(sqlite_conn)
+    else:
+        duckdb_conn = backend.open_connection(tmp_path)
+        try:
+            rows = duckdb_conn.execute(
+                "SELECT stable_id, payload FROM artifact_provenance WHERE stable_id = ?",
+                ("declaration:foo",),
+            ).fetchall()
+        finally:
+            backend.close_connection(duckdb_conn)
+    assert len(rows) == 1
+    assert rows[0][0] == "declaration:foo"
+    stored = generated_provenance_payload(str(rows[0][1]))
+    assert stored == serialized_payload
+
+
+@pytest.mark.parametrize("backend_name", ["sqlite", "duckdb"])
+def test_expand_symbol_renders_compiler_observed_declaration(
+    tmp_path: Path,
+    backend_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Render declaration evidence through the public query API and real backend.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable source repository and structural database root.
+    backend_name : str
+        SQLite or DuckDB structural backend to exercise.
+    monkeypatch : pytest.MonkeyPatch
+        Test-only fixture for the synthetic analyzer's freshness identity.
+
+    Returns
+    -------
+    None
+        Public evidence rendering exposes the physical macro invocation.
+    """
+    source = b"OBSERVED_VALUE(foo);\n"
+    path = tmp_path / "src" / "main.c"
+    request = _declaration_request(
+        tmp_path,
+        path,
+        source,
+        _declaration_provenance(source),
+    )
+    config = profile_config("default")
+    config["backend"] = {"name": backend_name}
+    config_path = tmp_path / ".codira" / "config.toml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(render_config_toml(config), encoding="utf-8")
+
+    backend = SQLiteIndexBackend() if backend_name == "sqlite" else DuckDBIndexBackend()
+    backend.initialize(tmp_path)
+    session = backend.begin_index_session(tmp_path)
+    try:
+        session.prepare(full=True, indexed_paths=[str(path)], deleted_paths=[])
+        session.persist_analysis(request)
+        session.rebuild_derived_indexes()
+        session.commit()
+    except BaseException:
+        session.abort()
+        raise
+    finally:
+        session.close()
+
+    monkeypatch.setattr(
+        "codira.query.evidence.IndexGenerationStore.read",
+        lambda self: IndexGeneration(
+            schema_version=1,
+            generation=1,
+            state="ready",
+            last_successful_generation=1,
+            timestamp="2026-10-28T00:00:00Z",
+        ),
+    )
+    monkeypatch.setattr(
+        "codira.query.evidence.active_language_analyzers",
+        lambda *, root: [SimpleNamespace(name="fixture", version="1")],
+    )
+    monkeypatch.setattr(
+        "codira.query.evidence.analysis_input_fingerprint_matches",
+        lambda analyzer, path, root, expected: True,
+    )
+    row = find_symbol(tmp_path, "foo")[0]
+    result = expand_symbol(tmp_path, symbol_identity(tmp_path, row))
+
+    assert result["source_kind"] == "compiler_generated"
+    assert result["compiler_observed_declaration"] == {
+        "origin": "macro_argument",
+        "declaration_kind": "variable",
+        "spelling_location": None,
+        "expansion_location": {"path": "src/main.c", "byte_offset": 15},
+    }
+    assert result["start_line"] == result["end_line"] == 1
+    assert result["source"] == "OBSERVED_VALUE(foo)"
+
+
+def test_declaration_provenance_kind_must_match_artifact_kind(tmp_path: Path) -> None:
+    """Reject provenance attached to a different normalized declaration kind.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root used to bind a declaration analysis result.
+
+    Returns
+    -------
+    None
+        Serializer validation rejects a constant/variable identity mismatch.
+    """
+    source = b"OBSERVED_VALUE(foo);\n"
+    request = _declaration_request(
+        tmp_path,
+        tmp_path / "src" / "main.c",
+        source,
+        _declaration_provenance(source),
+    )
+    declaration = replace(request.analysis.declarations[0], kind="constant")
+    analysis = replace(request.analysis, declarations=(declaration,))
+
+    with pytest.raises(ValueError, match="does not match its artifact"):
+        generated_provenance_rows(analysis)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "unknown_field",
+        "unsupported_kind",
+        "missing_expansion",
+        "missing_invocation",
+        "wrong_namespace",
+        "bad_source_path",
+        "noncanonical_receipt",
+    ],
+)
+def test_invalid_compiler_observed_declaration_payload_is_rejected(
+    mutation: str,
+) -> None:
+    """Reject malformed declaration evidence without relaxing callable schemas.
+
+    Parameters
+    ----------
+    mutation : str
+        Invalid declaration payload mutation to apply.
+
+    Returns
+    -------
+    None
+        The strict declaration discriminator rejects all malformed variants.
+    """
+    source = b"OBSERVED_VALUE(foo);\n"
+    payload = asdict(_declaration_provenance(source))
+    if mutation == "unknown_field":
+        payload["extra"] = True
+    elif mutation == "unsupported_kind":
+        payload["declaration_kind"] = "namespace"
+    elif mutation == "missing_expansion":
+        del payload["expansion_location"]
+    elif mutation == "missing_invocation":
+        payload["invocation"] = None
+    elif mutation == "wrong_namespace":
+        payload["receipt_namespace"] = "clang.frontend.callable-observation.v1"
+    elif mutation == "bad_source_path":
+        payload["expansion_location"]["path"] = "../outside.c"
+    else:
+        payload["receipt_json"] = '{"z":1, "a":2}'
+
+    with pytest.raises(ValueError):
+        generated_provenance_payload(
+            json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        )
+
+
+def test_compiler_observed_declaration_evidence_uses_physical_invocation_span(
+    tmp_path: Path,
+) -> None:
+    """Render declaration provenance at the verified authored invocation.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing the original invocation.
+
+    Returns
+    -------
+    None
+        Evidence returns the physical macro span and compiler locations.
+    """
+    from codira.query.evidence import _verify_observed_invocation
+
+    invocation_text = "OBSERVED_VALUE(foo)"
+    source = f"{invocation_text};\n".encode()
+    path = tmp_path / "src" / "main.c"
+    path.parent.mkdir()
+    path.write_bytes(source)
+    payload = generated_provenance_payload(
+        json.dumps(
+            asdict(_declaration_provenance(source)),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+    _verify_observed_invocation(tmp_path, path, payload)
+    result: dict[str, object] = {
+        "file": "src/main.c",
+        "start_line": 1,
+        "end_line": 1,
+        "source": invocation_text,
+    }
+
+    _attach_generated_evidence(result, payload, [], source)
+
+    assert result["source_kind"] == "compiler_generated"
+    assert result["source"] == invocation_text
+    assert result["start_line"] == 1
+    assert result["end_line"] == 1
+    assert result["compiler_observed_invocation"] == payload["invocation"]
+    assert result["compiler_observed_declaration"] == {
+        "origin": "macro_argument",
+        "declaration_kind": "variable",
+        "spelling_location": None,
+        "expansion_location": payload["expansion_location"],
+    }
 
 
 @pytest.mark.parametrize("backend_name", ["sqlite", "duckdb"])

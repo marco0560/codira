@@ -141,7 +141,11 @@ def expand_symbol(root: Path, identity: str, *, limit: int = 10) -> dict[str, ob
                 (str(path), line, str(path), line),
             ).fetchone(),
         )
-        if generated is not None and generated["role"] == "definition":
+        if (
+            generated is not None
+            and generated.get("variant") != "compiler_observed_declaration"
+            and generated["role"] == "definition"
+        ):
             definition_rows = conn.execute(
                 """SELECT fn.end_lineno FROM functions fn JOIN modules m ON fn.module_id=m.id
                    JOIN files f ON m.file_id=f.id WHERE f.path=? AND fn.name=? AND fn.lineno=?""",
@@ -273,6 +277,13 @@ def _generated_evidence(
         )
         generated = generated_provenance_payload(str(payload))
         if (
+            generated.get("variant") == "compiler_observed_declaration"
+            and generated["declaration_kind"] != kind
+        ):
+            raise ValueError(
+                "compiler-observed declaration kind does not match indexed symbol"
+            )
+        if (
             generated["source_sha256"] != digest
             or generated["context_identity"] != expected_inputs
         ):
@@ -327,7 +338,7 @@ def _attach_generated_evidence(
     generated_declarations : list[dict[str, object]]
         Validated generated overload evidence.
     content : bytes
-        Verified source bytes for V1 macro-invocation evidence.
+        Verified source bytes for macro-invocation evidence.
 
     Returns
     -------
@@ -336,10 +347,35 @@ def _attach_generated_evidence(
     """
     result["generated_provenance"] = generated
     result["generated_declarations"] = generated_declarations
-    if generated.get("variant") == "compiler_observed":
+    if generated.get("variant") in {
+        "compiler_observed",
+        "compiler_observed_declaration",
+    }:
         result["source_kind"] = "compiler_generated"
         if generated["invocation"] is not None:
             result["compiler_observed_invocation"] = generated["invocation"]
+        if generated.get("variant") == "compiler_observed_declaration":
+            result["compiler_observed_declaration"] = {
+                "origin": generated["origin"],
+                "declaration_kind": generated["declaration_kind"],
+                "spelling_location": generated["spelling_location"],
+                "expansion_location": generated["expansion_location"],
+            }
+            invocation = generated["invocation"]
+            if isinstance(invocation, dict) and invocation["path"] == result.get(
+                "file"
+            ):
+                first, last = cast("list[int]", invocation["byte_range"])
+                invocation_text = cast("str", invocation["text"])
+                observed = invocation_text.encode("utf-8")
+                if (
+                    0 <= first < last <= len(content)
+                    and content[first:last] == observed
+                ):
+                    result["start_line"] = content.count(b"\n", 0, first) + 1
+                    result["end_line"] = content.count(b"\n", 0, last - 1) + 1
+                    result["source"] = invocation_text
+            return
         if generated.get("format_version") == 3 and generated.get("role") == "alias":
             result["compiler_observed_alias"] = {
                 "target_identity": generated["alias_target_identity"],
@@ -402,7 +438,10 @@ def _verify_observed_invocation(
     ValueError
         If the invocation escapes the repository or disagrees with source bytes.
     """
-    if payload.get("variant") != "compiler_observed":
+    if payload.get("variant") not in {
+        "compiler_observed",
+        "compiler_observed_declaration",
+    }:
         return
     invocation = payload["invocation"]
     if invocation is None:

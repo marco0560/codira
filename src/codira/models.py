@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from codira.generated import GeneratedCallableEvidence
+    from codira.generated import GeneratedCallableEvidence, GeneratedDeclarationEvidence
 
 CallKind = Literal["name", "attribute", "unresolved"]
 CallResolutionMode = Literal["legacy", "exact"]
@@ -249,6 +249,13 @@ class DeclarationArtifact:
         Language-neutral access classification when the language defines one.
     type_text : str | None, optional
         Analyzer-reported declaration type, without a source-spelling guarantee.
+    generated : codira.generated.GeneratedDeclarationEvidence | None, optional
+        Compiler-observed macro origin for an existing variable or constant.
+
+    Returns
+    -------
+    None
+        Immutable declaration metadata and optional compiler-observed origin.
     """
 
     name: str
@@ -262,6 +269,7 @@ class DeclarationArtifact:
     owner_stable_id: str | None = None
     access: DeclarationAccess | None = None
     type_text: str | None = None
+    generated: GeneratedDeclarationEvidence | None = None
 
 
 @dataclass(frozen=True)

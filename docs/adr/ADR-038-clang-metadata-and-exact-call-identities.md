@@ -46,6 +46,35 @@ analyzer logical versions and affected plugin distributions. Existing indexes
 must follow their established schema-mismatch rebuild contract. Keep shared
 frontend records independent of core artifacts.
 
+## Compiler-observed declaration origins — 28 October 2026
+
+The existing variable/constant artifacts, including record fields represented as
+variables, may carry `CompilerObservedDeclarationProvenance`. Its distinct
+`compiler_observed_declaration` variant uses format version 1. Callable provenance
+versions 1, 2 and 3 retain their exact contracts; declaration evidence has no
+callable role, body or parameter claims.
+
+Bind declaration evidence to the native declaration identity and metadata, the
+source digest, analyzer context, raw compiler receipt and one source-invoked
+macro event. Keep compiler spelling and expansion coordinates separate. Exact
+invocation bytes establish the physical source anchor; compiler type text does
+not establish source-spelled tokens or macro token derivations.
+
+Preserve each adapter's existing declaration scope and owner/access rules.
+Function-local variables excluded by those rules do not make coverage partial.
+Eligible declarations with ambiguous events, missing required owners, duplicate
+source anchors or unsupported origins remain held. An ordinary out-of-line
+definition must not acquire evidence from a different macro declaration.
+
+Persist declaration evidence through the existing generic provenance table and
+make readers discriminate its variant before inspecting callable-only fields.
+Core logical schema advances to 28; structural schema remains 29. C logical
+version advances to 29 and distribution to 2.0.20; C++ logical version advances
+to 48 and distribution to 2.0.49; the official bundle advances to 2.0.84.
+Frontend 0.4.0 and native protocol 5 remain unchanged because the required native
+facts already exist. These versions supersede the initial implementation
+versions recorded above without changing backend ownership of physical DDL.
+
 ## Required continuation
 
 Source-invoked macro-generated callables remain part of the approved full port.

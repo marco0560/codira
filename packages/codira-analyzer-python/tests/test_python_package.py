@@ -80,7 +80,13 @@ def _golden_analysis_payload(
         ):
             overload_payload.pop("generated")
     for declaration in cast("list[dict[str, object]]", payload["declarations"]):
-        for optional_key in ("owner_name", "owner_stable_id", "access", "type_text"):
+        for optional_key in (
+            "owner_name",
+            "owner_stable_id",
+            "access",
+            "type_text",
+            "generated",
+        ):
             assert declaration.pop(optional_key) is None
     payload.pop("status")
     payload["source_path"] = str(

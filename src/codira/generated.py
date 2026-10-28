@@ -1,4 +1,4 @@
-"""Describe generated callable spellings separately from physical source ranges.
+"""Describe generated artifact provenance separately from physical source ranges.
 
 Parameters
 ----------
@@ -7,7 +7,7 @@ None
 Returns
 -------
 None
-    Immutable backend-neutral provenance for analyzer-generated declarations.
+    Immutable backend-neutral provenance for generated callables and declarations.
 """
 
 from __future__ import annotations
@@ -293,15 +293,64 @@ class CompilerObservedCallableProvenanceV3:
     format_version: Literal[3] = 3
 
 
+@dataclass(frozen=True)
+class CompilerObservedDeclarationProvenance:
+    """Describe compiler-observed macro origin for a variable or constant.
+
+    Parameters
+    ----------
+    origin : {'macro_argument', 'macro_replacement'}
+        Compiler-reported origin of the declaration spelling.
+    declaration_kind : {'variable', 'constant'}
+        Existing logical declaration kind carrying this observation.
+    source_sha256 : str
+        Digest of the indexed translation unit.
+    context_identity : str
+        Analysis input fingerprint binding the compiler result.
+    receipt_namespace : str
+        Fixed namespace identifying the compiler's declaration receipt.
+    receipt_json : str
+        Bounded canonical compiler evidence, interpreted only by its producer.
+    expansion_location : CompilerObservedSourceCoordinate
+        Required compiler-reported expansion coordinate.
+    invocation : CompilerObservedMacroInvocation
+        Required separately observed preprocessor invocation event.
+    spelling_location : CompilerObservedSourceCoordinate | None, optional
+        Compiler-reported spelling coordinate when present.
+    variant : {'compiler_observed_declaration'}, optional
+        Discriminant for this declaration evidence representation.
+    format_version : {1}, optional
+        Version of this normalized declaration provenance representation.
+
+    Returns
+    -------
+    None
+        Immutable declaration evidence without token derivation claims.
+    """
+
+    origin: Literal["macro_argument", "macro_replacement"]
+    declaration_kind: Literal["variable", "constant"]
+    source_sha256: str
+    context_identity: str
+    receipt_namespace: str
+    receipt_json: str
+    expansion_location: CompilerObservedSourceCoordinate
+    invocation: CompilerObservedMacroInvocation
+    spelling_location: CompilerObservedSourceCoordinate | None = None
+    variant: Literal["compiler_observed_declaration"] = "compiler_observed_declaration"
+    format_version: Literal[1] = 1
+
+
 type GeneratedCallableEvidence = (
     GeneratedCallableProvenance
     | CompilerObservedCallableProvenance
     | CompilerObservedCallableProvenanceV3
 )
+type GeneratedDeclarationEvidence = CompilerObservedDeclarationProvenance
 
 
 def generated_provenance_rows(analysis: AnalysisResult) -> tuple[tuple[str, str], ...]:
-    """Serialize generated callable and overload provenance by stable identity.
+    """Serialize generated artifact provenance by stable identity.
 
     Parameters
     ----------
@@ -332,6 +381,22 @@ def generated_provenance_rows(analysis: AnalysisResult) -> tuple[tuple[str, str]
                         ),
                     )
                 )
+    for declaration in analysis.declarations:
+        if declaration.generated is not None:
+            if declaration.kind != declaration.generated.declaration_kind:
+                _invalid(
+                    "compiler-observed declaration kind does not match its artifact"
+                )
+            rows.append(
+                (
+                    declaration.stable_id,
+                    json.dumps(
+                        asdict(declaration.generated),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                )
+            )
     return tuple(rows)
 
 
@@ -480,7 +545,7 @@ def _validate_observed_invocation(value: object, payload: dict[str, object]) -> 
     value : object
         Decoded macro invocation event.
     payload : dict[str, object]
-        Parent compiler-observed callable record.
+        Parent compiler-observed declaration or callable record.
 
     Returns
     -------
@@ -691,6 +756,68 @@ def _validate_compiler_observed_payload(payload: dict[str, object]) -> None:
         _validate_compiler_observed_alias_fields(payload)
 
 
+def _validate_compiler_observed_declaration_payload(
+    payload: dict[str, object],
+) -> None:
+    """Validate the exact version-one compiler-observed declaration contract.
+
+    Parameters
+    ----------
+    payload : dict[str, object]
+        Decoded compiler-observed declaration provenance.
+
+    Returns
+    -------
+    None
+        The macro declaration receipt is bounded and structurally valid.
+
+    Raises
+    ------
+    ValueError
+        If fields, declaration kind, coordinates, invocation or receipt are invalid.
+    """
+    required = {
+        "variant",
+        "format_version",
+        "origin",
+        "declaration_kind",
+        "source_sha256",
+        "context_identity",
+        "spelling_location",
+        "expansion_location",
+        "invocation",
+        "receipt_namespace",
+        "receipt_json",
+    }
+    if (
+        set(payload) != required
+        or payload["variant"] != "compiler_observed_declaration"
+        or type(payload["format_version"]) is not int
+        or payload["format_version"] != 1
+        or payload["origin"] not in {"macro_argument", "macro_replacement"}
+        or payload["declaration_kind"] not in {"variable", "constant"}
+    ):
+        _invalid("unsupported compiler-observed declaration fields or version")
+    if (
+        not _valid_digest(payload["source_sha256"])
+        or not isinstance(payload["context_identity"], str)
+        or not payload["context_identity"]
+    ):
+        _invalid("invalid compiler-observed declaration input identity")
+    if payload["receipt_namespace"] != "clang.frontend.declaration-observation.v1":
+        _invalid("invalid compiler-observed declaration receipt namespace")
+    spelling = payload["spelling_location"]
+    if spelling is not None:
+        _validate_observed_coordinate(spelling)
+    expansion = payload["expansion_location"]
+    _validate_observed_coordinate(expansion)
+    invocation = payload["invocation"]
+    if invocation is None:
+        _invalid("compiler-observed declaration requires a macro invocation")
+    _validate_observed_invocation(invocation, payload)
+    _validate_receipt_json(payload["receipt_json"])
+
+
 def _validate_compiler_observed_alias_fields(payload: dict[str, object]) -> None:
     """Validate version-three alias identity and observed linker label.
 
@@ -839,7 +966,7 @@ def generated_provenance_payload(value: str) -> dict[str, object]:
     Parameters
     ----------
     value : str
-        Serialized version-one or compiler-observed version-two or version-three record.
+        Serialized generated callable or compiler-observed declaration record.
 
     Returns
     -------
@@ -860,6 +987,9 @@ def generated_provenance_payload(value: str) -> dict[str, object]:
     if not isinstance(raw, dict):
         _invalid("generated provenance must be an object")
     payload = cast("dict[str, object]", raw)
+    if payload.get("variant") == "compiler_observed_declaration":
+        _validate_compiler_observed_declaration_payload(payload)
+        return payload
     if payload.get("variant") == "compiler_observed":
         _validate_compiler_observed_payload(payload)
         return payload
