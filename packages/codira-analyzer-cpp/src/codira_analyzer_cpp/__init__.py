@@ -402,6 +402,136 @@ def _clang_source_position(
     return None
 
 
+def _clang_source_anchor(
+    point: SourcePoint | None,
+    source_path: Path,
+    *,
+    prefer_expansion: bool = False,
+) -> str | None:
+    """Return a deterministic byte or line anchor in the requested source.
+
+    Parameters
+    ----------
+    point : codira_clang_frontend.SourcePoint or None
+        Compiler coordinate whose physical source occurrence is needed.
+    source_path : pathlib.Path
+        Translation unit that owns the source coordinate.
+    prefer_expansion : bool, optional
+        Prefer the expansion coordinate for macro-generated entities.
+
+    Returns
+    -------
+    str or None
+        Byte offset when available, otherwise a line and column anchor, only
+        when the coordinate names the requested source file.
+    """
+    if point is None:
+        return None
+    positions = (
+        (point.expansion, point.spelling)
+        if prefer_expansion
+        else (point.spelling, point.expansion)
+    )
+    for position in positions:
+        if position is None or position.path is None or position.line is None:
+            continue
+        try:
+            if Path(position.path).resolve() != source_path.resolve():
+                continue
+        except OSError:
+            continue
+        if position.offset is not None:
+            return f"offset-{position.offset}"
+        if position.column is not None:
+            return f"line-{position.line}-column-{position.column}"
+    return None
+
+
+def _declaration_occurrence_suffix(
+    declaration: FrontendDeclaration, source_path: Path
+) -> str:
+    """Build a deterministic identity suffix for distinct same-name rows.
+
+    Parameters
+    ----------
+    declaration : codira_clang_frontend.FrontendDeclaration
+        Compiler declaration that shares a legacy stable ID with another row.
+    source_path : pathlib.Path
+        Translation unit containing the projected declaration.
+
+    Returns
+    -------
+    str
+        Stable suffix bound to the compiler USR, lexical owner, and physical
+        declaration anchor.
+    """
+    anchor = _clang_source_anchor(
+        declaration.location,
+        source_path,
+        prefer_expansion=declaration.provenance
+        in {"macro_argument", "macro_replacement", "unknown"},
+    )
+    identity = "\0".join(
+        (
+            declaration.usr or "",
+            declaration.owner_usr or "",
+            declaration.owner_kind or "",
+            declaration.owner_name or "",
+            anchor or "unlocated",
+            declaration.kind,
+            declaration.decl_kind,
+            declaration.qualified_name or declaration.name,
+            declaration.type_text or "",
+            declaration.signature or "",
+            declaration.source_text or "",
+            str(declaration.is_definition),
+        )
+    )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+
+
+def _disambiguate_documentation_stable_ids(
+    documentation: tuple[DocumentationArtifact, ...],
+    anchors: dict[int, str],
+) -> tuple[DocumentationArtifact, ...]:
+    """Give distinct comments owned by one entity distinct stable IDs.
+
+    Parameters
+    ----------
+    documentation : tuple[codira.models.DocumentationArtifact, ...]
+        Documentation artifacts after semantic owners have their final IDs.
+
+    Returns
+    -------
+    tuple[codira.models.DocumentationArtifact, ...]
+        Original IDs for unique comments and anchor-qualified IDs for collisions.
+    """
+    counts: dict[str, int] = {}
+    for artifact in documentation:
+        counts[artifact.stable_id] = counts.get(artifact.stable_id, 0) + 1
+    if all(count == 1 for count in counts.values()):
+        return documentation
+    output: list[DocumentationArtifact] = []
+    for artifact in documentation:
+        if counts[artifact.stable_id] == 1:
+            output.append(artifact)
+            continue
+        anchor = "\0".join(
+            (
+                str(artifact.source_path),
+                anchors.get(id(artifact), f"line-{artifact.lineno}"),
+                str(artifact.end_lineno),
+                artifact.title,
+                artifact.text or "",
+            )
+        )
+        digest = hashlib.sha256(anchor.encode("utf-8")).hexdigest()[:16]
+        output.append(
+            replace(artifact, stable_id=f"{artifact.stable_id}:anchor:{digest}")
+        )
+    return tuple(output)
+
+
 def _clang_fallback_result(
     result: AnalysisResult,
     reason: str,
@@ -1207,6 +1337,12 @@ def _analysis_from_clang_result(
         or physical source coordinates cannot be represented faithfully.
         Eligible macro variables and constants carry bounded compiler-observed
         provenance.
+
+    Notes
+    -----
+    Compatible same-USR declaration chains use their unique definition as the
+    artifact anchor. Incomplete or conflicting identity facts decline the
+    Clang projection rather than being merged by name.
     """
     if result.status != "parsed" or result.coverage_state != "complete":
         return None
@@ -1214,6 +1350,9 @@ def _analysis_from_clang_result(
     module_name = _module_name_for_path(path, root)
     module_stable_id = _module_stable_id(path, root)
     documentation: list[DocumentationArtifact] = []
+    documentation_anchors: dict[int, str] = {}
+    documentation_identity_ambiguous = False
+    documented_comment_anchors: set[tuple[str, str, str, int | None, str, str]] = set()
 
     def add_documentation(
         stable_id: str,
@@ -1245,7 +1384,13 @@ def _analysis_from_clang_result(
         None
             A documentation artifact is appended when a physical comment path
             and line are available.
+
+        Notes
+        -----
+        Repeated compiler rows for the same owner and physical comment anchor
+        emit one documentation artifact.
         """
+        nonlocal documentation_identity_ambiguous
         if not text or location is None:
             return
         point = next(
@@ -1277,24 +1422,39 @@ def _analysis_from_clang_result(
                 None,
             )
             end_line = end_point.line if end_point is not None else None
-        documentation.append(
-            DocumentationArtifact(
-                stable_id=(
-                    f"doc:{'module' if owner_kind == 'module' else 'declaration'}:{stable_id}:doxygen"
-                ),
-                kind="declaration" if owner_kind != "module" else "module",
-                source_format="doxygen",
-                source_path=source_path,
-                lineno=point.line,
-                end_lineno=end_line,
-                title=title,
-                heading_path=(),
-                text=text,
-                owner_stable_id=stable_id,
-                owner_kind=owner_kind,
-                attachment_confidence="explicit",
-            )
+        physical_anchor = _clang_source_anchor(location, source_path)
+        if physical_anchor is None:
+            documentation_identity_ambiguous = True
+            physical_anchor = f"line-{point.line}"
+        comment_anchor = (
+            stable_id,
+            str(source_path),
+            physical_anchor,
+            end_line,
+            title,
+            text,
         )
+        if comment_anchor in documented_comment_anchors:
+            return
+        documented_comment_anchors.add(comment_anchor)
+        artifact = DocumentationArtifact(
+            stable_id=(
+                f"doc:{'module' if owner_kind == 'module' else 'declaration'}:{stable_id}:doxygen"
+            ),
+            kind="declaration" if owner_kind != "module" else "module",
+            source_format="doxygen",
+            source_path=source_path,
+            lineno=point.line,
+            end_lineno=end_line,
+            title=title,
+            heading_path=(),
+            text=text,
+            owner_stable_id=stable_id,
+            owner_kind=owner_kind,
+            attachment_confidence="explicit",
+        )
+        documentation.append(artifact)
+        documentation_anchors[id(artifact)] = physical_anchor
 
     module_comment = next(
         (
@@ -1675,6 +1835,16 @@ def _analysis_from_clang_result(
         )
         for name in sorted(class_rows, key=lambda key: (class_rows[key].lineno, key))
     )
+    functions = list(
+        _disambiguate_callable_stable_ids(
+            tuple(
+                sorted(
+                    functions,
+                    key=lambda item: (item.lineno, item.name, item.signature),
+                )
+            )
+        )
+    )
     for function in (
         *functions,
         *(method for class_artifact in classes for method in class_artifact.methods),
@@ -1893,11 +2063,11 @@ def _analysis_from_clang_result(
             member.documentation_location,
             member.documentation_span,
         )
-    declarations: list[DeclarationArtifact] = []
-    namespace_rows_by_usr: dict[
-        str, tuple[str, str, int, str | None, SourcePoint | None, SourceSpan | None]
-    ] = {}
-    namespace_usrs_by_stable_id: dict[str, str] = {}
+
+    declaration_rows: list[
+        tuple[FrontendDeclaration, tuple[FrontendDeclaration, ...]]
+    ] = []
+    eligible_declarations: list[FrontendDeclaration] = []
     for declaration in result.declarations:
         declaration_evidence = declaration_evidence_by_id.get(id(declaration))
         if declaration.provenance != "source_written" and declaration_evidence is None:
@@ -1914,6 +2084,83 @@ def _analysis_from_clang_result(
             or declaration.owner_kind in {"Namespace", "NamespaceAlias"}
         ):
             continue
+        eligible_declarations.append(declaration)
+
+    candidate_groups: dict[str, list[FrontendDeclaration]] = {}
+    for declaration in eligible_declarations:
+        declaration_usr = getattr(declaration, "usr", None)
+        if declaration_usr and declaration.kind != "namespace":
+            candidate_groups.setdefault(declaration_usr, []).append(declaration)
+
+    coalesced_rows: dict[int, tuple[FrontendDeclaration, ...]] = {}
+    skipped_row_ids: set[int] = set()
+    ambiguous_declaration_identity = False
+    for group in candidate_groups.values():
+        if len(group) < 2:
+            continue
+        facts = {
+            (
+                item.kind,
+                item.decl_kind,
+                item.name,
+                item.qualified_name,
+                item.type_text,
+                item.owner_usr,
+                item.owner_name,
+                item.owner_kind,
+                item.access,
+                item.is_file_scope,
+                item.provenance,
+            )
+            for item in group
+        }
+        definitions = [item for item in group if item.is_definition is True]
+        definition_flags_known = all(item.is_definition is not None for item in group)
+        if (
+            len(facts) == 1
+            and all(item.type_text for item in group)
+            and all(
+                item.is_file_scope or (item.owner_usr and item.owner_kind)
+                for item in group
+            )
+            and definition_flags_known
+            and len(definitions) == 1
+            and all(item.provenance == "source_written" for item in group)
+        ):
+            canonical = definitions[0]
+            coalesced_rows[id(canonical)] = tuple(group)
+            skipped_row_ids.update(id(item) for item in group if item is not canonical)
+        elif all(item.provenance == "source_written" for item in group):
+            ambiguous_declaration_identity = True
+
+    if ambiguous_declaration_identity:
+        return None
+
+    for declaration in eligible_declarations:
+        if id(declaration) in skipped_row_ids:
+            continue
+        declaration_rows.append(
+            (declaration, coalesced_rows.get(id(declaration), (declaration,)))
+        )
+
+    stable_id_counts: dict[str, int] = {}
+    for declaration, _ in declaration_rows:
+        qualified_name = declaration.qualified_name or declaration.name
+        stable_id = _declaration_stable_id(
+            owner_id,
+            cast("DeclarationKind", declaration.kind),
+            qualified_name,
+        )
+        stable_id_counts[stable_id] = stable_id_counts.get(stable_id, 0) + 1
+
+    declarations: list[DeclarationArtifact] = []
+    used_declaration_stable_ids: set[str] = set()
+    namespace_rows_by_usr: dict[
+        str, tuple[str, str, int, str | None, SourcePoint | None, SourceSpan | None]
+    ] = {}
+    namespace_usrs_by_stable_id: dict[str, str] = {}
+    for declaration, documentation_rows in declaration_rows:
+        declaration_evidence = declaration_evidence_by_id.get(id(declaration))
         position = _clang_source_position(
             declaration.location,
             path,
@@ -1955,6 +2202,11 @@ def _analysis_from_clang_result(
             cast("DeclarationKind", declaration.kind),
             qualified_name,
         )
+        if stable_id_counts[stable_id] > 1 and declaration.kind != "namespace":
+            stable_id = f"{stable_id}:native:{_declaration_occurrence_suffix(declaration, path)}"
+        if declaration.kind != "namespace" and stable_id in used_declaration_stable_ids:
+            return None
+        used_declaration_stable_ids.add(stable_id)
         artifact = DeclarationArtifact(
             name=qualified_name,
             stable_id=stable_id,
@@ -2003,14 +2255,15 @@ def _analysis_from_clang_result(
             declarations.append(artifact)
             continue
         declarations.append(artifact)
-        add_documentation(
-            stable_id,
-            "variable" if declaration.kind == "variable" else declaration.kind,
-            qualified_name,
-            getattr(declaration, "documentation", None),
-            getattr(declaration, "documentation_location", None),
-            getattr(declaration, "documentation_span", None),
-        )
+        for documentation_row in documentation_rows:
+            add_documentation(
+                stable_id,
+                "variable" if declaration.kind == "variable" else declaration.kind,
+                qualified_name,
+                getattr(documentation_row, "documentation", None),
+                getattr(documentation_row, "documentation_location", None),
+                getattr(documentation_row, "documentation_span", None),
+            )
     for (
         namespace_name,
         stable_id,
@@ -2027,20 +2280,54 @@ def _analysis_from_clang_result(
             documentation_location,
             documentation_span,
         )
-    macro_declarations: list[DeclarationArtifact] = []
+    macro_events: list[
+        tuple[FrontendPreprocessorEvent, str, tuple[int, int], str, str]
+    ] = []
+    seen_macro_occurrences: set[tuple[str, str, str, tuple[int, int]]] = set()
     for event in getattr(result, "preprocessing", ()):
         if event.kind != "macro_definition" or not event.name:
             continue
         macro_position = _clang_source_position(event.location, path)
-        if macro_position is None:
+        macro_anchor = _clang_source_anchor(event.location, path)
+        if macro_position is None or macro_anchor is None:
             continue
         macro_signature = event.source_text or " ".join(
             ("#define", event.name, *event.parameters, *event.replacement)
         )
-        stable_id = _declaration_stable_id(owner_id, "macro", event.name)
+        occurrence = (event.name, macro_anchor, macro_signature, macro_position)
+        if occurrence in seen_macro_occurrences:
+            continue
+        seen_macro_occurrences.add(occurrence)
+        macro_events.append(
+            (event, event.name, macro_position, macro_anchor, macro_signature)
+        )
+
+    macro_base_counts: dict[str, int] = {}
+    macro_anchor_counts: dict[tuple[str, str], int] = {}
+    for _, macro_name, _, _, _ in macro_events:
+        stable_id = _declaration_stable_id(owner_id, "macro", macro_name)
+        macro_base_counts[stable_id] = macro_base_counts.get(stable_id, 0) + 1
+    for _, macro_name, _, macro_anchor, _ in macro_events:
+        key = (macro_name, macro_anchor)
+        macro_anchor_counts[key] = macro_anchor_counts.get(key, 0) + 1
+
+    macro_declarations: list[DeclarationArtifact] = []
+    for _, macro_name, macro_position, macro_anchor, macro_signature in macro_events:
+        stable_id = _declaration_stable_id(owner_id, "macro", macro_name)
+        if macro_base_counts[stable_id] > 1:
+            signature_suffix = hashlib.sha256(
+                macro_signature.encode("utf-8")
+            ).hexdigest()[:12]
+            if macro_anchor_counts[(macro_name, macro_anchor)] > 1:
+                stable_id = f"{stable_id}:at:{macro_anchor}:{signature_suffix}"
+            else:
+                stable_id = f"{stable_id}:at:{macro_anchor}"
+        if stable_id in used_declaration_stable_ids:
+            return None
+        used_declaration_stable_ids.add(stable_id)
         macro_declarations.append(
             DeclarationArtifact(
-                name=event.name,
+                name=macro_name,
                 stable_id=stable_id,
                 kind="macro",
                 lineno=macro_position[0],
@@ -2108,7 +2395,9 @@ def _analysis_from_clang_result(
     )
     toolchain = result.toolchain_identity
     dependency_closure = result.dependency_closure
-    return AnalysisResult(
+    if documentation_identity_ambiguous:
+        return None
+    analysis = AnalysisResult(
         source_path=path,
         module=ModuleArtifact(
             name=module_name,
@@ -2117,19 +2406,18 @@ def _analysis_from_clang_result(
             has_docstring=int(module_comment is not None),
         ),
         classes=classes,
-        functions=_disambiguate_callable_stable_ids(
-            tuple(
-                sorted(
-                    functions, key=lambda item: (item.lineno, item.name, item.signature)
-                )
-            )
-        ),
+        functions=tuple(functions),
         declarations=tuple(
             sorted(declarations, key=lambda item: (item.lineno, item.name, item.kind))
         ),
         imports=imports,
         documentation=tuple(
-            sorted(documentation, key=lambda item: (item.lineno, item.stable_id))
+            sorted(
+                _disambiguate_documentation_stable_ids(
+                    tuple(documentation), documentation_anchors
+                ),
+                key=lambda item: (item.lineno, item.stable_id),
+            )
         ),
         index_symbols=True,
         status=AnalysisStatus(
@@ -2199,6 +2487,17 @@ def _analysis_from_clang_result(
             coverage_state=coverage_state,
         ),
     )
+    stable_ids = [analysis.module.stable_id]
+    stable_ids.extend(item.stable_id for item in analysis.classes)
+    for class_artifact in analysis.classes:
+        stable_ids.extend(method.stable_id for method in class_artifact.methods)
+    stable_ids.extend(function.stable_id for function in analysis.functions)
+    stable_ids.extend(item.stable_id for item in analysis.declarations)
+    stable_ids.extend(item.stable_id for item in analysis.documentation)
+    stable_ids.extend(item.stable_id for item in analysis.iter_overloads())
+    if len(stable_ids) != len(set(stable_ids)):
+        return None
+    return analysis
 
 
 _TYPE_LIKE_NAMES = {
@@ -4345,7 +4644,15 @@ def _disambiguate_callable_stable_ids(
             digest = hashlib.sha256(function.signature.encode("utf-8")).hexdigest()[:12]
             stable_id = f"{stable_id}:{digest}"
             if stable_id in used_ids:
-                stable_id = f"{stable_id}:{function.lineno}"
+                identity = (
+                    function.semantic_identity.value
+                    if function.semantic_identity is not None
+                    else f"line:{function.lineno}:end:{function.end_lineno}"
+                )
+                identity_digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[
+                    :12
+                ]
+                stable_id = f"{stable_id}:identity:{identity_digest}"
             function = replace(function, stable_id=stable_id)
         used_ids.add(stable_id)
         disambiguated.append(function)
@@ -6213,7 +6520,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "48"
+    version = "49"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",

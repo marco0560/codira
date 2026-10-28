@@ -28,7 +28,298 @@ from codira_clang_frontend.frontend import _decode_entities
 from codira_analyzer_c import (
     _analysis_from_clang_result,
     _clang_macro_invocation_for_declaration,
+    _macro_definition_artifacts,
 )
+
+
+def test_clang_macro_definition_ids_use_source_occurrences_deterministically(
+    tmp_path: Path,
+) -> None:
+    """Keep single-definition IDs and anchor repeated physical definitions.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory containing a source file with macro definitions.
+
+    Returns
+    -------
+    None
+        Unique names keep legacy IDs; repeated names receive stable physical
+        anchors, while duplicate callbacks at one exact site are collapsed.
+    """
+    source = tmp_path / "macro_ids.c"
+    source.write_text(
+        "#define SINGLE 1\n#define REPEATED 1\n#undef REPEATED\n#define REPEATED 2\n",
+        encoding="utf-8",
+    )
+    source_bytes = source.read_bytes()
+
+    def event(name: str, definition: str) -> FrontendPreprocessorEvent:
+        """Create a source-bound macro-definition callback.
+
+        Parameters
+        ----------
+        name : str
+            Macro name reported by Clang.
+        definition : str
+            Complete definition directive in the fixture.
+
+        Returns
+        -------
+        codira_clang_frontend.FrontendPreprocessorEvent
+            Macro callback with physical spelling and expansion coordinates.
+        """
+        offset = source_bytes.index(definition.encode("utf-8"))
+        prefix = source_bytes[:offset]
+        position = SourcePosition(
+            path=str(source),
+            line=prefix.count(b"\n") + 1,
+            column=offset - prefix.rfind(b"\n"),
+            offset=offset,
+        )
+        point = SourcePoint(
+            spelling=position,
+            expansion=position,
+            is_macro=False,
+        )
+        return FrontendPreprocessorEvent(
+            kind="macro_definition",
+            name=name,
+            replacement=(definition.rsplit(" ", 1)[-1],),
+            replacement_truncated=False,
+            function_like=False,
+            parameters=(),
+            source_text=definition,
+            condition=None,
+            result=None,
+            macro_defined=None,
+            invocation=None,
+            location=point,
+            span=None,
+        )
+
+    single = event("SINGLE", "#define SINGLE 1")
+    first = event("REPEATED", "#define REPEATED 1")
+    second = event("REPEATED", "#define REPEATED 2")
+    callback_events = (single, first, first, second)
+    owner_id = "file-owner:macro_ids.c"
+
+    artifacts = _macro_definition_artifacts(callback_events, source, owner_id)
+    reversed_artifacts = _macro_definition_artifacts(
+        tuple(reversed(callback_events)), source, owner_id
+    )
+
+    assert artifacts is not None
+    assert reversed_artifacts is not None
+    by_name = {
+        artifact.name: artifact for artifact in artifacts if artifact.name == "SINGLE"
+    }
+    assert by_name["SINGLE"].stable_id == "c:macro:file-owner:macro_ids.c:SINGLE"
+    repeated = [artifact for artifact in artifacts if artifact.name == "REPEATED"]
+    assert len(repeated) == 2
+    assert len({artifact.stable_id for artifact in repeated}) == 2
+    assert {artifact.stable_id.rsplit(":at:", 1)[-1] for artifact in repeated} == {
+        f"offset-{source_bytes.index(b'#define REPEATED 1')}",
+        f"offset-{source_bytes.index(b'#define REPEATED 2')}",
+    }
+    assert len(artifacts) == 3
+    assert sorted(item.stable_id for item in artifacts) == sorted(
+        item.stable_id for item in reversed_artifacts
+    )
+    assert all(item.owner_name is None for item in artifacts)
+    assert all(item.kind == "macro" and item.docstring is None for item in artifacts)
+    assert [(item.name, item.lineno) for item in artifacts] == [
+        ("SINGLE", 1),
+        ("REPEATED", 2),
+        ("REPEATED", 4),
+    ]
+
+
+def test_clang_macro_artifacts_remain_in_numeric_source_order(
+    tmp_path: Path,
+) -> None:
+    """Order macro artifacts by physical position, not names or anchor strings.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory containing two repeated macro definitions.
+
+    Returns
+    -------
+    None
+        Definitions at offsets 20 and 100 are projected in source order.
+    """
+    source = tmp_path / "macro_source_order.c"
+    prefix = "/*123456789012345*/\n"
+    first = "#define REPEATED 1\n"
+    filler_length = 100 - len(prefix.encode()) - len(first.encode()) - 5
+    filler = "/*" + ("x" * filler_length) + "*/\n"
+    second = "#define REPEATED 2\n"
+    source.write_text(prefix + first + filler + second, encoding="utf-8")
+    source_bytes = source.read_bytes()
+    first_offset = source_bytes.index(b"#define REPEATED 1")
+    second_offset = source_bytes.index(b"#define REPEATED 2")
+    assert (first_offset, second_offset) == (20, 100)
+
+    def event(offset: int, source_text: str) -> FrontendPreprocessorEvent:
+        """Create a callback at one physical source offset.
+
+        Parameters
+        ----------
+        offset : int
+            Zero-based byte offset of the macro directive.
+        source_text : str
+            Complete definition directive.
+
+        Returns
+        -------
+        codira_clang_frontend.FrontendPreprocessorEvent
+            Source-bound macro definition event.
+        """
+        prefix_bytes = source_bytes[:offset]
+        position = SourcePosition(
+            path=str(source),
+            line=prefix_bytes.count(b"\n") + 1,
+            column=offset - prefix_bytes.rfind(b"\n"),
+            offset=offset,
+        )
+        point = SourcePoint(position, position, is_macro=False)
+        return FrontendPreprocessorEvent(
+            kind="macro_definition",
+            name="REPEATED",
+            replacement=(source_text.rsplit(" ", 1)[-1],),
+            replacement_truncated=False,
+            function_like=False,
+            parameters=(),
+            source_text=source_text,
+            condition=None,
+            result=None,
+            macro_defined=None,
+            invocation=None,
+            location=point,
+            span=None,
+        )
+
+    result = FrontendResult(
+        status="parsed",
+        coverage_state="complete",
+        reasons=(),
+        diagnostics=(),
+        declarations=(),
+        callables=(),
+        dependency_closure=None,
+        profile_identity="macro-source-order-profile",
+        toolchain_identity=None,
+        cache_fingerprint="macro-source-order-fingerprint",
+        stdout_path=None,
+        stdout_sha256=None,
+        stderr_path=None,
+        stderr_sha256=None,
+        preprocessing=(
+            event(first_offset, "#define REPEATED 1"),
+            event(second_offset, "#define REPEATED 2"),
+        ),
+    )
+    analysis = _analysis_from_clang_result(source, tmp_path, result)
+
+    assert analysis is not None
+    macros = [item for item in analysis.declarations if item.kind == "macro"]
+    assert [(item.name, item.lineno) for item in macros] == [
+        ("REPEATED", 2),
+        ("REPEATED", 4),
+    ]
+    assert [item.stable_id.rsplit(":at:", 1)[-1] for item in macros] == [
+        "offset-20",
+        "offset-100",
+    ]
+
+
+def test_clang_macro_rejects_conflicting_definitions_at_one_anchor(
+    tmp_path: Path,
+) -> None:
+    """Reject conflicting macro events when one anchor cannot identify both.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory containing the macro definition source.
+
+    Returns
+    -------
+    None
+        The helper refuses to fabricate order-dependent IDs for conflicting
+        events reported at the same physical source anchor.
+    """
+    source = tmp_path / "macro_conflict.c"
+    source.write_text("#define VALUE 1\n", encoding="utf-8")
+    offset = 0
+    point = SourcePoint(
+        spelling=SourcePosition(str(source), 1, 1, offset),
+        expansion=SourcePosition(str(source), 1, 1, offset),
+        is_macro=False,
+    )
+
+    def event(
+        source_text: str,
+        event_point: SourcePoint,
+    ) -> FrontendPreprocessorEvent:
+        """Create one conflicting callback at the shared source point.
+
+        Parameters
+        ----------
+        source_text : str
+            Macro definition text reported by one callback.
+        event_point : codira_clang_frontend.SourcePoint
+            Physical coordinate reported by the callback.
+
+        Returns
+        -------
+        codira_clang_frontend.FrontendPreprocessorEvent
+            Definition callback using the shared physical coordinate.
+        """
+        return FrontendPreprocessorEvent(
+            kind="macro_definition",
+            name="VALUE",
+            replacement=(source_text.rsplit(" ", 1)[-1],),
+            replacement_truncated=False,
+            function_like=False,
+            parameters=(),
+            source_text=source_text,
+            condition=None,
+            result=None,
+            macro_defined=None,
+            invocation=None,
+            location=event_point,
+            span=None,
+        )
+
+    assert (
+        _macro_definition_artifacts(
+            (event("#define VALUE 1", point), event("#define VALUE 2", point)),
+            source,
+            "file-owner:macro_conflict.c",
+        )
+        is None
+    )
+
+    inconsistent_point = SourcePoint(
+        spelling=SourcePosition(str(source), 2, 1, offset),
+        expansion=SourcePosition(str(source), 2, 1, offset),
+        is_macro=False,
+    )
+    assert (
+        _macro_definition_artifacts(
+            (
+                event("#define VALUE 1", point),
+                event("#define VALUE 1", inconsistent_point),
+            ),
+            source,
+            "file-owner:macro_conflict.c",
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize(("end_delta", "expected_evidence"), ((0, True), (12, False)))

@@ -511,6 +511,134 @@ def _clang_source_position(
     return None
 
 
+def _clang_preprocessor_source_anchor(
+    point: SourcePoint | None,
+    source_path: Path,
+) -> str | None:
+    """Return a deterministic physical anchor for a macro definition.
+
+    Parameters
+    ----------
+    point : codira_clang_frontend.SourcePoint or None
+        Native spelling or expansion coordinate for a macro definition.
+    source_path : pathlib.Path
+        Translation unit whose physical definition coordinates are accepted.
+
+    Returns
+    -------
+    str or None
+        ``offset-N`` when Clang supplies a source byte offset, or
+        ``line-N-column-C`` when it supplies only physical line and column.
+        The coordinate is returned only for the requested source file.
+    """
+    if point is None:
+        return None
+    for position in (point.spelling, point.expansion):
+        if position is None or position.path is None or position.line is None:
+            continue
+        try:
+            if Path(position.path).resolve() != source_path.resolve():
+                continue
+        except OSError:
+            continue
+        if position.offset is not None:
+            return f"offset-{position.offset}"
+        if position.column is not None:
+            return f"line-{position.line}-column-{position.column}"
+    return None
+
+
+def _macro_definition_artifacts(
+    events: tuple[FrontendPreprocessorEvent, ...],
+    source_path: Path,
+    owner_id: str,
+) -> tuple[DeclarationArtifact, ...] | None:
+    """Project physical macro definitions with stable occurrence identities.
+
+    Parameters
+    ----------
+    events : tuple[codira_clang_frontend.FrontendPreprocessorEvent, ...]
+        Native preprocessing events captured for the translation unit.
+    source_path : pathlib.Path
+        Translation unit whose source-local macro definitions are projected.
+    owner_id : str
+        File-scoped owner identity used by existing C declaration IDs.
+
+    Returns
+    -------
+    tuple[codira.models.DeclarationArtifact, ...] or None
+        Source-local macro artifacts, or ``None`` if repeated definitions
+        cannot be assigned distinct physical identities safely.
+
+    Notes
+    -----
+    A unique macro name retains its existing stable ID. Repeated names use the
+    source anchor, and duplicate callbacks at the same anchor with the same
+    signature collapse to one artifact. Conflicting events at one anchor are
+    rejected rather than assigned an order-dependent identity.
+    """
+    by_name: dict[str, list[tuple[str | None, str, tuple[int, int]]]] = {}
+    for event in events:
+        if event.kind != "macro_definition" or not event.name:
+            continue
+        position = _clang_source_position(event.location, source_path)
+        if position is None:
+            continue
+        signature = event.source_text or " ".join(
+            ("#define", event.name, *event.parameters, *event.replacement)
+        )
+        anchor = _clang_preprocessor_source_anchor(event.location, source_path)
+        occurrences = by_name.setdefault(event.name, [])
+        if anchor is not None:
+            prior_callback = next(
+                (
+                    prior_position
+                    for prior_anchor, prior_signature, prior_position in occurrences
+                    if prior_anchor == anchor and prior_signature == signature
+                ),
+                None,
+            )
+            if prior_callback is not None:
+                if prior_callback != position:
+                    return None
+                continue
+        occurrences.append((anchor, signature, position))
+
+    positioned_artifacts: list[tuple[tuple[int, int], DeclarationArtifact]] = []
+    for name in sorted(by_name):
+        occurrences = by_name[name]
+        distinct_anchors = [anchor for anchor, _, _ in occurrences]
+        if len(occurrences) > 1 and (
+            None in distinct_anchors
+            or len(set(distinct_anchors)) != len(distinct_anchors)
+        ):
+            return None
+        for anchor, signature, position in occurrences:
+            stable_id = _declaration_stable_id(owner_id, "macro", name)
+            if len(occurrences) > 1:
+                assert anchor is not None
+                stable_id = f"{stable_id}:at:{anchor}"
+            positioned_artifacts.append(
+                (
+                    position,
+                    DeclarationArtifact(
+                        name=name,
+                        stable_id=stable_id,
+                        kind="macro",
+                        lineno=position[0],
+                        signature=signature,
+                    ),
+                )
+            )
+    return tuple(
+        artifact
+        for _, artifact in sorted(
+            positioned_artifacts,
+            key=lambda item: (item[0], item[1].name, item[1].stable_id),
+        )
+    )
+
+
 def _clang_compiler_source_coordinate(
     position: SourcePosition | None, root: Path
 ) -> CompilerObservedSourceCoordinate | None:
@@ -1594,24 +1722,14 @@ def _analysis_from_clang_result(
             declaration.documentation_location,
             declaration.documentation_span,
         )
-    for event in result.preprocessing:
-        if event.kind != "macro_definition" or not event.name:
-            continue
-        position = _clang_source_position(event.location, path)
-        if position is None:
-            continue
-        declarations.append(
-            DeclarationArtifact(
-                name=event.name,
-                stable_id=_declaration_stable_id(owner_id, "macro", event.name),
-                kind="macro",
-                lineno=position[0],
-                signature=event.source_text
-                or " ".join(
-                    ("#define", event.name, *event.parameters, *event.replacement)
-                ),
-            )
-        )
+    macro_artifacts = _macro_definition_artifacts(
+        result.preprocessing,
+        path,
+        owner_id,
+    )
+    if macro_artifacts is None:
+        return None
+    declarations.extend(macro_artifacts)
     imports = tuple(
         ImportArtifact(
             name=item.spelled_path,
@@ -4011,7 +4129,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "29"
+    version = "30"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 

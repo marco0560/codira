@@ -43,8 +43,8 @@ def test_cpp_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.49"
-    assert version("codira-analyzer-cpp") == "2.0.49"
+    assert project["project"]["version"] == "2.0.50"
+    assert version("codira-analyzer-cpp") == "2.0.50"
     assert (
         Path(inspect.getfile(CppAnalyzer)).resolve()
         == (
@@ -74,7 +74,7 @@ def test_cpp_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CppAnalyzer)
     assert analyzer.name == "cpp"
-    assert analyzer.version == "48"
+    assert analyzer.version == "49"
 
 
 def test_cpp_clang_frontend_is_opt_in_and_missing_profile_is_visible(
