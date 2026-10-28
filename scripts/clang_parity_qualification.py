@@ -3045,6 +3045,9 @@ def prepare_profiles(request: ProfilePreparationRequest) -> dict[str, JSONValue]
     -------
     dict[str, JSONValue]
         Profile manifest with source, profile, helper, receipt and schema hashes.
+        Frontend status and coverage describe the preparation analysis before
+        dependency capture; prepared profile status describes the saved inputs,
+        independently of semantic qualification.
     """
     package: Any = importlib.import_module("codira_clang_frontend")
     create_profile: Any = package.create_frontend_profile
@@ -3090,6 +3093,9 @@ def prepare_profiles(request: ProfilePreparationRequest) -> dict[str, JSONValue]
                 "build_receipt_sha256": hashlib.sha256(
                     request.build_receipt_path.read_bytes()
                 ).hexdigest(),
+                "input_profile_status": profile.status,
+                "prepared_profile_status": prepared.status,
+                "preparation_result_scope": "analysis_before_dependency_capture",
                 "frontend_status": result.status,
                 "coverage_state": result.coverage_state,
                 "dependency_closure_status": (

@@ -321,4 +321,8 @@ host parser.
 
 
 
-- `scripts/clang_parity_qualification.py:3102` (BLE001): Retain terminal evidence for every failed native preparation attempt.
+- `scripts/clang_parity_qualification.py:3108` (BLE001): Retain terminal evidence for every failed native preparation attempt.
+- `scripts/clang_reference_facts.py:413` (C901): The reference normalizer applies one physical ownership policy across declaration, type, field and call categories.
+- `scripts/clang_reference_facts.py:497` (C901, PLR0912): The nested AST visitor keeps lexical owner and callable stacks together with the corresponding source-range checks.
+- `scripts/clang_reference_facts.py:895` (C901, PLR0912): Profile input validation checks each source, dependency, compiler, resource and receipt binding before capture or reuse.
+- `scripts/clang_reference_facts.py:1429` (C901, PLR0913): The reference runner preserves independently supplied immutable inputs and records every capture and post-capture validation boundary.
