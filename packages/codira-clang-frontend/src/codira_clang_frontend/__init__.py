@@ -56,7 +56,7 @@ from .profile import (
 try:
     __version__ = version("codira-clang-frontend")
 except PackageNotFoundError:
-    __version__ = "0.3.0"
+    __version__ = "0.4.0"
 
 
 def create_frontend_profile(

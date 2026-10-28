@@ -38,7 +38,7 @@ from bisect import bisect_right
 from dataclasses import asdict, dataclass, field, replace
 from importlib.metadata import version as distribution_version
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 from uuid import uuid4
 
 if TYPE_CHECKING:
@@ -123,8 +123,10 @@ from codira.contracts import (
 )
 from codira.generated import (
     CompilerObservedCallableProvenance,
+    CompilerObservedCallableProvenanceV3,
     CompilerObservedMacroInvocation,
     CompilerObservedSourceCoordinate,
+    GeneratedCallableEvidence,
 )
 from codira.models import (
     AnalysisResult,
@@ -141,6 +143,7 @@ from codira.models import (
     FunctionArtifact,
     ImportArtifact,
     ModuleArtifact,
+    OverloadArtifact,
     SemanticIdentity,
     tree_sitter_recovery_status,
 )
@@ -733,6 +736,7 @@ def _clang_macro_invocation_for_callable(
             "qualified_name": callable_item.qualified_name,
             "decl_kind": callable_item.decl_kind,
             "signature": callable_item.signature,
+            "signature_kind": callable_item.signature_kind,
             "function_type": callable_item.function_type,
             "provenance": callable_item.provenance,
             "is_definition": callable_item.is_definition,
@@ -747,6 +751,7 @@ def _clang_macro_invocation_for_callable(
             "owner_location": asdict(owner_location)
             if owner_location is not None
             else None,
+            "native_observation": _clang_callable_native_observation(callable_item),
         },
         "macro_expansion": {
             "name": event.name,
@@ -781,6 +786,138 @@ def _clang_macro_invocation_for_callable(
         start,
         half_open_end,
     )
+
+
+def _clang_alias_or_prototype_evidence(
+    callable_item: FrontendCallable,
+    base_evidence: CompilerObservedCallableProvenance,
+    *,
+    role: Literal["alias", "prototype"],
+) -> CompilerObservedCallableProvenanceV3 | None:
+    """Build V3 provenance from explicit native alias or redeclaration facts.
+
+    Parameters
+    ----------
+    callable_item : codira_clang_frontend.FrontendCallable
+        Native callable row carrying the observed alias, linkage, and body facts.
+    base_evidence : codira.generated.CompilerObservedCallableProvenance
+        Source-bound macro evidence already validated for this callable.
+    role : str
+        One of ``alias`` or ``prototype``.
+
+    Returns
+    -------
+    codira.generated.CompilerObservedCallableProvenanceV3 or None
+        Compiler-observed V3 provenance, or ``None`` when the source facts are
+        insufficient to make a complete bounded receipt.
+    """
+    try:
+        receipt = json.loads(base_evidence.receipt_json)
+        if not isinstance(receipt, dict):
+            return None
+        callable_receipt = receipt.get("callable")
+        if not isinstance(callable_receipt, dict):
+            return None
+        callable_receipt["native_observation"] = _clang_callable_native_observation(
+            callable_item
+        )
+        receipt_json = json.dumps(
+            receipt,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        if len(receipt_json.encode("utf-8")) > 64 * 1024:
+            return None
+        return CompilerObservedCallableProvenanceV3(
+            origin=base_evidence.origin,
+            role=role,
+            source_sha256=base_evidence.source_sha256,
+            context_identity=base_evidence.context_identity,
+            spelling_location=base_evidence.spelling_location,
+            expansion_location=base_evidence.expansion_location,
+            invocation=base_evidence.invocation,
+            alias_target_identity=(
+                SemanticIdentity(
+                    namespace="clang.usr.v1", value=callable_item.alias_target_usr
+                )
+                if role == "alias"
+                and callable_item.alias_binding_status == "resolved"
+                and callable_item.alias_target_usr is not None
+                else None
+            ),
+            linkage_name=(
+                callable_item.explicit_linkage_label if role == "alias" else None
+            ),
+            receipt_namespace="clang.frontend.callable-observation.v1",
+            receipt_json=receipt_json,
+        )
+    except (TypeError, ValueError, UnicodeEncodeError):
+        return None
+
+
+def _clang_callable_native_observation(
+    callable_item: FrontendCallable,
+) -> dict[str, object]:
+    """Return compiler-reported callable distinctions for a bounded receipt.
+
+    Parameters
+    ----------
+    callable_item : codira_clang_frontend.FrontendCallable
+        Native callable DTO carrying compiler-derived display and linkage data.
+
+    Returns
+    -------
+    dict[str, object]
+        Exact observed DTO values without reconstructing source spellings.
+    """
+    return {
+        "has_body": callable_item.has_body,
+        "linkage_kind": callable_item.linkage_kind,
+        "signature_kind": callable_item.signature_kind,
+        "linker_symbol": callable_item.linker_symbol,
+        "explicit_linkage_label": callable_item.explicit_linkage_label,
+        "linkage_label_inherited": callable_item.linkage_label_inherited,
+        "alias_target_symbol": callable_item.alias_target_symbol,
+        "alias_target_usr": callable_item.alias_target_usr,
+        "alias_binding_status": callable_item.alias_binding_status,
+    }
+
+
+def _clang_distinct_prototype_rows(
+    canonical_callable: FrontendCallable,
+    candidates: tuple[
+        tuple[
+            FrontendCallable,
+            CompilerObservedCallableProvenance,
+            FrontendPreprocessorEvent,
+        ],
+        ...,
+    ],
+) -> tuple[
+    tuple[
+        FrontendCallable,
+        CompilerObservedCallableProvenance,
+        FrontendPreprocessorEvent,
+    ],
+    ...,
+]:
+    """Exclude the canonical prototype from its own overload list.
+
+    Parameters
+    ----------
+    canonical_callable : codira_clang_frontend.FrontendCallable
+        Declaration selected as the function record when no body definition
+        exists in this translation unit.
+    candidates : tuple[tuple[FrontendCallable, CompilerObservedCallableProvenance, FrontendPreprocessorEvent], ...]
+        Same-USR generated prototype rows observed from the translation unit.
+
+    Returns
+    -------
+    tuple[tuple[FrontendCallable, CompilerObservedCallableProvenance, FrontendPreprocessorEvent], ...]
+        Separate redeclarations eligible for OverloadArtifact persistence.
+    """
+    return tuple(row for row in candidates if row[0] is not canonical_callable)
 
 
 def _clang_captured_source(
@@ -1006,8 +1143,23 @@ def _analysis_from_clang_result(
             FrontendPreprocessorEvent | None,
         ],
     ] = {}
+    generated_prototypes: dict[
+        str,
+        list[
+            tuple[
+                FrontendCallable,
+                CompilerObservedCallableProvenance,
+                FrontendPreprocessorEvent,
+            ]
+        ],
+    ] = {}
     omitted_generated_callable = False
     for callable_item in result.callables:
+        has_body = (
+            callable_item.has_body
+            if callable_item.has_body is not None
+            else callable_item.is_definition
+        )
         if callable_item.provenance in {"implicit", "template_instantiation"}:
             continue
         generated_provenance: CompilerObservedCallableProvenance | None = None
@@ -1030,6 +1182,13 @@ def _analysis_from_clang_result(
                 omitted_generated_callable = True
                 continue
             generated_provenance, generated_event, _, _ = evidence
+            if callable_item.alias_target_symbol is not None:
+                if callable_item.alias_binding_status != "resolved":
+                    omitted_generated_callable = True
+            elif not has_body and callable_item.usr is not None:
+                generated_prototypes.setdefault(callable_item.usr, []).append(
+                    (callable_item, generated_provenance, generated_event)
+                )
         elif callable_item.provenance != "source_written":
             omitted_generated_callable = True
             continue
@@ -1044,27 +1203,12 @@ def _analysis_from_clang_result(
                 generated_provenance,
                 generated_event,
             )
-    omitted_generated = (
-        any(
-            item.provenance in {"macro_argument", "macro_replacement", "unknown"}
-            for item in result.declarations
-        )
-        or omitted_generated_callable
-    )
-    generated_diagnostics = (
-        [
-            AnalysisDiagnostic(
-                category="clang_generated_provenance",
-                message=(
-                    "compiler-observed macro callable evidence was ambiguous, "
-                    "incomplete, or exceeded the receipt bound"
-                ),
-            )
-        ]
-        if omitted_generated_callable
-        else []
-    )
     for callable_item, generated_provenance, generated_event in callable_rows.values():
+        has_body = (
+            callable_item.has_body
+            if callable_item.has_body is not None
+            else callable_item.is_definition
+        )
         if (
             callable_item.kind
             not in {
@@ -1124,6 +1268,51 @@ def _analysis_from_clang_result(
                 path,
             )
         )
+        alias_role = callable_item.alias_target_symbol is not None
+        persisted_generated: GeneratedCallableEvidence | None = generated_provenance
+        if alias_role and generated_provenance is not None:
+            persisted_generated = _clang_alias_or_prototype_evidence(
+                callable_item, generated_provenance, role="alias"
+            )
+            if persisted_generated is None:
+                omitted_generated_callable = True
+        overloads: list[OverloadArtifact] = []
+        prototype_rows = _clang_distinct_prototype_rows(
+            callable_item, tuple(generated_prototypes.get(callable_item.usr or "", ()))
+        )
+        for prototype_index, (prototype, prototype_evidence, _) in enumerate(
+            prototype_rows, start=1
+        ):
+            prototype_position = _clang_source_position(
+                prototype.location, path, prefer_expansion=True
+            )
+            prototype_generated = _clang_alias_or_prototype_evidence(
+                prototype, prototype_evidence, role="prototype"
+            )
+            if prototype_position is None or prototype_generated is None:
+                omitted_generated_callable = True
+                continue
+            overloads.append(
+                OverloadArtifact(
+                    stable_id=(
+                        f"{_function_stable_id(owner_id, prototype.qualified_name)}"
+                        f":prototype:{prototype_position[0]}:{prototype_index}"
+                    ),
+                    parent_stable_id=_function_stable_id(
+                        owner_id,
+                        callable_item.name
+                        if class_name is not None
+                        else callable_item.qualified_name or callable_item.name,
+                        class_name=class_name,
+                    ),
+                    ordinal=prototype_index,
+                    signature=prototype.signature,
+                    lineno=prototype_position[0],
+                    end_lineno=None,
+                    docstring=prototype.documentation,
+                    generated=prototype_generated,
+                )
+            )
         calls: list[CallSite] = []
         for call in callable_item.calls:
             if not call.target:
@@ -1181,7 +1370,11 @@ def _analysis_from_clang_result(
                 class_name=class_name,
             ),
             lineno=position[0],
-            end_lineno=end_position[0] if end_position is not None else None,
+            end_lineno=(
+                end_position[0]
+                if end_position is not None and has_body and not alias_role
+                else None
+            ),
             signature=(
                 (
                     "explicit "
@@ -1213,13 +1406,22 @@ def _analysis_from_clang_result(
             is_method=int(class_name is not None),
             is_public=int(callable_item.is_public),
             parameters=tuple(name for name, _ in callable_item.parameters if name),
-            returns_value=int(getattr(callable_item, "returns_value", False)),
+            returns_value=(
+                int(getattr(callable_item, "returns_value", False))
+                if has_body and not alias_role
+                else 0
+            ),
             yields_value=0,
             raises=0,
             has_asserts=0,
             decorators=(),
-            calls=tuple(sorted(calls, key=lambda item: (item.lineno, item.col_offset))),
+            calls=(
+                tuple(sorted(calls, key=lambda item: (item.lineno, item.col_offset)))
+                if has_body and not alias_role
+                else ()
+            ),
             callable_refs=(),
+            overloads=tuple(overloads),
             owner_name=class_name,
             owner_stable_id=class_stable_id,
             semantic_identity=(
@@ -1227,7 +1429,7 @@ def _analysis_from_clang_result(
                 if callable_item.is_definition and callable_item.usr is not None
                 else None
             ),
-            generated=generated_provenance,
+            generated=persisted_generated,
         )
         if class_name is None or class_name not in class_rows:
             functions.append(function)
@@ -1334,6 +1536,10 @@ def _analysis_from_clang_result(
             member.documentation_span,
         )
     declarations: list[DeclarationArtifact] = []
+    namespace_rows_by_usr: dict[
+        str, tuple[str, str, int, str | None, SourcePoint | None, SourceSpan | None]
+    ] = {}
+    namespace_usrs_by_stable_id: dict[str, str] = {}
     for declaration in result.declarations:
         if declaration.provenance != "source_written":
             continue
@@ -1384,21 +1590,53 @@ def _analysis_from_clang_result(
             cast("DeclarationKind", declaration.kind),
             qualified_name,
         )
-        declarations.append(
-            DeclarationArtifact(
-                name=qualified_name,
-                stable_id=stable_id,
-                kind=cast("DeclarationKind", declaration.kind),
-                lineno=position[0],
-                signature=signature,
-                docstring=getattr(declaration, "documentation", None),
-                enum_members=enum_members_for_declaration,
-                type_text=declaration.type_text,
-                owner_name=getattr(declaration, "owner_name", None),
-                owner_stable_id=owner_stable_id,
-                access=getattr(declaration, "access", None),
-            )
+        artifact = DeclarationArtifact(
+            name=qualified_name,
+            stable_id=stable_id,
+            kind=cast("DeclarationKind", declaration.kind),
+            lineno=position[0],
+            signature=signature,
+            docstring=getattr(declaration, "documentation", None),
+            enum_members=enum_members_for_declaration,
+            type_text=declaration.type_text,
+            owner_name=getattr(declaration, "owner_name", None),
+            owner_stable_id=owner_stable_id,
+            access=getattr(declaration, "access", None),
         )
+        if declaration.kind == "namespace":
+            namespace_usr = declaration.usr
+            if not namespace_usr or not qualified_name:
+                return None
+            prior_namespace = namespace_rows_by_usr.get(namespace_usr)
+            if prior_namespace is not None:
+                prior_name, prior_stable_id, prior_index, _, _, _ = prior_namespace
+                if prior_name != qualified_name or prior_stable_id != stable_id:
+                    return None
+                declarations[prior_index] = artifact
+                namespace_rows_by_usr[namespace_usr] = (
+                    qualified_name,
+                    stable_id,
+                    prior_index,
+                    getattr(declaration, "documentation", None),
+                    getattr(declaration, "documentation_location", None),
+                    getattr(declaration, "documentation_span", None),
+                )
+                continue
+            prior_usr = namespace_usrs_by_stable_id.get(stable_id)
+            if prior_usr is not None and prior_usr != namespace_usr:
+                return None
+            namespace_rows_by_usr[namespace_usr] = (
+                qualified_name,
+                stable_id,
+                len(declarations),
+                getattr(declaration, "documentation", None),
+                getattr(declaration, "documentation_location", None),
+                getattr(declaration, "documentation_span", None),
+            )
+            namespace_usrs_by_stable_id[stable_id] = namespace_usr
+            declarations.append(artifact)
+            continue
+        declarations.append(artifact)
         add_documentation(
             stable_id,
             "variable" if declaration.kind == "variable" else declaration.kind,
@@ -1406,6 +1644,22 @@ def _analysis_from_clang_result(
             getattr(declaration, "documentation", None),
             getattr(declaration, "documentation_location", None),
             getattr(declaration, "documentation_span", None),
+        )
+    for (
+        namespace_name,
+        stable_id,
+        _,
+        docstring,
+        documentation_location,
+        documentation_span,
+    ) in namespace_rows_by_usr.values():
+        add_documentation(
+            stable_id,
+            "namespace",
+            namespace_name,
+            docstring,
+            documentation_location,
+            documentation_span,
         )
     macro_declarations: list[DeclarationArtifact] = []
     for event in getattr(result, "preprocessing", ()):
@@ -1448,7 +1702,24 @@ def _analysis_from_clang_result(
             else None,
         )
         for diagnostic in result.diagnostics
-    ) + tuple(generated_diagnostics)
+    )
+    if omitted_generated_callable:
+        status_diagnostics += (
+            AnalysisDiagnostic(
+                category="clang_generated_provenance",
+                message=(
+                    "compiler-observed macro callable evidence was ambiguous, "
+                    "incomplete, or exceeded the receipt bound"
+                ),
+            ),
+        )
+    omitted_generated = (
+        any(
+            item.provenance in {"macro_argument", "macro_replacement", "unknown"}
+            for item in result.declarations
+        )
+        or omitted_generated_callable
+    )
     omitted_categories: list[str] = []
     if omitted_generated:
         omitted_categories.append("generated_declaration")
@@ -1496,6 +1767,7 @@ def _analysis_from_clang_result(
             target_contract={
                 "language": "cpp",
                 "frontend": "clang",
+                "callable_signature_kind": "derived_display_only",
                 "requested_source_path": (
                     str(result.requested_source_path)
                     if getattr(result, "requested_source_path", None) is not None
@@ -5571,7 +5843,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "46"
+    version = "47"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",

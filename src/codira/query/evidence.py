@@ -340,6 +340,29 @@ def _attach_generated_evidence(
         result["source_kind"] = "compiler_generated"
         if generated["invocation"] is not None:
             result["compiler_observed_invocation"] = generated["invocation"]
+        if generated.get("format_version") == 3 and generated.get("role") == "alias":
+            result["compiler_observed_alias"] = {
+                "target_identity": generated["alias_target_identity"],
+                "linkage_name": generated["linkage_name"],
+            }
+            invocation = generated["invocation"]
+            if isinstance(invocation, dict) and invocation["path"] == result.get(
+                "file"
+            ):
+                first, last = cast("list[int]", invocation["byte_range"])
+                invocation_text = cast("str", invocation["text"])
+                observed = invocation_text.encode("utf-8")
+                if (
+                    0 <= first < last <= len(content)
+                    and content[first:last] == observed
+                ):
+                    result["start_line"] = content.count(b"\n", 0, first) + 1
+                    result["end_line"] = content.count(b"\n", 0, last - 1) + 1
+                    result["source"] = invocation_text
+                    return
+            result.pop("start_line", None)
+            result.pop("end_line", None)
+            result.pop("source", None)
         return
     first, last = cast("list[int]", generated["invocation_span"])
     result.update(

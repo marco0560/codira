@@ -12,13 +12,25 @@ None
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import hashlib
+from dataclasses import asdict
+from typing import Literal
 
 import pytest
 
+from codira_clang_frontend import FrontendCallable, FrontendPreprocessorEvent
 from codira_analyzer_cpp import CppAnalyzer
-from codira.generated import GeneratedCallableProvenance
+from codira_analyzer_cpp import _clang_alias_or_prototype_evidence
+from codira_analyzer_cpp import _clang_distinct_prototype_rows
+from codira.generated import (
+    CompilerObservedCallableProvenance,
+    CompilerObservedMacroInvocation,
+    CompilerObservedSourceCoordinate,
+    GeneratedCallableProvenance,
+    generated_provenance_payload,
+)
 
 _DEFINITIONS = b"""#ifndef H
 #define H
@@ -49,6 +61,196 @@ def _analyzer(public: bool) -> CppAnalyzer:
         {"preprocessor_definitions": {"H": False, "PUBLIC": public, "NS": "ns"}}
     )
     return analyzer
+
+
+def test_clang_alias_and_generated_prototype_keep_exact_v3_facts() -> None:
+    """Map native alias operands and explicit labels into V3 provenance.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Checks exact target identity and distinguishes the alias operand from
+        an explicit assembler label.
+    """
+    source_coordinate = CompilerObservedSourceCoordinate("main.cpp", 0)
+    invocation = CompilerObservedMacroInvocation("WRAP", "main.cpp", (0, 4), "WRAP")
+    receipt = {
+        "schema": "clang.frontend.callable-observation.v1",
+        "context": {
+            "profile_identity": "profile",
+            "cache_fingerprint": "cache",
+            "analyzer_context_identity": "context",
+            "source_sha256": "a" * 64,
+            "stdout_sha256": "b" * 64,
+        },
+        "callable": {"usr": "alias-usr"},
+        "macro_expansion": {"name": "WRAP", "byte_range": [0, 4]},
+    }
+    base = CompilerObservedCallableProvenance(
+        origin="macro_argument",
+        role="definition",
+        source_sha256="a" * 64,
+        context_identity="context",
+        spelling_location=source_coordinate,
+        expansion_location=source_coordinate,
+        invocation=invocation,
+        receipt_namespace="clang.frontend.callable-observation.v1",
+        receipt_json=json.dumps(receipt, sort_keys=True, separators=(",", ":")),
+    )
+
+    def callable_row(
+        *,
+        usr: str,
+        name: str,
+        qualified_name: str,
+        is_definition: bool,
+        has_body: bool,
+        alias_target_symbol: str | None = None,
+        alias_target_usr: str | None = None,
+        alias_binding_status: Literal[
+            "not_alias", "resolved", "unresolved", "ambiguous"
+        ] = "not_alias",
+        linker_symbol: str | None = None,
+        explicit_linkage_label: str | None = None,
+        linkage_label_inherited: bool | None = None,
+    ) -> FrontendCallable:
+        return FrontendCallable(
+            usr=usr,
+            kind="function",
+            name=name,
+            qualified_name=qualified_name,
+            lexical_owner="ns",
+            decl_kind="FunctionDecl",
+            signature="double ns::f(double)",
+            function_type="double (double)",
+            parameters=(),
+            has_prototype=True,
+            is_definition=is_definition,
+            is_public=True,
+            provenance="macro_argument",
+            location=None,
+            span=None,
+            calls=(),
+            has_body=has_body,
+            alias_target_symbol=alias_target_symbol,
+            alias_target_usr=alias_target_usr,
+            alias_binding_status=alias_binding_status,
+            linker_symbol=linker_symbol,
+            explicit_linkage_label=explicit_linkage_label,
+            linkage_label_inherited=linkage_label_inherited,
+        )
+
+    alias = _clang_alias_or_prototype_evidence(
+        callable_row(
+            usr="alias-usr",
+            name="f",
+            qualified_name="ns::f",
+            is_definition=True,
+            has_body=False,
+            alias_target_symbol="f",
+            alias_target_usr="impl-usr",
+            alias_binding_status="resolved",
+        ),
+        base,
+        role="alias",
+    )
+    assert alias is not None
+    assert alias.role == "alias"
+    target_identity = alias.alias_target_identity
+    assert target_identity is not None
+    assert target_identity.namespace == "clang.usr.v1"
+    assert target_identity.value == "impl-usr"
+    assert alias.linkage_name is None
+    generated_provenance_payload(json.dumps(asdict(alias), sort_keys=True))
+    alias_receipt = json.loads(alias.receipt_json)
+    assert alias_receipt["callable"]["native_observation"]["alias_target_symbol"] == "f"
+
+    unresolved_alias = _clang_alias_or_prototype_evidence(
+        callable_row(
+            usr="alias-usr",
+            name="f",
+            qualified_name="ns::f",
+            is_definition=True,
+            has_body=False,
+            alias_target_symbol="f",
+            alias_binding_status="unresolved",
+        ),
+        base,
+        role="alias",
+    )
+    assert unresolved_alias is not None
+    assert unresolved_alias.alias_target_identity is None
+    generated_provenance_payload(json.dumps(asdict(unresolved_alias), sort_keys=True))
+
+    prototype = _clang_alias_or_prototype_evidence(
+        callable_row(
+            usr="impl-usr",
+            name="impl_f",
+            qualified_name="ns::impl_f",
+            is_definition=False,
+            has_body=False,
+            linker_symbol="f",
+            explicit_linkage_label="f",
+            linkage_label_inherited=False,
+        ),
+        base,
+        role="prototype",
+    )
+    assert prototype is not None
+    assert prototype.role == "prototype"
+    assert prototype.alias_target_identity is None
+    assert prototype.linkage_name is None
+    generated_provenance_payload(json.dumps(asdict(prototype), sort_keys=True))
+    prototype_receipt = json.loads(prototype.receipt_json)
+    assert (
+        prototype_receipt["callable"]["native_observation"]["explicit_linkage_label"]
+        == "f"
+    )
+
+    event = FrontendPreprocessorEvent(
+        kind="macro_expansion",
+        name="WRAP",
+        replacement=(),
+        replacement_truncated=False,
+        function_like=True,
+        parameters=(),
+        source_text=None,
+        condition=None,
+        result=None,
+        macro_defined=None,
+        invocation="WRAP",
+        location=None,
+        span=None,
+    )
+    canonical_prototype = callable_row(
+        usr="impl-usr",
+        name="impl_f",
+        qualified_name="ns::impl_f",
+        is_definition=False,
+        has_body=False,
+    )
+    repeated_prototype = callable_row(
+        usr="impl-usr",
+        name="impl_f",
+        qualified_name="ns::impl_f",
+        is_definition=False,
+        has_body=False,
+    )
+    only_prototype_rows = ((canonical_prototype, base, event),)
+    assert (
+        _clang_distinct_prototype_rows(canonical_prototype, only_prototype_rows) == ()
+    )
+    repeated_rows = (
+        *only_prototype_rows,
+        (repeated_prototype, base, event),
+    )
+    assert _clang_distinct_prototype_rows(canonical_prototype, repeated_rows) == (
+        (repeated_prototype, base, event),
+    )
 
 
 @pytest.mark.parametrize("public", [False, True])

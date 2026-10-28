@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 from codira_clang_frontend import (
@@ -483,6 +484,89 @@ class FrontendIntegrityTests(unittest.TestCase):
         response["calls"] = ["malformed-record"]
         self.assertEqual(
             _validate_response(response), "invalid_native_protocol_record_shape"
+        )
+
+    def test_native_protocol_v5_decodes_alias_and_body_distinctions(self) -> None:
+        """Retain exact alias, linkage, and per-declaration body observations.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Test assertion result.
+        """
+        response: dict[str, object] = {
+            "schema_version": "codira.clang-frontend-native/5",
+            "translation_unit_file": "/repo/main.cpp",
+            "projection_file": None,
+            "declarations": [
+                {
+                    "identity": {
+                        "usr": "c:@N@ns@F@alias#",
+                        "kind": "written",
+                        "provenance": "macro_argument",
+                    },
+                    "decl_kind": "function",
+                    "native_decl_kind": "FunctionDecl",
+                    "name": "alias",
+                    "qualified_name": "ns::alias",
+                    "signature": "int ns::alias()",
+                    "signature_kind": "derived_display_only",
+                    "function_type": "int ()",
+                    "is_definition": True,
+                    "has_body": False,
+                    "linkage_kind": "external",
+                    "linker_symbol": "_ZN2ns5aliasEv",
+                    "explicit_linkage_label": None,
+                    "linkage_label_inherited": None,
+                    "alias_target_symbol": "target_symbol",
+                    "alias_target_usr": "c:@N@ns@F@target#",
+                    "alias_binding_status": "resolved",
+                    "parameters": [],
+                    "location": None,
+                    "range": None,
+                }
+            ],
+            "non_function_declarations": [],
+            "calls": [],
+            "diagnostics": [],
+            "dependency_paths": [],
+            "search_directories": [],
+            "includes": [],
+            "preprocessing": [],
+            "documentation_comments": [],
+            "capture_mode": "source_relevant",
+            "clang_version": "Clang fixture",
+            "target_triple": "x86_64-unknown-linux-gnu",
+            "sysroot": "/",
+            "tool_return_code": 0,
+            "capture_projection": {},
+        }
+        self.assertIsNone(_validate_response(response))
+        _, callables, _ = _decode_entities(response)
+        self.assertEqual(len(callables), 1)
+        alias = callables[0]
+        self.assertTrue(alias.is_definition)
+        self.assertFalse(alias.has_body)
+        self.assertEqual(alias.linkage_kind, "external")
+        self.assertEqual(alias.alias_target_symbol, "target_symbol")
+        self.assertEqual(alias.alias_target_usr, "c:@N@ns@F@target#")
+        self.assertEqual(alias.alias_binding_status, "resolved")
+        self.assertEqual(alias.signature_kind, "derived_display_only")
+        row = cast(
+            "dict[str, object]", cast("list[object]", response["declarations"])[0]
+        )
+        row["alias_target_usr"] = None
+        self.assertEqual(
+            _validate_response(response), "inconsistent_native_protocol_alias_facts"
+        )
+        row["alias_target_usr"] = "c:@N@ns@F@target#"
+        row["alias_binding_status"] = "not_alias"
+        self.assertEqual(
+            _validate_response(response), "inconsistent_native_protocol_alias_facts"
         )
 
     def test_header_projection_uses_only_captured_dependency_owners(self) -> None:

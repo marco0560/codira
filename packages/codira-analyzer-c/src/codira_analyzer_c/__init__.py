@@ -688,6 +688,7 @@ def _clang_macro_invocation_for_callable(
             "qualified_name": callable_item.qualified_name,
             "decl_kind": callable_item.decl_kind,
             "signature": callable_item.signature,
+            "signature_kind": callable_item.signature_kind,
             "function_type": callable_item.function_type,
             "provenance": callable_item.provenance,
             "is_definition": callable_item.is_definition,
@@ -1302,6 +1303,7 @@ def _analysis_from_clang_result(
             target_contract={
                 "language": "c",
                 "frontend": "clang",
+                "callable_signature_kind": "derived_display_only",
                 "requested_source_path": (
                     str(result.requested_source_path)
                     if getattr(result, "requested_source_path", None) is not None
@@ -3644,7 +3646,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "27"
+    version = "28"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 

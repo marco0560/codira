@@ -29,6 +29,7 @@ from scripts.clang_parity_qualification import (
     OracleCase,
     OracleDocument,
     _assert_database_backend_identity,
+    _validate_v3_alias_identity,
     audit_freeze,
     capture_freeze,
     export_database_snapshot,
@@ -36,6 +37,7 @@ from scripts.clang_parity_qualification import (
     load_oracle,
     load_public_constant,
 )
+from scripts.grade_clang_native_linkage import grade_native_linkage
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "clang_parity_qualification_r1"
 
@@ -87,6 +89,481 @@ def test_source_authored_oracle_preserves_qualified_overloads() -> None:
     assert [fact["definition_line"] for fact in overloads] == [33, 37]
     pending_generated = oracle.cases["parity_cpp.cpp"].pending_facts["callables"][0]
     assert pending_generated["generated_invocation_span"] == [941, 982]
+
+
+def test_generated_alias_oracle_binds_labels_and_alias_target_to_source() -> None:
+    """Keep asm labels, alias operands, and generated declaration roles separate.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Source-authored facts preserve physical spelling and qualified names.
+    """
+    oracle = load_oracle(FIXTURE_ROOT / "source-oracle.json", FIXTURE_ROOT)
+    case = oracle.cases["generated_alias.cpp"]
+    declarations = case.facts["generated_declarations"]
+    by_role = {str(row["role"]): row for row in declarations}
+
+    assert by_role["prototype"]["name"] == "alias_case::impl_f"
+    assert by_role["definition"]["linkage_name"] == "f"
+    assert by_role["prototype"]["has_body"] is False
+    assert by_role["definition"]["has_body"] is True
+    assert by_role["definition"]["explicit_linkage_label"] == "f"
+    assert by_role["definition"]["linkage_label_inherited"] is True
+    assert by_role["alias"]["has_body"] is False
+    assert by_role["alias"]["name"] == "alias_case::f"
+    assert by_role["alias"]["alias_target_symbol"] == "f"
+    assert by_role["alias"]["alias_target_identity_reference"] == (
+        "generated_alias::alias target"
+    )
+    assert by_role["alias"].get("linkage_name") is None
+    assert any(
+        invariant.get("equal")
+        == [
+            "generated_alias::implementation prototype compiler identity",
+            "generated_alias::implementation definition compiler identity",
+        ]
+        for invariant in oracle.identity_invariants
+    )
+
+
+def test_grader_checks_v3_alias_target_identity_without_name_inference() -> None:
+    """Require exact alias identity relations even when names look compatible.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The grader accepts unique compiler identities and rejects missing or
+        conflicting alias-target identities without deriving one from spelling.
+    """
+    loaded = load_oracle(FIXTURE_ROOT / "source-oracle.json", FIXTURE_ROOT)
+    case = loaded.cases["generated_alias.cpp"]
+    expected_rows = case.facts["generated_declarations"]
+    observations = []
+    implementation_identity: dict[str, JSONValue] = {
+        "namespace": "clang.usr.v1",
+        "value": "raw-impl-usr",
+    }
+    alias_identity: dict[str, JSONValue] = {
+        "namespace": "clang.usr.v1",
+        "value": "raw-alias-usr",
+    }
+    for expected in expected_rows:
+        observed = {
+            key: value
+            for key, value in expected.items()
+            if key
+            not in {
+                "source_evidence",
+                "identity_reference",
+                "alias_target_identity_reference",
+            }
+        }
+        role = observed["role"]
+        observed["semantic_identity"] = (
+            alias_identity if role == "alias" else implementation_identity
+        )
+        observed["compiler_identity"] = implementation_identity
+        if role == "alias":
+            observed["alias_target_identity"] = implementation_identity
+        if role == "prototype":
+            observed["semantic_identity"] = None
+        observations.append(observed)
+    declaration_only_case = OracleCase(
+        source=case.source,
+        language=case.language,
+        facts={"generated_declarations": expected_rows},
+    )
+    oracle = OracleDocument(
+        {"generated_alias.cpp": declaration_only_case},
+        identity_invariants=(
+            {
+                "equal": [
+                    "generated_alias::implementation prototype compiler identity",
+                    "generated_alias::implementation definition compiler identity",
+                ],
+                "reason": "the compiler assigns one identity to prototype and definition",
+            },
+            {
+                "equal": [
+                    "generated_alias::alias target",
+                    "generated_alias::implementation semantic identity",
+                ],
+                "reason": "the exact alias target resolves to the implementation",
+            },
+            {
+                "equal": [
+                    "generated_alias::implementation definition compiler identity",
+                    "generated_alias::implementation semantic identity",
+                ],
+                "reason": "the implementation native identity is persisted without rewriting",
+            },
+        ),
+    )
+    snapshot: dict[str, JSONValue] = cast(
+        "dict[str, JSONValue]",
+        {
+            "snapshot_version": 1,
+            "backend": "sqlite",
+            "cases": {"generated_alias.cpp": {"generated_declarations": observations}},
+            "header_context": [],
+        },
+    )
+
+    assert grade_snapshot(oracle, snapshot) == ()
+
+    snapshot_cases = cast("dict[str, JSONValue]", snapshot["cases"])
+    case_snapshot = cast("dict[str, JSONValue]", snapshot_cases["generated_alias.cpp"])
+    observed_rows = cast("list[JSONValue]", case_snapshot["generated_declarations"])
+    alias_row = next(
+        cast("dict[str, JSONValue]", row)
+        for row in observed_rows
+        if cast("dict[str, JSONValue]", row).get("role") == "alias"
+    )
+    for binding_status in ("unresolved", "ambiguous", None):
+        alias_row["alias_binding_status"] = binding_status
+        alias_row["alias_target_identity"] = None
+        failures = grade_snapshot(oracle, snapshot)
+        assert any(failure.category == "generated_declarations" for failure in failures)
+        assert any(failure.category == "identity_invariants" for failure in failures)
+    alias_row["alias_binding_status"] = "resolved"
+    alias_row["alias_target_identity"] = {
+        "namespace": "clang.usr.v1",
+        "value": "display-name-derived-target-is-not-the-compiler-identity",
+    }
+    failures = grade_snapshot(oracle, snapshot)
+    assert any(failure.category == "identity_invariants" for failure in failures)
+
+
+def test_v3_alias_identity_must_match_raw_compiler_target_usr() -> None:
+    """Bind normalized alias identity to the opaque native target observation.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Mismatched compiler evidence is rejected even when the linker spelling
+        remains identical.
+    """
+    target_usr = "c:@N@alias_case@F@impl_f#d#"
+    _validate_v3_alias_identity(
+        {
+            "role": "alias",
+            "alias_target_identity": {
+                "namespace": "clang.usr.v1",
+                "value": target_usr,
+            },
+        },
+        {
+            "alias_binding_status": "resolved",
+            "alias_target_usr": target_usr,
+            "alias_target_symbol": "f",
+        },
+        "alias-stable-id",
+    )
+    with pytest.raises(ValueError, match="raw compiler target USR"):
+        _validate_v3_alias_identity(
+            {
+                "role": "alias",
+                "alias_target_identity": {
+                    "namespace": "clang.usr.v1",
+                    "value": "different-usr",
+                },
+            },
+            {
+                "alias_binding_status": "resolved",
+                "alias_target_usr": target_usr,
+                "alias_target_symbol": "f",
+            },
+            "alias-stable-id",
+        )
+    for status in ("unresolved", "ambiguous"):
+        _validate_v3_alias_identity(
+            {"role": "alias", "alias_target_identity": None},
+            {
+                "alias_binding_status": status,
+                "alias_target_usr": None,
+                "alias_target_symbol": "missing",
+            },
+            "alias-stable-id",
+        )
+
+
+def test_translation_unit_identity_oracles_keep_scoping_and_linkage_distinct() -> None:
+    """Keep internal and UniqueExternal identities scoped by full TU path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Source facts request the collision fix and ordinary external control.
+    """
+    oracle = load_oracle(FIXTURE_ROOT / "source-oracle.json", FIXTURE_ROOT)
+    anonymous_invariant = next(
+        row
+        for row in oracle.identity_invariants
+        if row.get("distinct")
+        and row["distinct"]
+        == ["anonymous_a.cpp:local_target", "anonymous_b.cpp:local_target"]
+    )
+    assert "translation-unit local" in str(anonymous_invariant["reason"])
+    unique_external_invariant = next(
+        row
+        for row in oracle.identity_invariants
+        if row.get("distinct")
+        == [
+            "same-name-a/foo.cpp:unique_external_collision",
+            "same-name-b/foo.cpp:unique_external_collision",
+        ]
+    )
+    shared_external_invariant = next(
+        row
+        for row in oracle.identity_invariants
+        if row.get("equal")
+        == [
+            "same-name-a/foo.cpp:external_shared",
+            "same-name-b/foo.cpp:external_shared",
+        ]
+    )
+    assert "full main translation-unit path" in str(unique_external_invariant["reason"])
+    assert "ordinary external linkage" in str(shared_external_invariant["reason"])
+    anonymous_cases = [
+        oracle.cases[source] for source in ("anonymous_a.cpp", "anonymous_b.cpp")
+    ]
+    assert all(
+        "linkage" not in callable_fact
+        for case in anonymous_cases
+        for callable_fact in case.facts["callables"]
+        if callable_fact["name"] == "(anonymous namespace)::local_target"
+    )
+    oracle_payload = json.loads(
+        (FIXTURE_ROOT / "source-oracle.json").read_text(encoding="utf-8")
+    )
+    assert len(oracle_payload["native_linkage_requests"]) == 2
+    unique_external_references = cast(
+        "list[JSONValue]", unique_external_invariant["distinct"]
+    )
+    assert {
+        request["source"]
+        for request in oracle.identity_observation_requests
+        if request["reference"] in unique_external_references
+    } == {"same-name-a/foo.cpp", "same-name-b/foo.cpp"}
+
+
+def test_native_linkage_supplement_joins_exact_db_identity(
+    tmp_path: Path,
+) -> None:
+    """Join raw internal linkage to the independently exported DB identity.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory for source, native-response, and backend evidence.
+
+    Returns
+    -------
+    None
+        The test passes when native identity and both persisted identities match.
+    """
+    requests: list[dict[str, object]] = []
+    profiles: list[dict[str, object]] = []
+    identities: dict[str, str] = {}
+    namespaces: dict[str, str] = {}
+    for suffix, value in (("a", "usr-a"), ("b", "usr-b")):
+        source = tmp_path / f"anonymous_{suffix}.cpp"
+        source.write_text("void local_target() {}\n", encoding="utf-8")
+        source_path = str(source.resolve())
+        source_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
+        reference = f"anonymous_{suffix}.cpp:local_target"
+        stdout = tmp_path / f"{suffix}.stdout"
+        response = {
+            "capture_mode": "source_relevant",
+            "tool_return_code": 0,
+            "translation_unit_file": source_path,
+            "declarations": [
+                {
+                    "qualified_name": "(anonymous namespace)::local_target",
+                    "is_definition": True,
+                    "linkage_kind": "internal",
+                    "identity": {"usr": value},
+                    "location": {"expansion": {"line": 1, "path": source_path}},
+                }
+            ],
+        }
+        stdout.write_text(json.dumps(response), encoding="utf-8")
+        profiles.append(
+            {
+                "source": f"anonymous_{suffix}.cpp",
+                "source_path": source_path,
+                "source_sha256": source_sha256,
+                "stdout_path": str(stdout),
+                "stdout_sha256": hashlib.sha256(stdout.read_bytes()).hexdigest(),
+            }
+        )
+        requests.append(
+            {
+                "reference": reference,
+                "source": f"anonymous_{suffix}.cpp",
+                "name": "(anonymous namespace)::local_target",
+                "definition_line": 1,
+                "linkage_kind": "internal",
+                "identity_observation_reference": reference,
+            }
+        )
+        identities[reference] = value
+        namespaces[reference] = "clang.usr.v1"
+    report = grade_native_linkage(
+        {"native_linkage_requests": requests},
+        {"profiles": profiles},
+        [
+            {
+                "backend": backend,
+                "cases": {
+                    profile["source"]: {"source_sha256": profile["source_sha256"]}
+                    for profile in profiles
+                },
+                "identity_observations": identities,
+                "identity_namespace_observations": namespaces,
+            }
+            for backend in ("sqlite", "duckdb")
+        ],
+        tmp_path,
+    )
+    assert report["result"] == "passed"
+    assert report["assertion_count"] == 2
+
+
+def test_native_linkage_supplement_rejects_identity_from_another_target(
+    tmp_path: Path,
+) -> None:
+    """Reject native evidence whose USR differs from persisted DB identity.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory holding authored source and raw compiler responses.
+
+    Returns
+    -------
+    None
+        The test passes when the supplement rejects a mismatched identity.
+    """
+    source = tmp_path / "anonymous_a.cpp"
+    source.write_text("void local_target() {}\n", encoding="utf-8")
+    source_path = str(source.resolve())
+    stdout = tmp_path / "a.stdout"
+    stdout.write_text(
+        json.dumps(
+            {
+                "capture_mode": "source_relevant",
+                "tool_return_code": 0,
+                "translation_unit_file": source_path,
+                "declarations": [
+                    {
+                        "qualified_name": "(anonymous namespace)::local_target",
+                        "is_definition": True,
+                        "linkage_kind": "internal",
+                        "identity": {"usr": "native-usr"},
+                        "location": {"expansion": {"line": 1, "path": source_path}},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    reference = "anonymous_a.cpp:local_target"
+    request = {
+        "reference": reference,
+        "source": "anonymous_a.cpp",
+        "name": "(anonymous namespace)::local_target",
+        "definition_line": 1,
+        "linkage_kind": "internal",
+        "identity_observation_reference": reference,
+    }
+    profile = {
+        "source": "anonymous_a.cpp",
+        "source_path": source_path,
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "stdout_path": str(stdout),
+        "stdout_sha256": hashlib.sha256(stdout.read_bytes()).hexdigest(),
+    }
+    snapshots = [
+        {
+            "backend": backend,
+            "cases": {"anonymous_a.cpp": {"source_sha256": profile["source_sha256"]}},
+            "identity_observations": {reference: "different-usr"},
+            "identity_namespace_observations": {reference: "clang.usr.v1"},
+        }
+        for backend in ("sqlite", "duckdb")
+    ]
+    with pytest.raises(ValueError, match="does not equal persisted DB identity"):
+        grade_native_linkage(
+            {"native_linkage_requests": [request]},
+            {"profiles": [profile]},
+            snapshots,
+            tmp_path,
+        )
+
+    snapshot_cases = cast("dict[str, dict[str, str]]", snapshots[0]["cases"])
+    snapshot_cases["anonymous_a.cpp"]["source_sha256"] = "wrong-source"
+    with pytest.raises(ValueError, match="snapshot source digest differs"):
+        grade_native_linkage(
+            {"native_linkage_requests": [request]},
+            {"profiles": [profile]},
+            snapshots,
+            tmp_path,
+        )
+
+    source_a = (FIXTURE_ROOT / "same-name-a/foo.cpp").read_bytes()
+    source_b = (FIXTURE_ROOT / "same-name-b/foo.cpp").read_bytes()
+    assert source_a == (
+        b"namespace { struct HiddenType {}; }\n"
+        b"void unique_external_collision(HiddenType value) { (void)value; }\n"
+        b"int external_shared(void) { return 11; }\n"
+    )
+    assert source_b == source_a.replace(b"return 11", b"return 22")
+
+
+def test_generated_declaration_oracle_rejects_changed_asm_source(
+    tmp_path: Path,
+) -> None:
+    """Detect a changed asm label expression before grading analyzer output.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable copy of the source-authored oracle and fixture tree.
+
+    Returns
+    -------
+    None
+        A changed macro expression invalidates the authored expectation.
+    """
+    import shutil
+
+    fixture_root = tmp_path / "fixture"
+    shutil.copytree(FIXTURE_ROOT, fixture_root)
+    source = fixture_root / "generated_alias.cpp"
+    source.write_text(
+        source.read_text(encoding="utf-8").replace("asm(#N)", "asm(#M)"),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="expression differs from source"):
+        load_oracle(fixture_root / "source-oracle.json", fixture_root)
 
 
 def test_source_authored_oracle_rejects_out_of_range_fact_line(tmp_path: Path) -> None:
@@ -707,3 +1184,224 @@ def test_backend_snapshot_exports_generated_rows_from_validated_provenance(
     stored = cast("dict[str, JSONValue]", observed["generated_provenance"])
     assert stored["context_identity"] == outer_context
     assert "tokens" not in stored
+    generated_rows = cast("list[JSONValue]", case_snapshot["generated_declarations"])
+    assert len(generated_rows) == 1
+    generated_definition = cast("dict[str, JSONValue]", generated_rows[0])
+    assert generated_definition["role"] == "definition"
+    assert generated_definition["compiler_identity"] == {
+        "namespace": "clang.usr.v1",
+        "value": usr,
+    }
+
+
+@pytest.mark.parametrize("backend_name", ["sqlite", "duckdb"])
+def test_v3_alias_database_row_is_callable_without_a_body(
+    tmp_path: Path, backend_name: str
+) -> None:
+    """Project a persisted V3 alias declaration as a bodyless callable.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable source repository and backend index root.
+    backend_name : str
+        First-party structural backend under test.
+
+    Returns
+    -------
+    None
+        The database alias is visible as a callable and does not imply a body.
+    """
+    import sqlite3
+
+    import duckdb
+
+    source = b"#define ALIAS(name) int name(int value)\nALIAS(alias)\n"
+    path = tmp_path / "sample.cpp"
+    path.write_bytes(source)
+    source_sha = hashlib.sha256(source).hexdigest()
+    source_path = str(path.resolve())
+    context_identity = json.dumps(
+        {"source_sha256": source_sha, "configuration": "alias-fixture"},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    invocation = "ALIAS(alias)"
+    invocation_start = source.index(invocation.encode("utf-8"))
+    invocation_end = invocation_start + len(invocation.encode("utf-8"))
+    alias_usr = "c:@F@alias#I#"
+    target_usr = "c:@F@target#I#"
+    stdout_sha = "a" * 64
+    receipt = {
+        "schema": "clang.frontend.callable-observation.v1",
+        "context": {
+            "profile_identity": "alias-profile",
+            "cache_fingerprint": "alias-cache",
+            "analyzer_context_identity": context_identity,
+            "source_sha256": source_sha,
+            "stdout_sha256": stdout_sha,
+        },
+        "callable": {
+            "usr": alias_usr,
+            "kind": "function",
+            "name": "alias",
+            "qualified_name": "alias",
+            "decl_kind": "Function",
+            "signature": "int alias(int value)",
+            "function_type": "int (int)",
+            "provenance": "macro_argument",
+            "is_definition": True,
+            "native_observation": {
+                "alias_binding_status": "resolved",
+                "alias_target_symbol": "target",
+                "alias_target_usr": target_usr,
+                "explicit_linkage_label": None,
+                "has_body": False,
+                "linkage_kind": "external",
+                "linkage_label_inherited": None,
+                "linker_symbol": "alias",
+                "signature_kind": "derived_display_only",
+            },
+        },
+        "macro_expansion": {
+            "name": "ALIAS",
+            "invocation": invocation,
+            "byte_range": [invocation_start, invocation_end],
+        },
+    }
+    receipt_json = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    payload = {
+        "variant": "compiler_observed",
+        "format_version": 3,
+        "origin": "macro_argument",
+        "role": "alias",
+        "source_sha256": source_sha,
+        "context_identity": context_identity,
+        "spelling_location": {
+            "path": "sample.cpp",
+            "byte_offset": invocation_start + len("ALIAS("),
+        },
+        "expansion_location": {
+            "path": "sample.cpp",
+            "byte_offset": invocation_start,
+        },
+        "invocation": {
+            "name": "ALIAS",
+            "path": "sample.cpp",
+            "byte_range": [invocation_start, invocation_end],
+            "text": invocation,
+        },
+        "receipt_namespace": "clang.frontend.callable-observation.v1",
+        "receipt_json": receipt_json,
+        "alias_target_identity": {
+            "namespace": "clang.usr.v1",
+            "value": target_usr,
+        },
+        "linkage_name": "alias",
+    }
+    function = FunctionArtifact(
+        name="alias",
+        stable_id="cpp:function:sample.cpp:alias",
+        lineno=2,
+        end_lineno=None,
+        signature="int alias(int value)",
+        docstring=None,
+        has_docstring=0,
+        is_method=0,
+        is_public=1,
+        parameters=("value",),
+        returns_value=0,
+        yields_value=0,
+        raises=0,
+        has_asserts=0,
+        decorators=(),
+        calls=(),
+        callable_refs=(),
+        semantic_identity=SemanticIdentity("clang.usr.v1", alias_usr),
+    )
+    analysis = AnalysisResult(
+        source_path=path,
+        module=ModuleArtifact("sample", "cpp:module:sample.cpp", None, 0),
+        classes=(),
+        functions=(function,),
+        declarations=(),
+        imports=(),
+    )
+    backend = SQLiteIndexBackend() if backend_name == "sqlite" else DuckDBIndexBackend()
+    backend.initialize(tmp_path)
+    session = backend.begin_index_session(tmp_path)
+    try:
+        session.prepare(full=True, indexed_paths=[str(path)], deleted_paths=[])
+        session.persist_analysis(
+            BackendPersistAnalysisRequest(
+                root=tmp_path,
+                file_metadata=FileMetadataSnapshot(
+                    path=path,
+                    sha256=source_sha,
+                    mtime=path.stat().st_mtime,
+                    size=len(source),
+                    analyzer_name="clang-fixture",
+                    analyzer_version="1",
+                    analysis_input_fingerprint=context_identity,
+                ),
+                analysis=analysis,
+                embedding_indexing=EmbeddingIndexingPolicy(object_types=frozenset()),
+                defer_embeddings=True,
+            )
+        )
+        session.rebuild_derived_indexes()
+        session.commit()
+    except BaseException:
+        session.abort()
+        raise
+    finally:
+        session.close()
+    if backend_name == "duckdb":
+        cast("DuckDBIndexBackend", backend)._close_cached_connections()
+
+    database_path = (
+        tmp_path
+        / ".codira"
+        / ("index.db" if backend_name == "sqlite" else "index.duckdb")
+    )
+    connection = (
+        sqlite3.connect(database_path)
+        if backend_name == "sqlite"
+        else duckdb.connect(str(database_path))
+    )
+    try:
+        file_row = connection.execute(
+            "SELECT id FROM files WHERE path = ?", [source_path]
+        ).fetchone()
+        assert file_row is not None
+        file_id = file_row[0]
+        connection.execute(
+            "INSERT INTO artifact_provenance(file_id, stable_id, payload) "
+            "VALUES (?, ?, ?)",
+            [file_id, function.stable_id, json.dumps(payload, sort_keys=True)],
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    profile_document = tmp_path / "profiles.json"
+    profile_document.write_text('{"profiles": []}', encoding="utf-8")
+    (tmp_path / ".codira" / "metadata.json").write_text(
+        json.dumps({"backend_name": backend_name}), encoding="utf-8"
+    )
+    oracle = OracleDocument(
+        {"sample.cpp": OracleCase(source="sample.cpp", language="cpp", facts={})}
+    )
+    snapshot = export_database_snapshot(
+        backend_name, database_path, tmp_path, oracle, profile_document
+    )
+    cases = cast("dict[str, JSONValue]", snapshot["cases"])
+    case_snapshot = cast("dict[str, JSONValue]", cases["sample.cpp"])
+    callables = cast("list[JSONValue]", case_snapshot["callables"])
+    assert len(callables) == 1
+    alias = cast("dict[str, JSONValue]", callables[0])
+    assert alias["name"] == "alias"
+    assert alias["returns_value"] is False
+    generated_rows = cast("list[JSONValue]", case_snapshot["generated_declarations"])
+    assert len(generated_rows) == 1
+    assert cast("dict[str, JSONValue]", generated_rows[0])["role"] == "alias"

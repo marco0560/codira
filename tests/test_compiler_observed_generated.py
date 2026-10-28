@@ -7,13 +7,14 @@ None
 Returns
 -------
 None
-    Version-two compiler evidence remains distinct from token-derived v1 data.
+    Compiler-observed v2 and v3 evidence remains distinct from token-derived v1.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+from argparse import Namespace
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
@@ -24,6 +25,7 @@ from codira_backend_sqlite import SQLiteIndexBackend
 from codira.contracts import BackendPersistAnalysisRequest, EmbeddingIndexingPolicy
 from codira.generated import (
     CompilerObservedCallableProvenance,
+    CompilerObservedCallableProvenanceV3,
     CompilerObservedMacroInvocation,
     CompilerObservedSourceCoordinate,
     generated_provenance_payload,
@@ -33,6 +35,8 @@ from codira.models import (
     FileMetadataSnapshot,
     FunctionArtifact,
     ModuleArtifact,
+    OverloadArtifact,
+    SemanticIdentity,
 )
 from codira.query.evidence import _attach_generated_evidence
 
@@ -94,7 +98,10 @@ def _request(
     root: Path,
     path: Path,
     source: bytes,
-    provenance: CompilerObservedCallableProvenance,
+    provenance: CompilerObservedCallableProvenance
+    | CompilerObservedCallableProvenanceV3,
+    *,
+    overloads: tuple[OverloadArtifact, ...] = (),
 ) -> BackendPersistAnalysisRequest:
     """Build an actual backend write request containing one generated callable.
 
@@ -107,7 +114,9 @@ def _request(
     source : bytes
         Exact source bytes bound to the file metadata.
     provenance : object
-        Version-two generated provenance attached to the callable.
+        Compiler-observed generated provenance attached to the callable.
+    overloads : tuple[codira.models.OverloadArtifact, ...], optional
+        Generated overload declarations attached to the callable.
 
     Returns
     -------
@@ -134,6 +143,7 @@ def _request(
         decorators=(),
         calls=(),
         callable_refs=(),
+        overloads=overloads,
         generated=provenance,
     )
     analysis = AnalysisResult(
@@ -157,6 +167,58 @@ def _request(
         analysis=analysis,
         embedding_indexing=EmbeddingIndexingPolicy(object_types=frozenset()),
         defer_embeddings=True,
+    )
+
+
+def _alias_provenance(
+    source: bytes,
+    target: SemanticIdentity | None,
+    *,
+    invocation: bool = True,
+) -> CompilerObservedCallableProvenanceV3:
+    """Create version-three observed alias evidence.
+
+    Parameters
+    ----------
+    source : bytes
+        Indexed translation-unit bytes bound to the evidence digest.
+    target : codira.models.SemanticIdentity | None
+        Exact compiler target identity, or None for an unresolved alias.
+    invocation : bool, optional
+        Whether to retain a separately observed macro invocation.
+
+    Returns
+    -------
+    CompilerObservedCallableProvenanceV3
+        Alias record with observed linker spelling and no fabricated tokens.
+    """
+    invocation_text = "ALIAS(alias, implementation)"
+    observed_invocation = (
+        CompilerObservedMacroInvocation(
+            name="ALIAS",
+            path="src/main.c",
+            byte_range=(0, len(invocation_text.encode("utf-8"))),
+            text=invocation_text,
+        )
+        if invocation
+        else None
+    )
+    return CompilerObservedCallableProvenanceV3(
+        origin="macro_replacement",
+        role="alias",
+        source_sha256=hashlib.sha256(source).hexdigest(),
+        context_identity="a" * 64,
+        receipt_namespace="example.compiler.callable.v1",
+        receipt_json=json.dumps(
+            {"callable": {"name": "alias", "usr": "opaque:alias"}},
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        alias_target_identity=target,
+        linkage_name="f",
+        invocation=observed_invocation,
+        spelling_location=CompilerObservedSourceCoordinate("include/aliases.h", 8),
+        expansion_location=CompilerObservedSourceCoordinate("src/main.c", 12),
     )
 
 
@@ -226,6 +288,242 @@ def test_compiler_observed_provenance_persists_as_opaque_json(
     }
     assert "tokens" not in stored
     assert "parameter_types" not in stored
+
+
+@pytest.mark.parametrize("backend_name", ["sqlite", "duckdb"])
+@pytest.mark.parametrize(
+    "target",
+    [SemanticIdentity("opaque.test.v1", "callable:implementation"), None],
+)
+@pytest.mark.parametrize("invocation", [True, False])
+def test_compiler_observed_v3_alias_roundtrips_and_is_queryable(
+    tmp_path: Path,
+    backend_name: str,
+    target: SemanticIdentity | None,
+    invocation: bool,
+) -> None:
+    """Persist alias evidence without leaking an adjacent implementation body.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable root and backend database directory.
+    backend_name : str
+        Structural backend under test.
+    target : codira.models.SemanticIdentity | None
+        Exact identity or unresolved target case.
+    invocation : bool
+        Whether a path-validated preprocessor invocation is available.
+
+    Returns
+    -------
+    None
+        Alias source is exactly the invocation or omitted, never an adjacent body.
+    """
+    source = b"ALIAS(alias, implementation) { return implementation(); }\n"
+    path = tmp_path / "src" / "main.c"
+    provenance = _alias_provenance(source, target, invocation=invocation)
+    prototype = CompilerObservedCallableProvenanceV3(
+        origin="macro_replacement",
+        role="prototype",
+        source_sha256=hashlib.sha256(source).hexdigest(),
+        context_identity="a" * 64,
+        receipt_namespace="example.compiler.callable.v1",
+        receipt_json=json.dumps(
+            {"callable": {"name": "foo", "usr": "opaque:foo"}},
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
+    overload = OverloadArtifact(
+        stable_id="callable:foo:prototype:1",
+        parent_stable_id="callable:foo",
+        ordinal=1,
+        signature="int foo(void)",
+        lineno=1,
+        end_lineno=None,
+        docstring=None,
+        generated=prototype,
+    )
+    backend = SQLiteIndexBackend() if backend_name == "sqlite" else DuckDBIndexBackend()
+    backend.initialize(tmp_path)
+    session = backend.begin_index_session(tmp_path)
+    try:
+        session.prepare(full=True, indexed_paths=[str(path)], deleted_paths=[])
+        session.persist_analysis(
+            _request(tmp_path, path, source, provenance, overloads=(overload,))
+        )
+        session.rebuild_derived_indexes()
+        session.commit()
+    except BaseException:
+        session.abort()
+        raise
+    finally:
+        session.close()
+
+    if isinstance(backend, SQLiteIndexBackend):
+        sqlite_connection = backend.open_connection(tmp_path)
+        try:
+            rows = sqlite_connection.execute(
+                "SELECT stable_id, payload FROM artifact_provenance "
+                "WHERE stable_id IN (?, ?)",
+                ("callable:foo", "callable:foo:prototype:1"),
+            ).fetchall()
+        finally:
+            backend.close_connection(sqlite_connection)
+    else:
+        duckdb_connection = backend.open_connection(tmp_path)
+        try:
+            rows = duckdb_connection.execute(
+                "SELECT stable_id, payload FROM artifact_provenance "
+                "WHERE stable_id IN (?, ?)",
+                ("callable:foo", "callable:foo:prototype:1"),
+            ).fetchall()
+        finally:
+            backend.close_connection(duckdb_connection)
+    assert len(rows) == 2
+    payloads = {
+        str(stable_id): generated_provenance_payload(str(payload))
+        for stable_id, payload in rows
+    }
+    stored = payloads["callable:foo"]
+    stored_prototype = payloads["callable:foo:prototype:1"]
+    expected_target = None if target is None else asdict(target)
+    assert stored["format_version"] == 3
+    assert stored["role"] == "alias"
+    assert stored["alias_target_identity"] == expected_target
+    assert stored["linkage_name"] == "f"
+    assert "tokens" not in stored and "parameter_types" not in stored
+    assert stored_prototype["format_version"] == 3
+    assert stored_prototype["role"] == "prototype"
+    assert stored_prototype["alias_target_identity"] is None
+
+    query_result: dict[str, object] = {}
+    query_result.update(
+        file="src/main.c",
+        start_line=1,
+        end_line=1,
+        source=source.decode("utf-8"),
+    )
+    from codira.query.evidence import _verify_observed_invocation
+
+    _verify_observed_invocation(tmp_path, path, stored)
+    _attach_generated_evidence(query_result, stored, [], source)
+    assert query_result["source_kind"] == "compiler_generated"
+    assert query_result["compiler_observed_alias"] == {
+        "target_identity": expected_target,
+        "linkage_name": "f",
+    }
+    assert "invocation_source" not in query_result
+    if invocation:
+        assert query_result["source"] == "ALIAS(alias, implementation)"
+        assert query_result["start_line"] == query_result["end_line"] == 1
+    else:
+        assert "source" not in query_result
+        assert "start_line" not in query_result
+        assert "end_line" not in query_result
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_message"),
+    [
+        ("incomplete_identity", "invalid observed alias target identity"),
+        ("facts_on_definition", "alias target and linkage facts require alias role"),
+        ("unknown_field", "unsupported compiler-observed provenance fields or version"),
+    ],
+)
+def test_compiler_observed_v3_alias_rejects_malformed_contract(
+    mutation: str,
+    expected_message: str,
+) -> None:
+    """Reject malformed v3 fields without relaxing the v1/v2 contracts.
+
+    Parameters
+    ----------
+    mutation : str
+        Invalid payload mutation to apply.
+    expected_message : str
+        Stable validator diagnostic expected for the malformed field.
+
+    Returns
+    -------
+    None
+        Malformed alias evidence is rejected at the shared validation boundary.
+    """
+    payload = asdict(
+        _alias_provenance(
+            b"ALIAS(alias, implementation);\n",
+            SemanticIdentity("opaque.test.v1", "callable:implementation"),
+        )
+    )
+    if mutation == "incomplete_identity":
+        payload["alias_target_identity"] = {"namespace": "opaque.test.v1"}
+    elif mutation == "facts_on_definition":
+        payload["role"] = "definition"
+    else:
+        payload["unknown"] = True
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    with pytest.raises(ValueError, match=expected_message):
+        generated_provenance_payload(serialized)
+
+
+def test_cli_and_mcp_render_alias_evidence_without_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Render an unresolved alias response when the source fields are omitted.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Existing root used for the MCP adapter envelope.
+    monkeypatch : pytest.MonkeyPatch
+        Replace the query boundary with an alias result lacking source fields.
+    capsys : pytest.CaptureFixture[str]
+        Capture the public CLI JSON response.
+
+    Returns
+    -------
+    None
+        CLI and MCP consumers accept the documented optional source and range.
+    """
+    import codira.cli_queries as cli_queries
+    import codira.mcp.adapter as mcp_adapter_module
+    import codira.query.evidence as evidence_module
+    from codira.mcp.adapter import MCPAdapter
+
+    result: dict[str, object] = {
+        "identity": "sym:alias",
+        "file": "src/main.c",
+        "source_kind": "compiler_generated",
+        "compiler_observed_alias": {
+            "target_identity": None,
+            "linkage_name": "f",
+        },
+    }
+    assert "source" not in result
+    assert "start_line" not in result
+    assert "end_line" not in result
+    monkeypatch.setattr(
+        evidence_module, "expand_symbol", lambda *args, **kwargs: result
+    )
+    monkeypatch.setattr(cli_queries, "_ensure_index", lambda root: None)
+    monkeypatch.setattr(
+        cli_queries, "_emit_json", lambda value: print(json.dumps(value))
+    )
+    cli_arguments = Namespace(identity="sym:alias", limit=10)
+    assert cli_queries._run_evidence_command(cli_arguments, tmp_path) == 0
+    cli_result = json.loads(capsys.readouterr().out)
+    assert cli_result == result
+
+    monkeypatch.setattr(
+        mcp_adapter_module, "expand_symbol", lambda *args, **kwargs: result
+    )
+    mcp_response = MCPAdapter(tmp_path).symbol_evidence("sym:alias")
+    assert mcp_response["result"] == result
+    json.dumps(mcp_response)
 
 
 def test_query_evidence_checks_observed_invocation_bytes_when_available(

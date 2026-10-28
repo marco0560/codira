@@ -1,6 +1,9 @@
 {
     "oracle_version": 1,
     "source_authored_oracle": true,
+    "scope_notes": [
+        "Anonymous-namespace linkage is qualified by the supplemental native-USR join; callable is_public is visibility and is not a linkage observation."
+    ],
     "cases": {
         "parity_c.c": {
             "language": "c",
@@ -105,6 +108,22 @@
                         "generated_spelling_line": 31,
                         "invocation_line": 32,
                         "generated_invocation_span": [704, 745]
+                    }
+                ],
+                "generated_declarations": [
+                    {
+                        "role": "definition",
+                        "name": "c_generated_from_macro",
+                        "line": 32,
+                        "source": "parity_c.c",
+                        "source_evidence": {
+                            "macro": "PARITY_C_GENERATE",
+                            "macro_definition_line": 31,
+                            "macro_expression": "int name(void) { return 41; }",
+                            "invocation_line": 32,
+                            "invocation_span": [704, 745],
+                            "argument": "c_generated_from_macro"
+                        }
                     }
                 ]
             }
@@ -290,6 +309,22 @@
                         "generated_spelling_line": 53,
                         "invocation_line": 54,
                         "generated_invocation_span": [941, 982]
+                    }
+                ],
+                "generated_declarations": [
+                    {
+                        "role": "definition",
+                        "name": "parity::generated_from_macro",
+                        "line": 54,
+                        "source": "parity_cpp.cpp",
+                        "source_evidence": {
+                            "macro": "PARITY_CPP_GENERATE",
+                            "macro_definition_line": 53,
+                            "macro_expression": "int name() { return 42; }",
+                            "invocation_line": 54,
+                            "invocation_span": [941, 982],
+                            "argument": "generated_from_macro"
+                        }
                     }
                 ]
             }
@@ -487,6 +522,165 @@
                     "target_identity_must_differ_from": "internal_a.cpp:header_local"
                 }
             ]
+        },
+        "generated_alias.cpp": {
+            "language": "cpp",
+            "callables": [
+                {
+                    "kind": "function",
+                    "name": "alias_case::impl_f",
+                    "return_type": "double",
+                    "parameter_types": ["double"],
+                    "returns_value": true,
+                    "definition_line": 11
+                },
+                {
+                    "kind": "function",
+                    "name": "alias_case::f",
+                    "return_type": "double",
+                    "parameter_types": ["double"],
+                    "returns_value": false,
+                    "definition_line": 11
+                }
+            ],
+            "calls": [],
+            "generated_declarations": [
+                    {
+                        "role": "prototype",
+                        "name": "alias_case::impl_f",
+                        "line": 11,
+                        "linkage_name": "f",
+                        "has_body": false,
+                        "explicit_linkage_label": "f",
+                        "linkage_label_inherited": false,
+                        "compiler_identity_reference": "generated_alias::implementation prototype compiler identity",
+                        "source": "generated_alias.cpp",
+                        "source_evidence": {
+                            "macro": "WRAP",
+                            "macro_definition_line": 6,
+                            "macro_expression": "asm(#N)",
+                            "invocation_line": 11,
+                            "invocation_span": [215, 246],
+                            "argument": "f"
+                        }
+                    },
+                    {
+                        "role": "definition",
+                        "name": "alias_case::impl_f",
+                        "line": 11,
+                        "linkage_name": "f",
+                        "has_body": true,
+                        "explicit_linkage_label": "f",
+                        "linkage_label_inherited": true,
+                        "identity_reference": "generated_alias::implementation semantic identity",
+                        "compiler_identity_reference": "generated_alias::implementation definition compiler identity",
+                        "source": "generated_alias.cpp",
+                        "source_evidence": {
+                            "macro": "WRAP",
+                            "macro_definition_line": 6,
+                            "macro_expression": "asm(#N)",
+                            "invocation_line": 11,
+                            "invocation_span": [215, 246],
+                            "argument": "f"
+                        }
+                    },
+                    {
+                        "role": "alias",
+                        "name": "alias_case::f",
+                        "line": 11,
+                        "has_body": false,
+                        "alias_target_symbol": "f",
+                        "alias_binding_status": "resolved",
+                        "alias_target_identity_reference": "generated_alias::alias target",
+                        "source": "generated_alias.cpp",
+                        "source_evidence": {
+                            "macro": "WRAP",
+                            "macro_definition_line": 7,
+                            "macro_expression": "[[gnu::alias(#N)]]",
+                            "invocation_line": 11,
+                            "invocation_span": [215, 246],
+                            "argument": "f"
+                        }
+                    }
+                ]
+        },
+        "anonymous_a.cpp": {
+            "language": "cpp",
+            "callables": [
+                {"kind": "function", "name": "(anonymous namespace)::local_target", "return_type": "int", "parameter_types": ["int"], "definition_line": 2},
+                {"kind": "function", "name": "call_local_a", "return_type": "int", "parameter_types": ["int"], "linkage": "external", "definition_line": 5}
+            ],
+            "calls": [
+                {"caller": "call_local_a", "target": "(anonymous namespace)::local_target", "definition_line": 2, "resolution": "same_translation_unit_definition", "line": 5, "column": 37}
+            ]
+        },
+        "anonymous_b.cpp": {
+            "language": "cpp",
+            "callables": [
+                {"kind": "function", "name": "(anonymous namespace)::local_target", "return_type": "int", "parameter_types": ["int"], "definition_line": 2},
+                {"kind": "function", "name": "call_local_b", "return_type": "int", "parameter_types": ["int"], "linkage": "external", "definition_line": 5}
+            ],
+            "calls": [
+                {"caller": "call_local_b", "target": "(anonymous namespace)::local_target", "definition_line": 2, "resolution": "same_translation_unit_definition", "line": 5, "column": 37}
+            ]
+        },
+        "same-name-a/foo.cpp": {
+            "language": "cpp",
+            "types": [
+                {
+                    "kind": "class",
+                    "name": "(anonymous namespace)::HiddenType",
+                    "line": 1
+                }
+            ],
+            "callables": [
+                {
+                    "kind": "function",
+                    "name": "unique_external_collision",
+                    "return_type": "void",
+                    "parameter_types": ["HiddenType"],
+                    "returns_value": false,
+                    "definition_line": 2
+                },
+                {
+                    "kind": "function",
+                    "name": "external_shared",
+                    "return_type": "int",
+                    "parameter_types": [],
+                    "returns_value": true,
+                    "definition_line": 3
+                }
+            ],
+            "calls": []
+        },
+        "same-name-b/foo.cpp": {
+            "language": "cpp",
+            "types": [
+                {
+                    "kind": "class",
+                    "name": "(anonymous namespace)::HiddenType",
+                    "line": 1
+                }
+            ],
+            "callables": [
+                {
+                    "kind": "function",
+                    "name": "unique_external_collision",
+                    "return_type": "void",
+                    "parameter_types": ["HiddenType"],
+                    "returns_value": false,
+                    "definition_line": 2
+                },
+                {
+                    "kind": "function",
+                    "name": "external_shared",
+                    "return_type": "int",
+                    "parameter_types": [],
+                    "returns_value": true,
+                    "definition_line": 3
+                }
+            ],
+            "calls": []
         }
     },
     "header_context_requests": [
@@ -546,6 +740,46 @@
                 "shared_internal.hpp:header_local@internal_b.cpp"
             ],
             "reason": "internal header declarations have translation-unit-local identity"
+        },
+
+        {
+            "equal": [
+                "generated_alias::implementation prototype compiler identity",
+                "generated_alias::implementation definition compiler identity"
+            ],
+            "reason": "the generated prototype and definition preserve equal native Clang USRs"
+        },
+        {
+            "equal": [
+                "generated_alias::alias target",
+                "generated_alias::implementation semantic identity"
+            ],
+            "reason": "the compiler-resolved alias target identity equals the persisted implementation identity"
+        },
+        {
+            "equal": [
+                "generated_alias::implementation definition compiler identity",
+                "generated_alias::implementation semantic identity"
+            ],
+            "reason": "the definition native USR matches its persisted semantic identity"
+        },
+        {
+            "distinct": ["anonymous_a.cpp:local_target", "anonymous_b.cpp:local_target"],
+            "reason": "same-spelled anonymous-namespace callables are translation-unit local"
+        },
+        {
+            "distinct": [
+                "same-name-a/foo.cpp:unique_external_collision",
+                "same-name-b/foo.cpp:unique_external_collision"
+            ],
+            "reason": "UniqueExternal identity includes the full main translation-unit path"
+        },
+        {
+            "equal": [
+                "same-name-a/foo.cpp:external_shared",
+                "same-name-b/foo.cpp:external_shared"
+            ],
+            "reason": "ordinary external linkage remains cross-translation-unit stable"
         }
     ],
     "identity_observation_requests": [
@@ -612,6 +846,73 @@
             "line": 4,
             "column": 11,
             "identity_field": "target_identity_value"
+        },
+
+        {
+            "reference": "anonymous_a.cpp:local_target",
+            "kind": "callable",
+            "source": "anonymous_a.cpp",
+            "name": "(anonymous namespace)::local_target",
+            "definition_line": 2,
+            "identity_field": "semantic_identity_value"
+        },
+        {
+            "reference": "anonymous_b.cpp:local_target",
+            "kind": "callable",
+            "source": "anonymous_b.cpp",
+            "name": "(anonymous namespace)::local_target",
+            "definition_line": 2,
+            "identity_field": "semantic_identity_value"
+        },
+        {
+            "reference": "same-name-a/foo.cpp:unique_external_collision",
+            "kind": "callable",
+            "source": "same-name-a/foo.cpp",
+            "name": "unique_external_collision",
+            "definition_line": 2,
+            "identity_field": "semantic_identity_value"
+        },
+        {
+            "reference": "same-name-b/foo.cpp:unique_external_collision",
+            "kind": "callable",
+            "source": "same-name-b/foo.cpp",
+            "name": "unique_external_collision",
+            "definition_line": 2,
+            "identity_field": "semantic_identity_value"
+        },
+        {
+            "reference": "same-name-a/foo.cpp:external_shared",
+            "kind": "callable",
+            "source": "same-name-a/foo.cpp",
+            "name": "external_shared",
+            "definition_line": 3,
+            "identity_field": "semantic_identity_value"
+        },
+        {
+            "reference": "same-name-b/foo.cpp:external_shared",
+            "kind": "callable",
+            "source": "same-name-b/foo.cpp",
+            "name": "external_shared",
+            "definition_line": 3,
+            "identity_field": "semantic_identity_value"
+        }
+    ],
+    "native_linkage_requests": [
+        {
+            "reference": "anonymous_a.cpp:local_target",
+            "source": "anonymous_a.cpp",
+            "name": "(anonymous namespace)::local_target",
+            "definition_line": 2,
+            "linkage_kind": "internal",
+            "identity_observation_reference": "anonymous_a.cpp:local_target"
+        },
+        {
+            "reference": "anonymous_b.cpp:local_target",
+            "source": "anonymous_b.cpp",
+            "name": "(anonymous namespace)::local_target",
+            "definition_line": 2,
+            "linkage_kind": "internal",
+            "identity_observation_reference": "anonymous_b.cpp:local_target"
         }
     ]
 }

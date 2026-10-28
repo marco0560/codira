@@ -73,6 +73,7 @@ FACT_CATEGORIES = (
     "calls",
     "external_owners",
     "forbidden_artifacts",
+    "generated_declarations",
 )
 
 
@@ -158,6 +159,8 @@ class DatabaseSnapshotRows:
         Class rows with physical file identity added.
     functions : list[dict[str, Any]]
         Persisted function and method rows.
+    overloads : list[dict[str, Any]]
+        Persisted overload declarations attached to canonical callable rows.
     imports : list[dict[str, Any]]
         Persisted import and include rows.
     enum_members : list[dict[str, Any]]
@@ -183,6 +186,7 @@ class DatabaseSnapshotRows:
     modules: dict[int, dict[str, Any]]
     classes: list[dict[str, Any]]
     functions: list[dict[str, Any]]
+    overloads: list[dict[str, Any]]
     imports: list[dict[str, Any]]
     enum_members: list[dict[str, Any]]
     documentation: list[dict[str, Any]]
@@ -217,6 +221,39 @@ class ProjectedSnapshotRows:
     enum_members: dict[int, list[dict[str, JSONValue]]]
     documentation: dict[int, list[dict[str, JSONValue]]]
     calls: dict[int, list[dict[str, JSONValue]]]
+
+
+@dataclass(frozen=True)
+class GeneratedDeclarationInput:
+    """Database-owned row coordinates for one generated declaration.
+
+    Parameters
+    ----------
+    stable_id : str
+        Artifact identity used to load its persisted compiler evidence.
+    name : str
+        Persisted source-qualified declaration name.
+    line : int
+        Source line stored for the declaration.
+    source : str
+        Repository-relative physical source path.
+    file_id : int
+        Persisted source file ID used to bind receipt digests and context.
+    symbol : dict[str, Any] or None
+        Matching callable symbol row, when one exists.
+
+    Returns
+    -------
+    None
+        Immutable projection input used by the snapshot exporter.
+    """
+
+    stable_id: str
+    name: str
+    line: int
+    source: str
+    file_id: int
+    symbol: dict[str, Any] | None
 
 
 def _object(value: JSONValue, context: str) -> dict[str, JSONValue]:
@@ -334,6 +371,10 @@ def load_oracle(path: Path, fixture_root: Path) -> OracleDocument:
                     _validate_generated_invocation(
                         row, source, source_path, source_bytes, len(source_lines)
                     )
+                if category == "generated_declarations":
+                    _validate_generated_declaration_source(
+                        row, source, source_path, source_bytes, len(source_lines)
+                    )
                 rows.append(row)
             facts[category] = tuple(rows)
         nested_enum_members = _nested_enum_members(facts["declarations"], source)
@@ -423,9 +464,172 @@ def _parse_pending_facts(
                 _validate_generated_invocation(
                     row, source, source_path, source_bytes, line_count
                 )
+            if category == "generated_declarations":
+                _validate_generated_declaration_source(
+                    row, source, source_path, source_bytes, line_count
+                )
             pending_rows.append(row)
         pending_facts[category] = tuple(pending_rows)
     return pending_facts
+
+
+def _validate_generated_declaration_source(
+    row: dict[str, JSONValue],
+    source: str,
+    path: Path,
+    source_bytes: bytes,
+    line_count: int,
+) -> None:
+    """Bind alias and implementation expectations to their macro spelling.
+
+    Parameters
+    ----------
+    row : dict[str, JSONValue]
+        Source-authored generated declaration expectation.
+    source : str
+        Oracle-relative source path.
+    path : pathlib.Path
+        Physical source fixture path.
+    source_bytes : bytes
+        Exact UTF-8 bytes read from the source fixture.
+    line_count : int
+        Number of physical source lines.
+
+    Returns
+    -------
+    None
+        Source evidence is validated in place without adding inferred facts.
+
+    Raises
+    ------
+    ValueError
+        If a macro invocation, expansion expression, or source argument differs.
+    """
+    evidence = _object(row.get("source_evidence"), f"{source}.source_evidence")
+    macro = _string(evidence.get("macro"), f"{source}.source_evidence.macro")
+    invocation_line = evidence.get("invocation_line")
+    definition_line = evidence.get("macro_definition_line")
+    argument = _string(evidence.get("argument"), f"{source}.source_evidence.argument")
+    expression = _string(
+        evidence.get("macro_expression"), f"{source}.source_evidence.macro_expression"
+    )
+    span = evidence.get("invocation_span")
+    if (
+        not isinstance(invocation_line, int)
+        or isinstance(invocation_line, bool)
+        or not 1 <= invocation_line <= line_count
+        or not isinstance(definition_line, int)
+        or isinstance(definition_line, bool)
+        or not 1 <= definition_line <= line_count
+    ):
+        _raise_format_error(source, "generated declaration lines are outside source")
+    if row.get("line") != invocation_line:
+        _raise_format_error(
+            source, "generated declaration line must name its invocation"
+        )
+    if (
+        not isinstance(span, list)
+        or len(span) != 2
+        or any(not isinstance(item, int) or isinstance(item, bool) for item in span)
+        or span != list(_source_macro_invocation_span(path, macro, invocation_line))
+    ):
+        _raise_format_error(
+            source, "generated declaration invocation span differs from source"
+        )
+    expected = cast("list[int]", span)
+    invocation = source_bytes[expected[0] : expected[1]].decode("utf-8")
+    macro_definition = path.read_text(encoding="utf-8").splitlines()[
+        definition_line - 1
+    ]
+    if expression not in macro_definition:
+        _raise_format_error(
+            source, "generated declaration expression differs from source"
+        )
+    arguments = _macro_invocation_arguments(invocation, macro)
+    argument_index = (
+        1
+        if len(arguments) > 1
+        and expression
+        in {
+            "asm(#N)",
+            "[[gnu::alias(#N)]]",
+        }
+        else 0
+    )
+    if len(arguments) <= argument_index or arguments[argument_index] != argument:
+        _raise_format_error(
+            source, "generated declaration argument differs from source"
+        )
+    role = _string(row.get("role"), f"{source}.generated declaration role")
+    name = _string(row.get("name"), f"{source}.generated declaration name")
+    expected_suffix = (
+        f"impl_{argument}"
+        if expression == "asm(#N)" and role in {"prototype", "definition"}
+        else argument
+    )
+    if name.rsplit("::", 1)[-1] != expected_suffix:
+        _raise_format_error(
+            source, "generated declaration name differs from its macro argument"
+        )
+    if (
+        expression == "asm(#N)"
+        and row.get("linkage_name") is not None
+        and row.get("linkage_name") != argument
+    ):
+        _raise_format_error(
+            source, "linkage label is not the stringified macro argument"
+        )
+    if (
+        expression == "[[gnu::alias(#N)]]"
+        and row.get("alias_target_symbol") != argument
+    ):
+        _raise_format_error(
+            source, "alias target operand is not the stringified macro argument"
+        )
+
+
+def _macro_invocation_arguments(invocation: str, macro: str) -> list[str]:
+    """Split the authored macro arguments while respecting nested parentheses.
+
+    Parameters
+    ----------
+    invocation : str
+        Exact physical invocation text.
+    macro : str
+        Expected macro name at the start of the invocation.
+
+    Returns
+    -------
+    list[str]
+        Macro arguments in authored order, retaining nested type expressions.
+
+    Raises
+    ------
+    ValueError
+        If the invocation has no balanced argument list.
+    """
+    start = invocation.find(macro)
+    opening = invocation.find("(", start + len(macro))
+    if start < 0 or opening < 0 or not invocation.rstrip().endswith(")"):
+        _raise_format_error(macro, "source macro invocation is malformed")
+    depth = 0
+    arguments: list[str] = []
+    argument_start = opening + 1
+    for index in range(opening + 1, len(invocation)):
+        character = invocation[index]
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            if depth == 0:
+                arguments.append(invocation[argument_start:index].strip())
+                if invocation[index + 1 :].strip():
+                    _raise_format_error(macro, "text follows source macro invocation")
+                return arguments
+            depth -= 1
+        elif character == "," and depth == 0:
+            arguments.append(invocation[argument_start:index].strip())
+            argument_start = index + 1
+    _raise_format_error(macro, "source macro invocation is unbalanced")
 
 
 def _nested_enum_members(
@@ -691,6 +895,10 @@ def _matches(
             "generated_invocation_span",
             "generated_spelling_line",
             "generated_invocation_text",
+            "source_evidence",
+            "identity_reference",
+            "compiler_identity_reference",
+            "alias_target_identity_reference",
         }:
             continue
         persisted_key = key
@@ -866,8 +1074,105 @@ def grade_snapshot(
         _raise_format_error("snapshot backend", "must be sqlite or duckdb")
     raw_cases = _object(snapshot.get("cases"), "snapshot.cases")
     failures = _grade_cases(oracle, raw_cases)
-    failures.extend(_grade_global_metadata(oracle, snapshot))
+    identity_observations = _generated_declaration_identity_observations(
+        oracle, raw_cases
+    )
+    recorded_observations = _object(
+        snapshot.get("identity_observations", {}), "snapshot.identity_observations"
+    )
+    merged_snapshot = dict(snapshot)
+    merged_snapshot["identity_observations"] = {
+        **recorded_observations,
+        **identity_observations,
+    }
+    failures.extend(_grade_global_metadata(oracle, merged_snapshot))
     return tuple(failures)
+
+
+def _generated_declaration_identity_observations(
+    oracle: OracleDocument, raw_cases: dict[str, JSONValue]
+) -> dict[str, JSONValue]:
+    """Read source-requested declaration and alias-target identities.
+
+    Parameters
+    ----------
+    oracle : OracleDocument
+        Authored declaration roles and identity references.
+    raw_cases : dict[str, JSONValue]
+        Per-source persisted snapshot rows.
+
+    Returns
+    -------
+    dict[str, JSONValue]
+        Compiler identities keyed by source-authored references. Missing rows
+        are omitted so the invariant grader reports them as missing evidence.
+    """
+    observations: dict[str, JSONValue] = {}
+    for source, expected_case in oracle.cases.items():
+        case_value = raw_cases.get(source, {})
+        case = _object(case_value, f"snapshot case {source}")
+        declaration_values = case.get("generated_declarations", [])
+        declarations = [
+            _object(value, f"snapshot {source}.generated_declarations[{index}]")
+            for index, value in enumerate(
+                _array(declaration_values, f"snapshot {source}.generated_declarations")
+            )
+        ]
+        expected_rows = (
+            *expected_case.facts.get("generated_declarations", ()),
+            *expected_case.pending_facts.get("generated_declarations", ()),
+        )
+        for expected in expected_rows:
+            match = [
+                observed
+                for observed in declarations
+                if _matches(expected, observed, "generated_declarations")
+            ]
+            if len(match) != 1:
+                continue
+            observed = match[0]
+            identity_reference = expected.get("identity_reference")
+            identity = _semantic_identity_value(observed.get("semantic_identity"))
+            if isinstance(identity_reference, str) and identity is not None:
+                observations[identity_reference] = identity
+            compiler_reference = expected.get("compiler_identity_reference")
+            compiler_identity = _semantic_identity_value(
+                observed.get("compiler_identity")
+            )
+            if isinstance(compiler_reference, str) and compiler_identity is not None:
+                observations[compiler_reference] = compiler_identity
+            target_reference = expected.get("alias_target_identity_reference")
+            target_identity = _semantic_identity_value(
+                observed.get("alias_target_identity")
+            )
+            if isinstance(target_reference, str) and target_identity is not None:
+                observations[target_reference] = target_identity
+    return observations
+
+
+def _semantic_identity_value(value: JSONValue) -> str | None:
+    """Encode one semantic identity tuple without normalizing either field.
+
+    Parameters
+    ----------
+    value : JSONValue
+        Namespace/value object projected from compiler evidence.
+
+    Returns
+    -------
+    str or None
+        Collision-safe identity serialization, or None when no exact identity
+        was retained.
+    """
+    if not isinstance(value, dict):
+        return None
+    namespace = value.get("namespace")
+    identity = value.get("value")
+    if not isinstance(namespace, str) or not namespace:
+        return None
+    if not isinstance(identity, str) or not identity:
+        return None
+    return json.dumps([namespace, identity], ensure_ascii=False, separators=(",", ":"))
 
 
 def _grade_cases(
@@ -962,12 +1267,19 @@ def _grade_cases(
                             source,
                             f"pending:{category}",
                             expected,
-                            "required next-phase assertion is not yet represented",
+                            "source-authored assertion remains ungraded in this oracle",
                         )
                     )
                 else:
                     available.pop(match_index)
-            if category in {"callables", "calls", "enum_members", "fields", "types"}:
+            if category in {
+                "callables",
+                "calls",
+                "enum_members",
+                "fields",
+                "types",
+                "generated_declarations",
+            }:
                 for unexpected in available:
                     failures.append(
                         GradeFailure(
@@ -1016,7 +1328,7 @@ def _grade_global_metadata(
                 "<headers>",
                 "pending:header_projection",
                 expected,
-                "captured owner-TU context is known; requested header projection is not indexed",
+                "captured owner-TU context is known; header projection is not assessed by this oracle",
             )
         )
     for unexpected in header_rows:
@@ -1282,7 +1594,11 @@ def export_database_snapshot(
         _raise_format_error("database backend", "must be sqlite or duckdb")
     try:
         return _snapshot_from_connection(
-            connection, backend, repository_root.resolve(), oracle, profile_document
+            connection,
+            backend,
+            repository_root.resolve(),
+            oracle,
+            profile_document,
         )
     finally:
         connection.close()
@@ -1408,6 +1724,7 @@ def _load_database_snapshot_rows(
         modules=modules,
         classes=classes,
         functions=_query_rows(connection, "SELECT * FROM functions"),
+        overloads=_query_rows(connection, "SELECT * FROM overloads"),
         imports=_query_rows(connection, "SELECT * FROM imports"),
         enum_members=_query_rows(connection, "SELECT * FROM enum_members"),
         documentation=_query_rows(connection, "SELECT * FROM documentation_artifacts"),
@@ -1421,7 +1738,7 @@ def _callable_snapshot_rows(
     rows: DatabaseSnapshotRows,
     repository_root: Path,
 ) -> dict[tuple[int, int, str], dict[str, JSONValue]]:
-    """Project persisted function and method rows with definition symbols.
+    """Project persisted definitions and proven V3 aliases.
 
     Parameters
     ----------
@@ -1433,12 +1750,10 @@ def _callable_snapshot_rows(
     Returns
     -------
     dict[tuple[int, int, str], dict[str, JSONValue]]
-        Callable facts keyed by source file, definition line, and local name.
+        Callable facts keyed by source file, declaration line, and local name.
     """
     callables: dict[tuple[int, int, str], dict[str, JSONValue]] = {}
     for row in rows.functions:
-        if row.get("end_lineno") is None:
-            continue
         module = rows.modules[int(row["module_id"])]
         file_id = int(module["file_id"])
         class_id = row.get("class_id")
@@ -1484,13 +1799,28 @@ def _callable_snapshot_rows(
             ),
             None,
         )
+        stable_id = symbol.get("stable_id") if symbol is not None else None
+        provenance = (
+            rows.provenance_by_stable_id.get(str(stable_id))
+            if isinstance(stable_id, str)
+            else None
+        )
+        is_v3_alias = (
+            provenance is not None
+            and provenance.get("variant") == "compiler_observed"
+            and provenance.get("format_version") == 3
+            and provenance.get("role") == "alias"
+        )
+        if row.get("end_lineno") is None and not is_v3_alias:
+            continue
         callables[(file_id, int(row["lineno"]), name)] = {
             "kind": "method" if row.get("is_method") else "function",
             "name": qualified_name,
             "return_type": return_type,
             "parameter_types": cast("JSONValue", parameter_types),
             "qualifiers": cast("JSONValue", qualifiers),
-            "returns_value": return_type != "void",
+            "returns_value": row.get("end_lineno") is not None
+            and return_type != "void",
             "definition_line": int(row["lineno"]),
             "stable_id": symbol.get("stable_id") if symbol else None,
             "owner_name": owner_name,
@@ -1996,8 +2326,281 @@ def _case_snapshot_rows(
             ),
             "forbidden_artifacts": [],
             "coverage": [],
+            "generated_declarations": cast(
+                "JSONValue", _generated_declaration_rows(rows, file_id, source)
+            ),
         }
     return cases
+
+
+def _generated_declaration_rows(
+    rows: DatabaseSnapshotRows, file_id: int, source: str
+) -> list[dict[str, JSONValue]]:
+    """Project V3 callable provenance for definitions, aliases, and prototypes.
+
+    Parameters
+    ----------
+    rows : DatabaseSnapshotRows
+        Validated persisted database tables and compiler-provenance payloads.
+    file_id : int
+        Persisted file ID whose generated declarations are requested.
+    source : str
+        Repository-relative path for the owning physical translation unit.
+
+    Returns
+    -------
+    list[dict[str, JSONValue]]
+        Compiler-observed generated declarations grouped under the source that
+        owns each function or overload row.
+    """
+    function_by_stable_id: dict[str, dict[str, Any]] = {}
+    declarations: list[dict[str, JSONValue]] = []
+    for function in rows.functions:
+        module = rows.modules.get(int(function["module_id"]))
+        if module is None or int(module["file_id"]) != file_id:
+            continue
+        symbol = next(
+            (
+                item
+                for item in rows.symbols_by_file.get(file_id, [])
+                if item.get("lineno") == function.get("lineno")
+                and item.get("type") in {"function", "method"}
+                and (
+                    item.get("name") == function.get("name")
+                    or str(item.get("name", "")).endswith(f"::{function.get('name')}")
+                )
+            ),
+            None,
+        )
+        stable_id = str(symbol.get("stable_id") or "") if symbol else ""
+        if stable_id:
+            function_by_stable_id[stable_id] = function
+        declaration = _generated_declaration_row(
+            rows,
+            GeneratedDeclarationInput(
+                stable_id,
+                str(function.get("name") or ""),
+                int(function["lineno"]),
+                source,
+                file_id,
+                symbol,
+            ),
+        )
+        if declaration is not None:
+            declarations.append(declaration)
+    for overload in rows.overloads:
+        parent_id = str(overload.get("parent_stable_id") or "")
+        parent = function_by_stable_id.get(parent_id)
+        if parent is None:
+            continue
+        stable_id = str(overload.get("stable_id") or "")
+        declaration = _generated_declaration_row(
+            rows,
+            GeneratedDeclarationInput(
+                stable_id,
+                str(parent.get("name") or ""),
+                int(overload["lineno"]),
+                source,
+                file_id,
+                rows.symbols_by_id.get(parent_id),
+            ),
+        )
+        if declaration is not None:
+            declarations.append(declaration)
+    return sorted(
+        declarations,
+        key=_generated_declaration_sort_key,
+    )
+
+
+def _generated_declaration_row(
+    rows: DatabaseSnapshotRows,
+    declaration: GeneratedDeclarationInput,
+) -> dict[str, JSONValue] | None:
+    """Project one validated V2 definition or V3 callable observation.
+
+    Parameters
+    ----------
+    rows : DatabaseSnapshotRows
+        Persisted database tables and provenance.
+    declaration : GeneratedDeclarationInput
+        Exact persisted identity and source coordinates for the artifact.
+    Returns
+    -------
+    dict[str, JSONValue] or None
+        Canonical compiler declaration projection, or None for unrelated
+        provenance versions and roles.
+    """
+    provenance = rows.provenance_by_stable_id.get(declaration.stable_id)
+    if provenance is None or provenance.get("variant") != "compiler_observed":
+        return None
+    version = provenance.get("format_version")
+    role = provenance.get("role")
+    if version == 2 and role != "definition":
+        return None
+    if version == 3 and role not in {"definition", "prototype", "alias"}:
+        return None
+    if version not in {2, 3}:
+        return None
+    receipt_value = provenance.get("receipt_json")
+    if not isinstance(receipt_value, str):
+        _raise_format_error(
+            declaration.stable_id, "compiler provenance receipt must be text"
+        )
+    try:
+        receipt = _object(
+            cast("JSONValue", json.loads(receipt_value)), "compiler receipt"
+        )
+    except json.JSONDecodeError as error:
+        raise OracleFormatError(
+            declaration.stable_id, "compiler receipt is invalid JSON"
+        ) from error
+    callable_value = _object(receipt.get("callable"), "V3 receipt.callable")
+    if declaration.symbol is None:
+        _raise_format_error(
+            declaration.stable_id,
+            "generated callable evidence has no persisted symbol identity",
+        )
+    _validate_compiler_receipt_identity(receipt, provenance, declaration.symbol)
+    expected_source_sha = rows.file_hashes.get(declaration.file_id)
+    expected_context = rows.analysis_input_fingerprints.get(declaration.file_id)
+    if (
+        provenance.get("source_sha256") != expected_source_sha
+        or provenance.get("context_identity") != expected_context
+    ):
+        _raise_format_error(
+            declaration.stable_id,
+            "compiler evidence source digest or context differs from indexed file",
+        )
+    native_raw = callable_value.get("native_observation")
+    if native_raw is None and version == 2:
+        native_value: dict[str, JSONValue] = {}
+    else:
+        native_value = _object(
+            native_raw,
+            "compiler receipt.callable.native_observation",
+        )
+    usr = _string(callable_value.get("usr"), "compiler receipt.callable.usr")
+    is_definition = callable_value.get("is_definition")
+    if role in {"definition", "prototype"} and is_definition is not (
+        role == "definition"
+    ):
+        _raise_format_error(
+            declaration.stable_id,
+            "compiler receipt callable role differs from persisted provenance role",
+        )
+    if version == 3:
+        _validate_v3_alias_identity(provenance, native_value, declaration.stable_id)
+    semantic_identity: dict[str, JSONValue] | None = None
+    compiler_identity: dict[str, JSONValue] | None = None
+    if role != "prototype":
+        namespace = declaration.symbol.get("semantic_identity_namespace")
+        value = declaration.symbol.get("semantic_identity_value")
+        if isinstance(namespace, str) and isinstance(value, str):
+            semantic_identity = {"namespace": namespace, "value": value}
+    namespace = declaration.symbol.get("semantic_identity_namespace")
+    if isinstance(namespace, str):
+        compiler_identity = {"namespace": namespace, "value": usr}
+    alias_target_value = provenance.get("alias_target_identity")
+    alias_target: JSONValue = (
+        cast("JSONValue", alias_target_value)
+        if isinstance(alias_target_value, dict)
+        else None
+    )
+    qualified_name = callable_value.get("qualified_name")
+    name = qualified_name if isinstance(qualified_name, str) else declaration.name
+    return {
+        "source": declaration.source,
+        "name": name,
+        "line": declaration.line,
+        "role": cast("JSONValue", role),
+        "semantic_identity": cast("JSONValue", semantic_identity),
+        "compiler_identity": cast("JSONValue", compiler_identity),
+        "linkage_name": native_value.get("linker_symbol"),
+        "has_body": native_value.get("has_body"),
+        "linker_symbol": native_value.get("linker_symbol"),
+        "explicit_linkage_label": native_value.get("explicit_linkage_label"),
+        "linkage_label_inherited": native_value.get("linkage_label_inherited"),
+        "alias_target_symbol": native_value.get("alias_target_symbol"),
+        "alias_target_identity": alias_target,
+        "alias_binding_status": native_value.get("alias_binding_status"),
+    }
+
+
+def _validate_v3_alias_identity(
+    provenance: dict[str, object],
+    native_observation: dict[str, JSONValue],
+    stable_id: str,
+) -> None:
+    """Bind persisted V3 alias identity to the raw compiler target USR.
+
+    Parameters
+    ----------
+    provenance : dict[str, object]
+        Core-validated compiler provenance payload.
+    native_observation : dict[str, JSONValue]
+        Opaque producer receipt's native callable facts.
+    stable_id : str
+        Persisted artifact identity used in validation errors.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    OracleFormatError
+        If alias target identity and raw compiler target evidence disagree.
+    """
+    status = native_observation.get("alias_binding_status")
+    target_usr = native_observation.get("alias_target_usr")
+    target_identity = provenance.get("alias_target_identity")
+    if status == "resolved":
+        if not isinstance(target_usr, str) or not target_usr:
+            _raise_format_error(
+                stable_id, "resolved alias receipt lacks its target USR"
+            )
+        expected_identity = {"namespace": "clang.usr.v1", "value": target_usr}
+        if target_identity != expected_identity:
+            _raise_format_error(
+                stable_id,
+                "persisted alias identity differs from the raw compiler target USR",
+            )
+        return
+    if status in {"unresolved", "ambiguous", "not_alias"}:
+        if target_usr is not None or target_identity is not None:
+            _raise_format_error(
+                stable_id,
+                "unresolved or non-alias compiler observation retains a target identity",
+            )
+        return
+    if provenance.get("role") == "alias":
+        _raise_format_error(
+            stable_id, "alias observation has an unknown binding status"
+        )
+
+
+def _generated_declaration_sort_key(
+    row: dict[str, JSONValue],
+) -> tuple[int, str, str]:
+    """Order compiler declarations by persisted location, role, and name.
+
+    Parameters
+    ----------
+    row : dict[str, JSONValue]
+        One normalized compiler declaration snapshot row.
+
+    Returns
+    -------
+    tuple[int, str, str]
+        Deterministic source line, role, and fully qualified name ordering.
+    """
+    line = row.get("line")
+    return (
+        line if isinstance(line, int) and not isinstance(line, bool) else 0,
+        str(row.get("role") or ""),
+        str(row.get("name") or ""),
+    )
 
 
 def _snapshot_from_connection(
@@ -2042,7 +2645,12 @@ def _snapshot_from_connection(
         rows.symbols_by_file,
         rows.calls,
     )
-
+    identity_namespaces = _requested_identity_namespaces(
+        oracle.identity_observation_requests,
+        actual_files,
+        rows.symbols_by_file,
+        rows.calls,
+    )
     projection = ProjectedSnapshotRows(
         rows,
         callable_lookup,
@@ -2061,6 +2669,7 @@ def _snapshot_from_connection(
             "JSONValue", _header_context_rows(profile_document, repository_root)
         ),
         "identity_observations": identity_observations,
+        "identity_namespace_observations": identity_namespaces,
     }
 
 
@@ -2125,6 +2734,67 @@ def _requested_identity_observations(
             identity = matches[0].get(identity_field)
             if isinstance(identity, str) and identity:
                 observations[reference] = identity
+    return observations
+
+
+def _requested_identity_namespaces(
+    requests: tuple[dict[str, JSONValue], ...],
+    file_ids_by_path: dict[str, int],
+    symbols_by_file: dict[int, list[dict[str, Any]]],
+    call_records: list[dict[str, Any]],
+) -> dict[str, JSONValue]:
+    """Read namespace partners for source-requested persisted identities.
+
+    Parameters
+    ----------
+    requests : tuple[dict[str, JSONValue], ...]
+        Source-authored references selecting callable or call target rows.
+    file_ids_by_path : dict[str, int]
+        Physical source paths mapped to database file IDs.
+    symbols_by_file : dict[int, list[dict[str, Any]]]
+        Persisted symbols grouped by physical source file.
+    call_records : list[dict[str, Any]]
+        Persisted call rows with exact target identity namespaces.
+
+    Returns
+    -------
+    dict[str, JSONValue]
+        Identity namespaces keyed by source-authored reference.
+    """
+    observations: dict[str, JSONValue] = {}
+    for request in requests:
+        reference = _string(request.get("reference"), "identity request reference")
+        source = _string(request.get("source"), f"{reference}.source")
+        file_id = file_ids_by_path.get(source)
+        if file_id is None:
+            continue
+        kind = _string(request.get("kind"), f"{reference}.kind")
+        if kind == "callable":
+            name = _string(request.get("name"), f"{reference}.name")
+            line_value = request.get("definition_line")
+            matches = [
+                row
+                for row in symbols_by_file.get(file_id, [])
+                if row.get("name") == name
+                and row.get("type") in {"function", "method"}
+                and (line_value is None or row.get("lineno") == line_value)
+            ]
+            field_name = "semantic_identity_namespace"
+        elif kind == "call_target":
+            matches = [
+                row
+                for row in call_records
+                if row.get("file_id") == file_id
+                and row.get("lineno") == request.get("line")
+                and row.get("col_offset") == request.get("column")
+            ]
+            field_name = "target_identity_namespace"
+        else:
+            _raise_format_error(f"{reference}.kind", "must be callable or call_target")
+        if len(matches) == 1:
+            namespace = matches[0].get(field_name)
+            if isinstance(namespace, str) and namespace:
+                observations[reference] = namespace
     return observations
 
 

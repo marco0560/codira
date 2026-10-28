@@ -650,6 +650,26 @@ class FrontendCallable:
         Primary template USR from which Clang instantiated this callable.
     qualifiers : FrontendCallableQualifiers, optional
         C++ method and constructor qualifiers reported by Clang.
+    has_body : bool, optional
+        Whether this specific declaration contains a function body.
+    linker_symbol : str or None, optional
+        Exact linker symbol emitted by Clang when the declaration kind supports
+        an unambiguous symbol spelling.
+    explicit_linkage_label : str or None, optional
+        Explicit assembler label attached to this declaration, if present.
+    linkage_label_inherited : bool or None, optional
+        Whether Clang marks the observed assembler label as inherited.
+    alias_target_symbol : str or None, optional
+        Exact linker-symbol operand recorded by Clang's GNU alias attribute.
+    alias_target_usr : str or None, optional
+        Unique canonical declaration USR resolved from the exact alias symbol.
+    alias_binding_status : str, optional
+        Result of exact linker-symbol candidate binding.
+    linkage_kind : str, optional
+        Linkage category returned by Clang's internal linkage query.
+    signature_kind : str or None, optional
+        Native signature representation label; current Clang display strings
+        are derived and are not source-spelling evidence.
 
     Returns
     -------
@@ -684,6 +704,17 @@ class FrontendCallable:
     qualifiers: FrontendCallableQualifiers = field(
         default_factory=FrontendCallableQualifiers
     )
+    has_body: bool | None = None
+    linker_symbol: str | None = None
+    explicit_linkage_label: str | None = None
+    linkage_label_inherited: bool | None = None
+    alias_target_symbol: str | None = None
+    alias_target_usr: str | None = None
+    alias_binding_status: Literal[
+        "not_alias", "resolved", "unresolved", "ambiguous"
+    ] = "not_alias"
+    linkage_kind: str = "unknown"
+    signature_kind: str | None = None
 
 
 @dataclass(frozen=True)

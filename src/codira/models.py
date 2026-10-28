@@ -109,7 +109,8 @@ class OverloadArtifact:
     docstring : str | None
         Overload docstring when present.
     generated : codira.generated.GeneratedCallableEvidence | None, optional
-        Generated declaration evidence, distinct from physical source spelling.
+        Generated declaration evidence, including version-three compiler-observed
+        alias identity when directly resolved; distinct from physical spelling.
 
     Returns
     -------
@@ -410,7 +411,8 @@ class FunctionArtifact:
     owner_stable_id : str | None, optional
         Proven declaration identity of that owner when uniquely known.
     generated : codira.generated.GeneratedCallableEvidence | None, optional
-        Generated declaration evidence, distinct from physical source spelling.
+        Generated declaration evidence, including version-three compiler-observed
+        alias identity when directly resolved; distinct from physical spelling.
     semantic_identity : codira.models.SemanticIdentity | None, optional
         Exact analyzer-provided callable identity when known.
 

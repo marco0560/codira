@@ -242,6 +242,7 @@ def _validate_response(response: dict[str, object]) -> str | None:
     if response.get("schema_version") not in {
         "codira.clang-frontend-native/3",
         "codira.clang-frontend-native/4",
+        "codira.clang-frontend-native/5",
     }:
         return "unsupported_native_protocol_version"
     array_fields = (
@@ -352,13 +353,70 @@ def _validate_response(response: dict[str, object]) -> str | None:
         return "invalid_native_protocol_compilation_context"
     if _mapping(response.get("capture_projection")) is None:
         return "invalid_native_protocol_capture_projection"
-    if response.get("schema_version") == "codira.clang-frontend-native/4":
+    if response.get("schema_version") in {
+        "codira.clang-frontend-native/4",
+        "codira.clang-frontend-native/5",
+    }:
         if not isinstance(response.get("translation_unit_file"), str):
             return "invalid_native_protocol_translation_unit_file"
         if response.get("projection_file") is not None and not isinstance(
             response.get("projection_file"), str
         ):
             return "invalid_native_protocol_projection_file"
+    if response.get("schema_version") == "codira.clang-frontend-native/5":
+        for item in cast("list[object]", response["declarations"]):
+            row = cast("dict[str, object]", _mapping(item))
+            if "has_body" not in row or not isinstance(row.get("has_body"), bool):
+                return "invalid_native_protocol_callable_body_fact"
+            if not isinstance(row.get("linker_symbol"), str):
+                return "invalid_native_protocol_linker_symbol"
+            if not isinstance(row.get("linkage_kind"), str):
+                return "invalid_native_protocol_linkage_kind"
+            if row.get("signature_kind") != "derived_display_only":
+                return "invalid_native_protocol_signature_kind"
+            if row.get("explicit_linkage_label") is not None and not isinstance(
+                row.get("explicit_linkage_label"), str
+            ):
+                return "invalid_native_protocol_linkage_label"
+            if row.get("linkage_label_inherited") is not None and not isinstance(
+                row.get("linkage_label_inherited"), bool
+            ):
+                return "invalid_native_protocol_linkage_label_inheritance"
+            if row.get("alias_target_symbol") is not None and not isinstance(
+                row.get("alias_target_symbol"), str
+            ):
+                return "invalid_native_protocol_alias_target_symbol"
+            if row.get("alias_target_usr") is not None and not isinstance(
+                row.get("alias_target_usr"), str
+            ):
+                return "invalid_native_protocol_alias_target_identity"
+            if row.get("alias_binding_status") not in {
+                "not_alias",
+                "resolved",
+                "unresolved",
+                "ambiguous",
+            }:
+                return "invalid_native_protocol_alias_binding_status"
+            alias_status = row["alias_binding_status"]
+            alias_symbol = row.get("alias_target_symbol")
+            alias_usr = row.get("alias_target_usr")
+            if alias_status == "not_alias":
+                if alias_symbol is not None or alias_usr is not None:
+                    return "inconsistent_native_protocol_alias_facts"
+            elif alias_status == "resolved":
+                if (
+                    not isinstance(alias_symbol, str)
+                    or not alias_symbol
+                    or not isinstance(alias_usr, str)
+                    or not alias_usr
+                ):
+                    return "inconsistent_native_protocol_alias_facts"
+            elif (
+                not isinstance(alias_symbol, str)
+                or not alias_symbol
+                or alias_usr is not None
+            ):
+                return "inconsistent_native_protocol_alias_facts"
     return None
 
 
@@ -699,6 +757,22 @@ def _decode_entities(
                     identity.get("instantiated_from")
                 ),
                 qualifiers=_callable_qualifiers(row.get("method_qualifiers")),
+                has_body=_optional_bool(row.get("has_body")),
+                linker_symbol=_optional_string(row.get("linker_symbol")),
+                linkage_kind=cast("str", row.get("linkage_kind", "unknown")),
+                signature_kind=_optional_string(row.get("signature_kind")),
+                explicit_linkage_label=_optional_string(
+                    row.get("explicit_linkage_label")
+                ),
+                linkage_label_inherited=_optional_bool(
+                    row.get("linkage_label_inherited")
+                ),
+                alias_target_symbol=_optional_string(row.get("alias_target_symbol")),
+                alias_target_usr=_optional_string(row.get("alias_target_usr")),
+                alias_binding_status=cast(
+                    "Literal['not_alias', 'resolved', 'unresolved', 'ambiguous']",
+                    row.get("alias_binding_status", "not_alias"),
+                ),
             )
         )
     declarations: list[FrontendDeclaration] = []
@@ -1138,7 +1212,10 @@ class ClangFrontend:
                 failed=True,
             )
         if header_projection is not None:
-            if response.get("schema_version") != "codira.clang-frontend-native/4":
+            if response.get("schema_version") not in {
+                "codira.clang-frontend-native/4",
+                "codira.clang-frontend-native/5",
+            }:
                 return self._held(
                     profile,
                     input_fingerprint,

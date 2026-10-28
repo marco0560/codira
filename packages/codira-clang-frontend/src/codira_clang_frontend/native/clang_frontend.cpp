@@ -1,7 +1,10 @@
 #include <clang/AST/ASTConsumer.h>
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/Attr.h>
 #include <clang/AST/DeclCXX.h>
 #include <clang/AST/DeclTemplate.h>
+#include <clang/AST/GlobalDecl.h>
+#include <clang/AST/Mangle.h>
 #include <clang/AST/RawCommentList.h>
 #include <clang/AST/RecursiveASTVisitor.h>
 #include <clang/Basic/Diagnostic.h>
@@ -128,7 +131,9 @@ std::string usr(const clang::Decl *Declaration) {
 
 std::string semanticUSR(const clang::NamedDecl *Declaration) {
   std::string Identity = usr(Declaration);
-  if (Identity.empty() || Declaration->hasExternalFormalLinkage())
+  if (Identity.empty() ||
+      (Declaration->hasExternalFormalLinkage() &&
+       Declaration->getLinkageInternal() != clang::Linkage::UniqueExternal))
     return Identity;
   clang::SourceManager &SM = Declaration->getASTContext().getSourceManager();
   const clang::SourceLocation Location =
@@ -149,6 +154,42 @@ std::string semanticUSR(const clang::NamedDecl *Declaration) {
   if (!Error)
     TranslationUnit = CanonicalTranslationUnit.string();
   return "internal:" + TranslationUnit + ":" + Path + ":" + Identity;
+}
+
+std::string linkerSymbol(const clang::FunctionDecl *Function) {
+  if (const auto *Label = Function->getAttr<clang::AsmLabelAttr>())
+    return Label->getLabel().str();
+  if (llvm::isa<clang::CXXConstructorDecl>(Function) ||
+      llvm::isa<clang::CXXDestructorDecl>(Function))
+    return {};
+  std::unique_ptr<clang::MangleContext> Mangle(
+      Function->getASTContext().createMangleContext());
+  if (!Mangle->shouldMangleDeclName(Function))
+    return Function->getNameAsString();
+  llvm::SmallString<128> Buffer;
+  llvm::raw_svector_ostream Stream(Buffer);
+  Mangle->mangleName(clang::GlobalDecl(Function), Stream);
+  return Buffer.str().str();
+}
+
+std::string linkageKind(const clang::NamedDecl *Declaration) {
+  switch (Declaration->getLinkageInternal()) {
+  case clang::Linkage::Invalid:
+    return "invalid";
+  case clang::Linkage::None:
+    return "none";
+  case clang::Linkage::Internal:
+    return "internal";
+  case clang::Linkage::UniqueExternal:
+    return "unique_external";
+  case clang::Linkage::VisibleNone:
+    return "visible_none";
+  case clang::Linkage::Module:
+    return "module";
+  case clang::Linkage::External:
+    return "external";
+  }
+  return "unknown";
 }
 
 class ValueReturnVisitor final
@@ -649,6 +690,15 @@ public:
       return true;
     clang::SourceManager &SM = Context.getSourceManager();
     clang::SourceLocation Location = Function->getLocation();
+    const std::string LinkerSymbol = linkerSymbol(Function);
+    const std::string FunctionUSR = semanticUSR(Function);
+    const bool HasBody = Function->doesThisDeclarationHaveABody();
+    if (HasBody && !LinkerSymbol.empty() && !FunctionUSR.empty()) {
+      auto &Candidates = DefinitionsByLinkerSymbol[LinkerSymbol];
+      if (std::find(Candidates.begin(), Candidates.end(), FunctionUSR) ==
+          Candidates.end())
+        Candidates.push_back(FunctionUSR);
+    }
     std::string Path = SM.getFilename(SM.getFileLoc(Location)).str();
     bool MainExpansion =
         SM.isWrittenInMainFile(SM.getExpansionLoc(Location));
@@ -668,6 +718,8 @@ public:
       Parameters.push_back(parameter(Parameter));
     const auto *Owner =
         llvm::dyn_cast<clang::NamedDecl>(Function->getDeclContext());
+    const auto *Alias = Function->getAttr<clang::AliasAttr>();
+    const auto *AsmLabel = Function->getAttr<clang::AsmLabelAttr>();
     Object DeclarationRecord{
         {"identity", declarationIdentity(Function)},
         {"decl_kind", declarationDeclKind(Function)},
@@ -686,6 +738,18 @@ public:
         {"is_variadic", Function->isVariadic()},
         {"method_qualifiers", methodQualifiers(Function)},
         {"is_definition", Function->isThisDeclarationADefinition()},
+        {"has_body", HasBody},
+        {"linkage_kind", linkageKind(Function)},
+        {"linker_symbol", LinkerSymbol},
+        {"explicit_linkage_label",
+         AsmLabel ? Value(AsmLabel->getLabel().str()) : Value(nullptr)},
+        {"linkage_label_inherited",
+         AsmLabel ? Value(AsmLabel->isInherited()) : Value(nullptr)},
+        {"alias_target_symbol",
+         Alias ? Value(Alias->getAliasee().str()) : Value(nullptr)},
+        {"alias_target_usr", nullptr},
+        {"alias_binding_status",
+         Alias ? Value("unresolved") : Value("not_alias")},
         {"returns_value", hasValueReturn(Function)},
         {"parameters", std::move(Parameters)},
         {"location", location(Location, SM)},
@@ -715,7 +779,31 @@ public:
       }
     }
     Data.Declarations.push_back(std::move(DeclarationRecord));
+    if (Alias)
+      AliasRecordIndices.push_back(Data.Declarations.size() - 1);
     return true;
+  }
+
+  void FinalizeAliasBindings() {
+    for (const std::size_t Index : AliasRecordIndices) {
+      auto *Record = Data.Declarations[Index].getAsObject();
+      if (!Record)
+        continue;
+      const auto TargetSymbol = Record->getString("alias_target_symbol");
+      if (!TargetSymbol)
+        continue;
+      const auto Candidates =
+          DefinitionsByLinkerSymbol.find(TargetSymbol->str());
+      if (Candidates == DefinitionsByLinkerSymbol.end() ||
+          Candidates->second.empty()) {
+        (*Record)["alias_binding_status"] = "unresolved";
+      } else if (Candidates->second.size() != 1) {
+        (*Record)["alias_binding_status"] = "ambiguous";
+      } else {
+        (*Record)["alias_target_usr"] = Candidates->second.front();
+        (*Record)["alias_binding_status"] = "resolved";
+      }
+    }
   }
 
   bool VisitNamedDecl(clang::NamedDecl *Declaration) {
@@ -903,6 +991,9 @@ private:
   std::string CurrentCallerName;
   std::string CurrentCallerQualifiedName;
   std::string CurrentCallerOrigin;
+  std::unordered_map<std::string, std::vector<std::string>>
+      DefinitionsByLinkerSymbol;
+  std::vector<std::size_t> AliasRecordIndices;
 };
 
 class Consumer final : public clang::ASTConsumer {
@@ -916,6 +1007,7 @@ public:
 
   void HandleTranslationUnit(clang::ASTContext &Context) override {
     Visitor.TraverseDecl(Context.getTranslationUnitDecl());
+    Visitor.FinalizeAliasBindings();
     clang::SourceManager &SM = Context.getSourceManager();
     clang::FileID CommentFile = SM.getMainFileID();
     if (!ProjectionFile.empty()) {
@@ -1101,9 +1193,7 @@ int main() {
   const std::string ProjectionMode = ProjectionFile.empty()
                                          ? CaptureMode
                                          : "header_projection";
-  Object Output{{"schema_version", ProjectionFile.empty()
-                                         ? "codira.clang-frontend-native/3"
-                                         : "codira.clang-frontend-native/4"},
+  Object Output{{"schema_version", "codira.clang-frontend-native/5"},
                 {"translation_unit_file", File->str()},
                 {"projection_file", ProjectionFile.empty()
                                          ? Value(nullptr)

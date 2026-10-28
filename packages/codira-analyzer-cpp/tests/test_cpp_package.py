@@ -43,8 +43,8 @@ def test_cpp_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.47"
-    assert version("codira-analyzer-cpp") == "2.0.47"
+    assert project["project"]["version"] == "2.0.48"
+    assert version("codira-analyzer-cpp") == "2.0.48"
     assert (
         Path(inspect.getfile(CppAnalyzer)).resolve()
         == (
@@ -74,7 +74,7 @@ def test_cpp_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CppAnalyzer)
     assert analyzer.name == "cpp"
-    assert analyzer.version == "46"
+    assert analyzer.version == "47"
 
 
 def test_cpp_clang_frontend_is_opt_in_and_missing_profile_is_visible(
@@ -174,6 +174,15 @@ def test_cpp_clang_projection_preserves_source_using_alias(tmp_path: Path) -> No
             ),
             span=None,
             calls=(),
+            has_body=True,
+            signature_kind="derived_display_only",
+            linkage_kind="external",
+            linker_symbol=None,
+            explicit_linkage_label=None,
+            linkage_label_inherited=None,
+            alias_target_symbol=None,
+            alias_target_usr=None,
+            alias_binding_status="not_alias",
         )
         for namespace, line in (("first", 1), ("second", 2))
     )
@@ -230,6 +239,191 @@ def test_cpp_clang_projection_preserves_source_using_alias(tmp_path: Path) -> No
     attempt = analysis.status.target_contract["attempt_evidence"]
     assert isinstance(attempt, dict)
     assert attempt["compilation_context"] == expected_context
+
+
+def test_cpp_clang_projection_merges_reopened_namespace_usr_rows(
+    tmp_path: Path,
+) -> None:
+    """Coalesce exact namespace redeclarations and retain legacy latest metadata.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository containing repeated and lexically distinct namespaces.
+
+    Returns
+    -------
+    None
+        The test checks USR-based merging, last-row documentation, and namespace scope.
+    """
+    source = tmp_path / "reopened.cpp"
+    source_text = (
+        "namespace alias_case {}\n"
+        "/// Latest namespace docs.\n"
+        "namespace alias_case { int second; }\n"
+        "namespace left { namespace nested {} }\n"
+        "namespace right { namespace nested {} }\n"
+        "namespace { int first_anonymous; }\n"
+        "namespace { int second_anonymous; }\n"
+        "namespace left { namespace { } }\n"
+        "namespace right { namespace { } }\n"
+    )
+    source.write_text(source_text, encoding="utf-8")
+    source_bytes = source.read_bytes()
+
+    def point(offset: int) -> SourcePoint:
+        prefix = source_bytes[:offset]
+        line = prefix.count(b"\n") + 1
+        column = offset - prefix.rfind(b"\n")
+        position = SourcePosition(
+            path=str(source), line=line, column=column, offset=offset
+        )
+        return SourcePoint(spelling=position, expansion=position, is_macro=False)
+
+    def namespace_row(
+        *,
+        usr: str,
+        name: str,
+        qualified_name: str,
+        line_text: str,
+        documentation: str | None = None,
+        documentation_offset: int | None = None,
+    ) -> SimpleNamespace:
+        line_offset = source_bytes.index(line_text.encode("utf-8"))
+        name_offset = (
+            line_text.index(name) if name in line_text else line_text.index("namespace")
+        )
+        location = point(line_offset + name_offset)
+        doc_location = (
+            point(documentation_offset) if documentation_offset is not None else None
+        )
+        return SimpleNamespace(
+            usr=usr,
+            kind="namespace",
+            name=name,
+            qualified_name=qualified_name,
+            decl_kind="Namespace",
+            signature=line_text,
+            type_text=None,
+            parameters=(),
+            has_prototype=None,
+            is_definition=True,
+            provenance="source_written",
+            location=location,
+            span=None,
+            owner_usr=None,
+            owner_name=None,
+            owner_location=None,
+            owner_kind=None,
+            access=None,
+            source_text=line_text,
+            documentation=documentation,
+            documentation_location=doc_location,
+            documentation_span=None,
+            enum_ordinal=None,
+            is_file_scope=True,
+        )
+
+    latest_doc_offset = source_bytes.index(b"/// Latest namespace docs.")
+    declarations = (
+        namespace_row(
+            usr="c:@N@alias_case",
+            name="alias_case",
+            qualified_name="alias_case",
+            line_text="namespace alias_case {}",
+        ),
+        namespace_row(
+            usr="c:@N@alias_case",
+            name="alias_case",
+            qualified_name="alias_case",
+            line_text="namespace alias_case { int second; }",
+            documentation="Latest namespace docs.",
+            documentation_offset=latest_doc_offset,
+        ),
+        namespace_row(
+            usr="c:@N@left@N@nested",
+            name="nested",
+            qualified_name="left::nested",
+            line_text="namespace left { namespace nested {} }",
+        ),
+        namespace_row(
+            usr="c:@N@right@N@nested",
+            name="nested",
+            qualified_name="right::nested",
+            line_text="namespace right { namespace nested {} }",
+        ),
+        namespace_row(
+            usr="c:@aN@reopened.cpp@",
+            name="(anonymous namespace)",
+            qualified_name="(anonymous namespace)",
+            line_text="namespace { int first_anonymous; }",
+        ),
+        namespace_row(
+            usr="c:@aN@reopened.cpp@",
+            name="(anonymous namespace)",
+            qualified_name="(anonymous namespace)",
+            line_text="namespace { int second_anonymous; }",
+        ),
+        namespace_row(
+            usr="c:@N@left@aN@reopened.cpp@",
+            name="(anonymous namespace)",
+            qualified_name="left::(anonymous namespace)",
+            line_text="namespace left { namespace { } }",
+        ),
+        namespace_row(
+            usr="c:@N@right@aN@reopened.cpp@",
+            name="(anonymous namespace)",
+            qualified_name="right::(anonymous namespace)",
+            line_text="namespace right { namespace { } }",
+        ),
+    )
+    result = SimpleNamespace(
+        status="parsed",
+        coverage_state="complete",
+        reasons=(),
+        declarations=declarations,
+        callables=(),
+        diagnostics=(),
+        includes=(),
+        preprocessing=(),
+        documentation_comments=(),
+        profile_identity="namespace-reopen-test-profile",
+        cache_fingerprint="namespace-reopen-test-fingerprint",
+        toolchain_identity=None,
+        compilation_context=None,
+        dependency_closure=None,
+        stdout_path=None,
+        stdout_sha256=None,
+        stderr_path=None,
+        stderr_sha256=None,
+    )
+
+    analysis = cpp_analyzer_module._analysis_from_clang_result(
+        source, tmp_path, cast("FrontendResult", result)
+    )
+
+    assert analysis is not None
+    namespaces = [item for item in analysis.declarations if item.kind == "namespace"]
+    assert [item.name for item in namespaces] == [
+        "alias_case",
+        "left::nested",
+        "right::nested",
+        "(anonymous namespace)",
+        "left::(anonymous namespace)",
+        "right::(anonymous namespace)",
+    ]
+    reopened = next(item for item in namespaces if item.name == "alias_case")
+    assert reopened.lineno == 3
+    assert reopened.signature == "namespace alias_case { int second; }"
+    namespace_docs = [
+        item
+        for item in analysis.documentation
+        if item.owner_stable_id == reopened.stable_id
+    ]
+    assert len(namespace_docs) == 1
+    assert namespace_docs[0].lineno == 2
+    assert namespace_docs[0].text == "Latest namespace docs."
+    assert len({item.stable_id for item in namespaces}) == len(namespaces)
 
 
 def test_cpp_clang_projection_selects_call_coordinates_by_macro_origin(
@@ -309,6 +503,15 @@ def test_cpp_clang_projection_selects_call_coordinates_by_macro_origin(
         returns_value=True,
         is_variadic=False,
         qualifiers=SimpleNamespace(is_method=False),
+        has_body=True,
+        signature_kind="derived_display_only",
+        linkage_kind="external",
+        linker_symbol=None,
+        explicit_linkage_label=None,
+        linkage_label_inherited=None,
+        alias_target_symbol=None,
+        alias_target_usr=None,
+        alias_binding_status="not_alias",
     )
     result = SimpleNamespace(
         status="parsed",
@@ -579,6 +782,15 @@ def test_cpp_clang_projection_persists_observed_macro_callable_evidence(
         owner_usr="c:@N@parity",
         owner_location=source_point(source_bytes.index(b"parity")),
         qualifiers=SimpleNamespace(is_method=False),
+        has_body=True,
+        signature_kind="derived_display_only",
+        linkage_kind="external",
+        linker_symbol=None,
+        explicit_linkage_label=None,
+        linkage_label_inherited=None,
+        alias_target_symbol=None,
+        alias_target_usr=None,
+        alias_binding_status="not_alias",
     )
     source_sha256 = hashlib.sha256(source_bytes).hexdigest()
     result = SimpleNamespace(
@@ -636,6 +848,10 @@ def test_cpp_clang_projection_persists_observed_macro_callable_evidence(
     assert function.generated.invocation.text == invocation_text
     receipt = json.loads(function.generated.receipt_json)
     assert receipt["context"]["cache_fingerprint"] == result.cache_fingerprint
+    native_observation = receipt["callable"]["native_observation"]
+    assert native_observation["signature_kind"] == "derived_display_only"
+    assert native_observation["explicit_linkage_label"] is None
+    assert native_observation["linkage_label_inherited"] is None
     assert receipt["callable"]["span"]["begin"]["spelling"]["path"] == str(source)
     assert receipt["callable"]["span"]["begin"]["spelling"]["line"] == 2
     assert receipt["callable"]["span"]["begin"]["spelling"]["offset"] == (

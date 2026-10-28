@@ -19,7 +19,12 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Literal, Never, cast
 
 if TYPE_CHECKING:
-    from codira.models import AnalysisResult, FunctionArtifact, OverloadArtifact
+    from codira.models import (
+        AnalysisResult,
+        FunctionArtifact,
+        OverloadArtifact,
+        SemanticIdentity,
+    )
 
 
 @dataclass(frozen=True)
@@ -228,8 +233,70 @@ class CompilerObservedCallableProvenance:
     format_version: Literal[2] = 2
 
 
+@dataclass(frozen=True)
+class CompilerObservedCallableProvenanceV3:
+    """Describe compiler-observed callable evidence with explicit alias facts.
+
+    Parameters
+    ----------
+    origin : {'macro_argument', 'macro_replacement', 'implicit', 'template_instantiation', 'unknown'}
+        Normalized compiler-reported origin classification.
+    role : {'definition', 'prototype', 'alias'}
+        Declaration role reported by the frontend.
+    source_sha256 : str
+        Digest of the indexed source translation unit.
+    context_identity : str
+        Analysis input fingerprint binding the compiler result.
+    receipt_namespace : str
+        Opaque namespace for the producer's canonical JSON receipt.
+    receipt_json : str
+        Bounded canonical compiler evidence, interpreted only by its producer.
+    alias_target_identity : codira.models.SemanticIdentity | None, optional
+        Exact target identity when the compiler directly resolves the alias.
+    linkage_name : str | None, optional
+        Explicit linker label observed on the callable declaration.
+    spelling_location, expansion_location : CompilerObservedSourceCoordinate | None
+        Optional source coordinates reported by the compiler.
+    invocation : CompilerObservedMacroInvocation | None, optional
+        Separate observed preprocessor event, when available.
+
+    Returns
+    -------
+    None
+        Immutable version-three compiler evidence without token reconstruction.
+
+    Notes
+    -----
+    The target identity is nullable because an observed alias spelling does not
+    prove which callable declaration the compiler resolved. Version-two payloads
+    retain their original exact field set and validation contract.
+    """
+
+    origin: Literal[
+        "macro_argument",
+        "macro_replacement",
+        "implicit",
+        "template_instantiation",
+        "unknown",
+    ]
+    role: Literal["definition", "prototype", "alias"]
+    source_sha256: str
+    context_identity: str
+    receipt_namespace: str
+    receipt_json: str
+    alias_target_identity: SemanticIdentity | None = None
+    linkage_name: str | None = None
+    spelling_location: CompilerObservedSourceCoordinate | None = None
+    expansion_location: CompilerObservedSourceCoordinate | None = None
+    invocation: CompilerObservedMacroInvocation | None = None
+    variant: Literal["compiler_observed"] = "compiler_observed"
+    format_version: Literal[3] = 3
+
+
 type GeneratedCallableEvidence = (
-    GeneratedCallableProvenance | CompilerObservedCallableProvenance
+    GeneratedCallableProvenance
+    | CompilerObservedCallableProvenance
+    | CompilerObservedCallableProvenanceV3
 )
 
 
@@ -544,12 +611,12 @@ def _validate_json_tree(value: object, *, depth: int) -> None:
 
 
 def _validate_compiler_observed_payload(payload: dict[str, object]) -> None:
-    """Validate the tagged version-two compiler-observed variant.
+    """Validate tagged version-two and version-three compiler evidence.
 
     Parameters
     ----------
     payload : dict[str, object]
-        Decoded version-two provenance object.
+        Decoded compiler-observed provenance object.
 
     Returns
     -------
@@ -561,7 +628,7 @@ def _validate_compiler_observed_payload(payload: dict[str, object]) -> None:
     ValueError
         If fields, context, coordinates, invocation or receipt are invalid.
     """
-    required = {
+    base_fields = {
         "variant",
         "format_version",
         "origin",
@@ -574,11 +641,19 @@ def _validate_compiler_observed_payload(payload: dict[str, object]) -> None:
         "receipt_namespace",
         "receipt_json",
     }
+    version = payload.get("format_version")
+    if type(version) is not int:
+        _invalid("unsupported compiler-observed provenance fields or version")
+    required = (
+        base_fields
+        if version == 2
+        else base_fields | {"alias_target_identity", "linkage_name"}
+        if version == 3
+        else set()
+    )
     if (
         set(payload) != required
         or payload["variant"] != "compiler_observed"
-        or type(payload["format_version"]) is not int
-        or payload["format_version"] != 2
         or payload["origin"]
         not in {
             "macro_argument",
@@ -587,7 +662,12 @@ def _validate_compiler_observed_payload(payload: dict[str, object]) -> None:
             "template_instantiation",
             "unknown",
         }
-        or payload["role"] not in {"definition", "prototype"}
+        or payload["role"]
+        not in (
+            {"definition", "prototype"}
+            if version == 2
+            else {"definition", "prototype", "alias"}
+        )
     ):
         _invalid("unsupported compiler-observed provenance fields or version")
     if (
@@ -607,6 +687,53 @@ def _validate_compiler_observed_payload(payload: dict[str, object]) -> None:
     if invocation is not None:
         _validate_observed_invocation(invocation, payload)
     _validate_receipt_json(payload["receipt_json"])
+    if version == 3:
+        _validate_compiler_observed_alias_fields(payload)
+
+
+def _validate_compiler_observed_alias_fields(payload: dict[str, object]) -> None:
+    """Validate version-three alias identity and observed linker label.
+
+    Parameters
+    ----------
+    payload : dict[str, object]
+        Decoded version-three compiler-observed provenance.
+
+    Returns
+    -------
+    None
+        Alias facts are either valid and explicit or unresolved.
+
+    Raises
+    ------
+    ValueError
+        If identity fields are malformed or attached to a non-alias role.
+    """
+    target = payload["alias_target_identity"]
+    linkage_name = payload["linkage_name"]
+    if payload["role"] != "alias":
+        if target is not None or linkage_name is not None:
+            _invalid("alias target and linkage facts require alias role")
+        return
+    if linkage_name is not None and (
+        not isinstance(linkage_name, str)
+        or not linkage_name
+        or len(linkage_name) > 4096
+    ):
+        _invalid("invalid observed alias linkage name")
+    if target is not None:
+        if not isinstance(target, dict) or set(target) != {"namespace", "value"}:
+            _invalid("invalid observed alias target identity")
+        namespace, value = target["namespace"], target["value"]
+        if (
+            not isinstance(namespace, str)
+            or not namespace
+            or len(namespace) > 256
+            or not isinstance(value, str)
+            or not value
+            or len(value) > 4096
+        ):
+            _invalid("invalid observed alias target identity")
 
 
 def _validate_tokens(tokens: list[object], invocation: tuple[int, int]) -> None:
@@ -712,7 +839,7 @@ def generated_provenance_payload(value: str) -> dict[str, object]:
     Parameters
     ----------
     value : str
-        Serialized version-one or compiler-observed version-two record.
+        Serialized version-one or compiler-observed version-two or version-three record.
 
     Returns
     -------
