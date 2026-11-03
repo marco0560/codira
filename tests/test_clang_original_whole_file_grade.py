@@ -6,6 +6,7 @@ import hashlib
 import inspect
 import json
 import sqlite3
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
@@ -21,7 +22,9 @@ from scripts.clang_original_whole_file_grade import (
     SourceOwnedAstGradeRequest,
     _canonical,
     _database_generation_binding,
+    _grade_source_call_rows,
     _read_actual_analysis_status,
+    _reconcile_raw_source_call_sites,
     _source_literal_includes,
     _validate_compile_database_row,
     _validate_contract_header,
@@ -1468,6 +1471,7 @@ def _source_owned_ast_fixture() -> tuple[
         "does_not_support": ["namespace"],
     }
     category_rows: dict[str, JSONValue] = {
+        "calls": [],
         "declarations": [{"kind": "struct", "line": 1, "name": "R"}],
         "fields": [{"line": 1, "name": "x", "owner": "R", "type": "int"}],
         "callables": [
@@ -1779,6 +1783,7 @@ def _source_owned_wrapper_fixture(
                     "declarations": rows[backend]["declarations"],
                     "fields": rows[backend]["fields"],
                     "callables": rows[backend]["callables"],
+                    "calls": rows[backend]["calls"],
                 }
             },
         }
@@ -1878,11 +1883,573 @@ def test_source_owned_ast_categories_reconcile_exact_facts() -> None:
     assert report["whole_file_admission"] is False
     assert report["scope_complete"] is False
     categories = cast("dict[str, JSONValue]", report["categories"])
-    assert set(categories) == {"declarations", "fields", "callables"}
+    assert set(categories) == {"declarations", "fields", "callables", "calls"}
     assert all(
         cast("dict[str, JSONValue]", item)["state"] == "graded"
         for item in categories.values()
     )
+
+
+def _source_call_origin_fixture() -> tuple[
+    bytes,
+    Path,
+    dict[str, JSONValue],
+    dict[str, object],
+    list[dict[str, JSONValue]],
+    dict[str, dict[str, JSONValue]],
+]:
+    """Build direct-call AST evidence for source and both macro origins.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    tuple
+        Source, source path, normalized reference, raw AST, raw call
+        expectations, and equivalent SQLite and DuckDB call rows.
+    """
+    source = (
+        b"int replacement(int);\n"
+        b"int argument(void);\n"
+        b"int caller(void) { return WRAP(argument()) + local(); }\n"
+        b"int local(void) { return 1; }\n"
+    )
+    source_path = Path("/fixture.c")
+    working_directory = Path.cwd()
+    header_path = Path("/fixture.h")
+    wrap_offset = source.index(b"WRAP")
+    argument_offset = source.index(b"argument()")
+    local_offset = source.index(b"local()")
+
+    def source_point(offset: int, token: bytes) -> dict[str, object]:
+        """Return one source location bound to exact bytes.
+
+        Parameters
+        ----------
+        offset : int
+            Byte offset of the token.
+        token : bytes
+            Exact token spelling at that offset.
+
+        Returns
+        -------
+        dict[str, object]
+            Clang-style physical location fields.
+        """
+        return {
+            "file": str(source_path),
+            "line": source.count(b"\n", 0, offset) + 1,
+            "col": offset - source.rfind(b"\n", 0, offset),
+            "offset": offset,
+            "tokLen": len(token),
+        }
+
+    def function_decl(
+        node_id: str,
+        name: str,
+        signature: str,
+        offset: int,
+        definition_body: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        """Build one raw FunctionDecl with optional definition children.
+
+        Parameters
+        ----------
+        node_id : str
+            Stable raw AST node identifier.
+        name : str
+            Function identifier.
+        signature : str
+            Clang function type spelling.
+        offset : int
+            Source byte offset of the function identifier.
+        definition_body : list[dict[str, object]] or None
+            Optional body children marking a source definition.
+
+        Returns
+        -------
+        dict[str, object]
+            Raw FunctionDecl node.
+        """
+        node: dict[str, object] = {
+            "id": node_id,
+            "kind": "FunctionDecl",
+            "name": name,
+            "type": {"qualType": signature},
+            "loc": source_point(offset, name.encode()),
+            "range": {
+                "begin": source_point(offset, name.encode()),
+                "end": source_point(offset, name.encode()),
+            },
+        }
+        if definition_body is not None:
+            node["inner"] = [{"kind": "CompoundStmt", "inner": definition_body}]
+        return node
+
+    replacement_decl = function_decl("replacement-decl", "replacement", "int (int)", 4)
+    argument_decl = function_decl("argument-decl", "argument", "int (void)", 28)
+    replacement_decl["loc"] = {
+        "file": str(header_path),
+        "line": 1,
+        "col": 5,
+        "offset": 4,
+        "tokLen": len(b"replacement"),
+    }
+    replacement_decl["range"] = {
+        "begin": replacement_decl["loc"],
+        "end": replacement_decl["loc"],
+    }
+
+    replacement_spelling: dict[str, object] = {
+        "file": str(header_path),
+        "line": 1,
+        "col": 1,
+        "offset": 0,
+        "tokLen": len(b"replacement"),
+    }
+    replacement_expansion = source_point(wrap_offset, b"WRAP")
+    argument_spelling = source_point(argument_offset, b"argument")
+    argument_expansion = {
+        **source_point(wrap_offset, b"WRAP"),
+        "isMacroArgExpansion": True,
+    }
+
+    def direct_callee(
+        node_id: str,
+        target_id: str,
+        target_name: str,
+        target_type: str,
+        begin: dict[str, object],
+    ) -> dict[str, object]:
+        """Build a raw direct function reference expression.
+
+        Parameters
+        ----------
+        node_id : str
+            Stable raw AST expression identifier.
+        target_id : str
+            Referenced FunctionDecl identifier.
+        target_name : str
+            Referenced function name.
+        target_type : str
+            Clang function type spelling.
+        begin : dict[str, object]
+            Clang source or macro location used by this expression.
+
+        Returns
+        -------
+        dict[str, object]
+            Raw DeclRefExpr node.
+        """
+        return {
+            "id": node_id,
+            "kind": "DeclRefExpr",
+            "referencedDecl": {
+                "id": target_id,
+                "kind": "FunctionDecl",
+                "name": target_name,
+                "type": {"qualType": target_type},
+            },
+            "range": {"begin": begin, "end": begin},
+        }
+
+    argument_call: dict[str, object] = {
+        "id": "call-argument",
+        "kind": "CallExpr",
+        "range": {
+            "begin": {
+                "spellingLoc": argument_spelling,
+                "expansionLoc": argument_expansion,
+            },
+            "end": argument_spelling,
+        },
+        "inner": [
+            direct_callee(
+                "ref-argument",
+                "argument-decl",
+                "argument",
+                "int (void)",
+                argument_spelling,
+            )
+        ],
+    }
+    replacement_call: dict[str, object] = {
+        "id": "call-replacement",
+        "kind": "CallExpr",
+        "range": {
+            "begin": {
+                "spellingLoc": replacement_spelling,
+                "expansionLoc": replacement_expansion,
+            },
+            "end": replacement_expansion,
+        },
+        "inner": [
+            direct_callee(
+                "ref-replacement",
+                "replacement-decl",
+                "replacement",
+                "int (int)",
+                replacement_expansion,
+            ),
+            argument_call,
+        ],
+    }
+    local_call: dict[str, object] = {
+        "id": "call-local",
+        "kind": "CallExpr",
+        "range": {
+            "begin": source_point(local_offset, b"local"),
+            "end": source_point(local_offset, b"local"),
+        },
+        "inner": [
+            direct_callee(
+                "ref-local",
+                "local-definition",
+                "local",
+                "int (void)",
+                source_point(local_offset, b"local"),
+            )
+        ],
+    }
+    caller_offset = source.index(b"caller")
+    local_definition_offset = source.rindex(b"local")
+    caller_decl = function_decl(
+        "caller-definition",
+        "caller",
+        "int (void)",
+        caller_offset,
+        [{"kind": "BinaryOperator", "inner": [replacement_call, local_call]}],
+    )
+    local_definition = function_decl(
+        "local-definition",
+        "local",
+        "int (void)",
+        local_definition_offset,
+        [{"kind": "IntegerLiteral", "value": "1"}],
+    )
+    raw_ast: dict[str, object] = {
+        "kind": "TranslationUnitDecl",
+        "inner": [replacement_decl, argument_decl, caller_decl, local_definition],
+    }
+    normalized = cast(
+        "dict[str, JSONValue]",
+        normalize_ast(raw_ast, source_path, source, working_directory),
+    )
+    expected = _reconcile_raw_source_call_sites(
+        normalized,
+        raw_ast,
+        source,
+        source_path,
+        working_directory,
+        "src/unit.c",
+    )
+    rows: list[dict[str, JSONValue]] = []
+    for occurrence in expected:
+        target_name = cast("str", occurrence["target_name"])
+        target_definition = occurrence["target_definition"]
+        resolved = isinstance(target_definition, dict)
+        row: dict[str, JSONValue] = {
+            "line": occurrence["line"],
+            "column": occurrence["column"],
+            "origin": occurrence["origin"],
+            "caller_qualified_name": occurrence["caller_name"],
+            "caller_stable_id": occurrence["caller_stable_id"],
+            "resolved": resolved,
+            "resolution_mode": "exact",
+            "target_identity_namespace": "clang.usr.v1",
+            "target_identity_value": f"fixture:{target_name}",
+            "callee_qualified_name": None,
+            "callee_stable_id": None,
+            "callee_source": None,
+            "callee_definition_line": None,
+            "parameter_types": None,
+            "return_type": None,
+            "unresolved_target_qualified_name": target_name,
+        }
+        if resolved:
+            definition = cast("dict[str, JSONValue]", target_definition)
+            return_type, parameter_types = grader._parse_simple_function_type(
+                cast("str", definition["type"])
+            )
+            row.update(
+                {
+                    "callee_qualified_name": definition["name"],
+                    "callee_stable_id": f"c:function:src/unit.c:{definition['name']}",
+                    "callee_source": "src/unit.c",
+                    "callee_definition_line": definition["definition_line"],
+                    "parameter_types": cast("JSONValue", parameter_types),
+                    "return_type": return_type,
+                    "unresolved_target_qualified_name": None,
+                }
+            )
+        rows.append(row)
+    backend_rows: dict[str, dict[str, JSONValue]] = {
+        "sqlite": {"calls": cast("JSONValue", rows)},
+        "duckdb": {"calls": cast("JSONValue", [dict(row) for row in rows])},
+    }
+    return (
+        source,
+        source_path,
+        normalized,
+        raw_ast,
+        expected,
+        backend_rows,
+    )
+
+
+def test_source_call_occurrences_bind_macro_origins_and_hold_unproven_usrs() -> None:
+    """Reconcile source and macro call sites while holding USR semantics.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+    source, source_path, normalized, raw_ast, expected, rows = (
+        _source_call_origin_fixture()
+    )
+    assert [row["origin"] for row in expected].count("source_written") == 1
+    assert [row["origin"] for row in expected].count("macro_replacement") == 1
+    assert [row["origin"] for row in expected].count("macro_argument") == 1
+    assert sum(row["resolved"] is True for row in expected) == 1
+    assert len(expected) == 3
+
+    report = _grade_source_call_rows(expected, rows, "src/unit.c")
+
+    assert report["expected_count"] == 3
+    assert report["source_resolved_target_count"] == 1
+    assert report["unresolved_target_count"] == 2
+    assert report["exact_occurrence_multiset_by_backend"] == {
+        "sqlite": True,
+        "duckdb": True,
+    }
+    assert report["full_backend_row_parity"] is True
+    assert report["target_usr_verified"] is False
+    assert report["state"] == "held"
+
+
+@pytest.mark.parametrize(
+    ("old_spelling", "new_spelling", "message"),
+    [
+        (b"WRAP(", b"WRAPX(", "function-like invocation"),
+        (b"argument()", b"argumenX()", "call spelling differs"),
+        (b"local()", b"locaX()", "call spelling differs"),
+    ],
+)
+def test_source_call_occurrences_reject_unbound_physical_spellings(
+    old_spelling: bytes, new_spelling: bytes, message: str
+) -> None:
+    """Reject macro and source anchors that do not match captured bytes.
+
+    Parameters
+    ----------
+    old_spelling : bytes
+        Token spelling present in the baseline fixture.
+    new_spelling : bytes
+        Replacement spelling inconsistent with the raw AST point.
+    message : str
+        Expected fail-closed diagnostic fragment.
+
+    Returns
+    -------
+    None
+    """
+    source, source_path, normalized, raw_ast, _, _ = _source_call_origin_fixture()
+    changed_source = source.replace(old_spelling, new_spelling, 1)
+    changed_normalized = cast(
+        "dict[str, JSONValue]",
+        normalize_ast(raw_ast, source_path, changed_source, Path.cwd()),
+    )
+
+    with pytest.raises(OracleFormatError, match=message):
+        _reconcile_raw_source_call_sites(
+            changed_normalized,
+            raw_ast,
+            changed_source,
+            source_path,
+            Path.cwd(),
+            "src/unit.c",
+        )
+
+
+@pytest.mark.parametrize("mutation", ["omitted", "duplicate", "extra"])
+def test_raw_source_call_occurrence_inventory_is_exhaustive(mutation: str) -> None:
+    """Reject raw call inventories that differ from normalized AST facts.
+
+    Parameters
+    ----------
+    mutation : str
+        Omission or added raw CallExpr occurrence.
+
+    Returns
+    -------
+    None
+    """
+    source, source_path, normalized, raw_ast, _, _ = _source_call_origin_fixture()
+    ast_children = cast("list[object]", raw_ast["inner"])
+    caller = cast("dict[str, object]", ast_children[2])
+    caller_body = cast("dict[str, object]", cast("list[object]", caller["inner"])[0])
+    binary = cast("dict[str, object]", cast("list[object]", caller_body["inner"])[0])
+    calls = cast("list[object]", binary["inner"])
+    if mutation == "omitted":
+        calls.pop(0)
+    elif mutation == "duplicate":
+        calls.append(deepcopy(calls[1]))
+    else:
+        replacement = cast("dict[str, object]", calls[0])
+        argument = cast(
+            "dict[str, object]", cast("list[object]", replacement["inner"])[1]
+        )
+        calls.append(deepcopy(argument))
+
+    with pytest.raises(OracleFormatError, match="normalized multiset"):
+        _reconcile_raw_source_call_sites(
+            normalized,
+            raw_ast,
+            source,
+            source_path,
+            Path.cwd(),
+            "src/unit.c",
+        )
+
+
+def test_raw_source_call_occurrences_reject_wrong_normalized_caller() -> None:
+    """Reject a normalized caller identity that disagrees with raw AST scope.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+    source, source_path, normalized, raw_ast, _, _ = _source_call_origin_fixture()
+    first_call = cast(
+        "dict[str, JSONValue]",
+        cast(
+            "list[JSONValue]",
+            cast("dict[str, JSONValue]", normalized["facts"])["calls"],
+        )[0],
+    )
+    first_call["caller_chain"] = ["different_function"]
+
+    with pytest.raises(OracleFormatError, match="normalized multiset"):
+        _reconcile_raw_source_call_sites(
+            normalized,
+            raw_ast,
+            source,
+            source_path,
+            Path.cwd(),
+            "src/unit.c",
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "origin",
+        "resolution",
+        "target_signature",
+        "caller_identity",
+        "usr_divergence",
+        "unresolved_source",
+        "unresolved_definition_line",
+        "unresolved_parameter_types",
+        "unresolved_return_type",
+    ],
+)
+def test_source_call_occurrences_hold_backend_mutations(mutation: str) -> None:
+    """Reject origin, target, caller, USR and unresolved-state drift.
+
+    Parameters
+    ----------
+    mutation : str
+        Call-row field or backend identity changed from the raw-AST projection.
+
+    Returns
+    -------
+    None
+    """
+    _, _, _, _, expected, rows = _source_call_origin_fixture()
+    sqlite_rows = cast("list[JSONValue]", rows["sqlite"]["calls"])
+    duckdb_rows = cast("list[JSONValue]", rows["duckdb"]["calls"])
+    target_row = next(
+        row
+        for row in sqlite_rows
+        if isinstance(row, dict) and row.get("resolved") is True
+    )
+    duck_target = next(
+        row
+        for row in duckdb_rows
+        if isinstance(row, dict) and row.get("resolved") is True
+    )
+    if mutation == "origin":
+        target_row["origin"] = "macro_argument"
+        duck_target["origin"] = "macro_argument"
+    elif mutation == "resolution":
+        target_name = target_row["callee_qualified_name"]
+        target_row["resolved"] = False
+        target_row["callee_qualified_name"] = None
+        target_row["callee_stable_id"] = None
+        target_row["callee_source"] = None
+        target_row["callee_definition_line"] = None
+        target_row["parameter_types"] = None
+        target_row["return_type"] = None
+        target_row["unresolved_target_qualified_name"] = target_name
+        duck_target.update(target_row)
+    else:
+        if mutation == "target_signature":
+            target_row["return_type"] = "long"
+            duck_target["return_type"] = "long"
+        elif mutation == "caller_identity":
+            target_row["caller_stable_id"] = "c:function:src/unit.c:other"
+            duck_target["caller_stable_id"] = "c:function:src/unit.c:other"
+        elif mutation == "usr_divergence":
+            duck_target["target_identity_value"] = "fixture:changed"
+        else:
+            unresolved_row = next(
+                row
+                for row in sqlite_rows
+                if isinstance(row, dict) and row.get("resolved") is False
+            )
+            duck_unresolved = next(
+                row
+                for row in duckdb_rows
+                if isinstance(row, dict) and row.get("resolved") is False
+            )
+            field = {
+                "unresolved_source": "callee_source",
+                "unresolved_definition_line": "callee_definition_line",
+                "unresolved_parameter_types": "parameter_types",
+                "unresolved_return_type": "return_type",
+            }[mutation]
+            contradiction: JSONValue = (
+                ["int"]
+                if field == "parameter_types"
+                else (1 if field == "callee_definition_line" else "invented")
+            )
+            unresolved_row[field] = contradiction
+            duck_unresolved[field] = contradiction
+
+    report = _grade_source_call_rows(expected, rows, "src/unit.c")
+
+    assert report["state"] == "held"
+    assert report["failures"]
+    if mutation == "usr_divergence":
+        assert report["full_backend_row_parity"] is False
+    if mutation.startswith("unresolved_"):
+        assert any(
+            failure.get("reason") == "unresolved call row has inconsistent target state"
+            for failure in cast("list[JSONValue]", report["failures"])
+            if isinstance(failure, dict)
+        )
+    assert report["target_usr_verified"] is False
 
 
 def test_source_owned_evidence_wrapper_accepts_bound_fixture(
@@ -1910,7 +2477,7 @@ def test_source_owned_evidence_wrapper_accepts_bound_fixture(
     categories = cast("dict[str, JSONValue]", report["categories"])
     assert all(
         cast("dict[str, JSONValue]", categories[name])["state"] == "graded"
-        for name in ("declarations", "fields", "callables")
+        for name in ("declarations", "fields", "callables", "calls")
     )
 
 

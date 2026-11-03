@@ -2676,6 +2676,7 @@ def grade_source_owned_ast_categories(  # noqa: PLR0913 -- explicit evidence inp
     backend_rows: dict[str, dict[str, JSONValue]],
     normalizer_path: Path,
     working_directory: Path,
+    source_key: str | None = None,
 ) -> dict[str, JSONValue]:
     """Reconcile bounded source-owned AST facts against both backend rows.
 
@@ -2695,6 +2696,8 @@ def grade_source_owned_ast_categories(  # noqa: PLR0913 -- explicit evidence inp
         Frozen normalizer copy bound to the capture.
     working_directory : pathlib.Path
         Exact compiler working directory bound to the profile.
+    source_key : str or None, optional
+        Repository-relative key used to bind stable caller identities.
 
     Returns
     -------
@@ -2710,6 +2713,14 @@ def grade_source_owned_ast_categories(  # noqa: PLR0913 -- explicit evidence inp
         analyzer_capabilities,
         normalizer_path,
         working_directory,
+    )
+    expected_calls = _reconcile_raw_source_call_sites(
+        normalized,
+        raw_ast,
+        source,
+        Path(_string(normalized.get("source_path"), "normalized.source_path")),
+        working_directory,
+        source_key,
     )
     reports: dict[str, JSONValue] = {}
     for category, expected_rows in expected.items():
@@ -2774,20 +2785,649 @@ def grade_source_owned_ast_categories(  # noqa: PLR0913 -- explicit evidence inp
                 ],
             },
         )
+    reports["calls"] = _grade_source_call_rows(expected_calls, backend_rows, source_key)
     return {
-        "scope": "source-owned-records-fields-and-function-definitions",
+        "scope": "source-owned-records-fields-function-definitions-and-call-occurrences",
         "interpretation": "clang_parity_only_same_compiler_not_compiler_independent_truth",
         "whole_file_admission": False,
         "scope_complete": False,
         "categories": reports,
         "held_categories": cast(
-            "JSONValue", sorted(set(FACT_CATEGORIES) - set(reports) - {"coverage"})
+            "JSONValue",
+            sorted(
+                category
+                for category in set(FACT_CATEGORIES) - {"coverage"}
+                if category not in reports
+                or _object(
+                    cast("dict[str, JSONValue]", reports[category]), category
+                ).get("state")
+                != "graded"
+            ),
         ),
         "limitations": [
-            "Unresolved implicit header typedefs and ambiguous call AST nodes remain outside this category proof.",
+            "Calls with unresolved targets remain held; the raw CLI AST does not contain compiler USRs.",
+            "The macro replacement and macro argument at the shared source expansion are separate origin-bound call occurrences.",
+            "Raw CLI AST expansion locations do not independently prove the macro-definition-name edge.",
             "The result does not establish whole-file parity or file admission.",
         ],
     }
+
+
+def _reconcile_raw_source_call_sites(  # noqa: C901, PLR0913, PLR0912 -- exhaustive source call ownership and origin gates
+    normalized: dict[str, JSONValue],
+    ast: dict[str, object],
+    source: bytes,
+    source_path: Path,
+    working_directory: Path,
+    source_key: str | None,
+) -> list[dict[str, JSONValue]]:
+    """Build direct-call occurrences from raw Clang nodes and source locations.
+
+    Parameters
+    ----------
+    normalized : dict[str, JSONValue]
+        Replayed reference facts bound to the raw capture.
+    ast : dict[str, object]
+        Raw Clang JSON AST.
+    source : bytes
+        Exact captured translation-unit bytes.
+    source_path : pathlib.Path
+        Bound translation-unit path.
+    working_directory : pathlib.Path
+        Compile-command working directory for relative AST paths.
+    source_key : str or None
+        Repository-relative source key for stable caller identities.
+
+    Returns
+    -------
+    list[dict[str, JSONValue]]
+        One source-owned direct-call occurrence per raw CallExpr.
+
+    Raises
+    ------
+    OracleFormatError
+        If source calls are not exhaustive, direct, caller-bound, or physically
+        anchored by a supported spelling or expansion location.
+    """
+    location_files: dict[int, Path | None] = {}
+    active_file: list[Path | None] = [None]
+    node_ids: dict[str, dict[str, object]] = {}
+
+    def annotate(value: object) -> None:
+        if isinstance(value, list):
+            for child in value:
+                annotate(child)
+        elif isinstance(value, dict):
+            node_id = value.get("id")
+            kind = value.get("kind")
+            if (
+                isinstance(node_id, str)
+                and isinstance(kind, str)
+                and any(key in value for key in ("loc", "range", "inner"))
+            ):
+                node_ids[node_id] = value
+            if "offset" in value:
+                explicit_path = value.get("file")
+                if isinstance(explicit_path, str):
+                    raw_path = Path(explicit_path)
+                    active_file[0] = (
+                        raw_path.resolve()
+                        if raw_path.is_absolute()
+                        else (working_directory / raw_path).resolve()
+                    )
+                location_files[id(value)] = active_file[0]
+            for key, child in value.items():
+                if key not in {"file", "includedFrom"}:
+                    annotate(child)
+
+    annotate(ast)
+    source_path = source_path.resolve()
+    source_functions: dict[str, dict[str, JSONValue]] = {}
+    expected: list[dict[str, JSONValue]] = []
+    unsupported: list[str] = []
+    transparent = {
+        "ConstantExpr",
+        "ExprWithCleanups",
+        "ImplicitCastExpr",
+        "ParenExpr",
+        "MaterializeTemporaryExpr",
+    }
+
+    def direct_reference(call: dict[str, object]) -> dict[str, object] | None:
+        children = call.get("inner")
+        if not isinstance(children, list) or not children:
+            return None
+        current: object = children[0]
+        while isinstance(current, dict):
+            kind = current.get("kind")
+            if kind == "DeclRefExpr":
+                reference = current.get("referencedDecl")
+                if (
+                    isinstance(reference, dict)
+                    and reference.get("kind") == "FunctionDecl"
+                ):
+                    return reference
+                return None
+            if kind not in transparent:
+                return None
+            nested = current.get("inner")
+            if not isinstance(nested, list) or len(nested) != 1:
+                return None
+            current = nested[0]
+        return None
+
+    def point_location(
+        value: object,
+    ) -> tuple[dict[str, object] | None, Path | None]:
+        if not isinstance(value, dict):
+            return None, None
+        file_path = location_files.get(id(value))
+        return value, file_path
+
+    def choose_source_point(
+        call_begin: object, callee_begin: object
+    ) -> tuple[str, dict[str, object], Path] | None:
+        if not isinstance(call_begin, dict):
+            return None
+        spelling = call_begin.get("spellingLoc")
+        expansion = call_begin.get("expansionLoc")
+        if isinstance(spelling, dict) or isinstance(expansion, dict):
+            spelling_point, spelling_path = point_location(spelling)
+            expansion_point, expansion_path = point_location(expansion)
+            if (
+                expansion_point is not None
+                and expansion_point.get("isMacroArgExpansion") is True
+                and spelling_path == source_path
+                and spelling_point is not None
+            ):
+                return "macro_argument", spelling_point, source_path
+            if expansion_point is not None and expansion_path == source_path:
+                return "macro_replacement", expansion_point, source_path
+            if spelling_path == source_path and spelling_point is not None:
+                unsupported.append(
+                    "macro spelling is source-owned without proven argument expansion"
+                )
+                return None
+            return None
+        call_point, call_path = point_location(call_begin)
+        if call_point is None or call_path != source_path:
+            return None
+        callee_point, callee_path = point_location(callee_begin)
+        if callee_point is None or callee_path != source_path:
+            unsupported.append("source-written call has no source-owned callee point")
+            return None
+        return "source_written", callee_point, source_path
+
+    def source_definition(node: dict[str, object]) -> tuple[str, int, str] | None:
+        location = node.get("loc")
+        if (
+            not isinstance(location, dict)
+            or location_files.get(id(location)) != source_path
+        ):
+            return None
+        children = node.get("inner")
+        name, type_value = node.get("name"), node.get("type")
+        if (
+            not isinstance(children, list)
+            or not any(
+                isinstance(child, dict)
+                and child.get("kind") in {"CompoundStmt", "CXXTryStmt"}
+                for child in children
+            )
+            or not isinstance(name, str)
+            or not isinstance(type_value, dict)
+            or not isinstance(type_value.get("qualType"), str)
+        ):
+            return None
+        offset = location.get("offset")
+        if (
+            not isinstance(offset, int)
+            or isinstance(offset, bool)
+            or not 0 <= offset < len(source)
+        ):
+            return None
+        line = source.count(b"\n", 0, offset) + 1
+        return name, line, cast("str", type_value["qualType"])
+
+    def collect_source_definitions(value: object) -> None:
+        if isinstance(value, list):
+            for child in value:
+                collect_source_definitions(child)
+        elif isinstance(value, dict):
+            if value.get("kind") == "FunctionDecl":
+                definition = source_definition(value)
+                node_id = value.get("id")
+                if definition is not None and isinstance(node_id, str):
+                    source_functions[node_id] = {
+                        "name": definition[0],
+                        "definition_line": definition[1],
+                        "type": definition[2],
+                    }
+            for child in value.values():
+                collect_source_definitions(child)
+
+    collect_source_definitions(ast)
+
+    def visit(  # noqa: C901, PLR0912 -- exhaustive raw call occurrence walk
+        node: object, caller: tuple[str, int, str] | None
+    ) -> None:
+        if not isinstance(node, dict):
+            return
+        kind = node.get("kind")
+        next_caller = caller
+        if kind == "FunctionDecl":
+            next_caller = source_definition(node)
+        if kind == "CallExpr":
+            call_range = node.get("range")
+            call_begin = (
+                call_range.get("begin") if isinstance(call_range, dict) else None
+            )
+            callee = direct_reference(node)
+            callee_range = None
+            if isinstance(node.get("inner"), list) and node["inner"]:
+                first = node["inner"][0]
+                while isinstance(first, dict) and first.get("kind") in transparent:
+                    nested = first.get("inner")
+                    first = (
+                        nested[0]
+                        if isinstance(nested, list) and len(nested) == 1
+                        else None
+                    )
+                callee_range = first.get("range") if isinstance(first, dict) else None
+            callee_begin = (
+                callee_range.get("begin") if isinstance(callee_range, dict) else None
+            )
+            selected = choose_source_point(call_begin, callee_begin)
+            if selected is not None:
+                origin, point, _ = selected
+                if callee is None or not isinstance(callee.get("id"), str):
+                    unsupported.append(
+                        "source call target is not a direct FunctionDecl reference"
+                    )
+                elif caller is None:
+                    unsupported.append(
+                        "source call has no source-owned caller definition"
+                    )
+                else:
+                    offset, token_length = point.get("offset"), point.get("tokLen")
+                    target_name = callee.get("name")
+                    target_type = callee.get("type")
+                    reference_id = cast("str", callee["id"])
+                    if (
+                        not isinstance(offset, int)
+                        or isinstance(offset, bool)
+                        or not isinstance(token_length, int)
+                        or isinstance(token_length, bool)
+                        or token_length <= 0
+                        or not isinstance(target_name, str)
+                        or not isinstance(target_type, dict)
+                        or not isinstance(target_type.get("qualType"), str)
+                        or offset < 0
+                        or offset + token_length > len(source)
+                    ):
+                        unsupported.append(
+                            "source call lacks a physical callee or expansion token"
+                        )
+                    else:
+                        token = source[offset : offset + token_length]
+                        if (
+                            origin != "macro_replacement"
+                            and token != target_name.encode("utf-8")
+                        ):
+                            unsupported.append(
+                                "call spelling differs from the referenced callee"
+                            )
+                        elif origin == "macro_replacement":
+                            invocation_tail = offset + token_length
+                            while (
+                                invocation_tail < len(source)
+                                and source[invocation_tail] in b" \t\r\n"
+                            ):
+                                invocation_tail += 1
+                            if (
+                                re.fullmatch(rb"[A-Za-z_][A-Za-z0-9_]*", token) is None
+                                or invocation_tail >= len(source)
+                                or source[invocation_tail] != ord("(")
+                            ):
+                                unsupported.append(
+                                    "macro replacement expansion lacks a source function-like invocation"
+                                )
+                        line = source.count(b"\n", 0, offset) + 1
+                        column = offset - source.rfind(b"\n", 0, offset) - 1
+                        target_node = node_ids.get(reference_id)
+                        target_definition = None
+                        seen: set[str] = set()
+                        pending = [reference_id]
+                        while pending:
+                            current_id = pending.pop()
+                            if current_id in seen:
+                                continue
+                            seen.add(current_id)
+                            current = node_ids.get(current_id)
+                            if current is None or current.get("kind") != "FunctionDecl":
+                                continue
+                            if current_id in source_functions:
+                                candidate = source_functions[current_id]
+                                if (
+                                    target_definition is not None
+                                    and candidate != target_definition
+                                ):
+                                    target_definition = None
+                                    unsupported.append(
+                                        "call target resolves to multiple source definitions"
+                                    )
+                                    break
+                                target_definition = candidate
+                            previous = current.get("previousDecl")
+                            if isinstance(previous, str):
+                                pending.append(previous)
+                        if target_node is None:
+                            unsupported.append(
+                                "referenced FunctionDecl id is absent from raw AST"
+                            )
+                        else:
+                            if target_definition is not None:
+                                definition_type = target_definition.get("type")
+                                if definition_type != target_type["qualType"]:
+                                    unsupported.append(
+                                        "referenced target type differs from its source definition"
+                                    )
+                            expected.append(
+                                {
+                                    "line": line,
+                                    "column": column,
+                                    "origin": origin,
+                                    "caller_name": caller[0],
+                                    "caller_definition_line": caller[1],
+                                    "caller_stable_id": (
+                                        f"c:function:{source_key}:{caller[0]}"
+                                        if source_key is not None
+                                        else None
+                                    ),
+                                    "target_name": target_name,
+                                    "target_type": cast("str", target_type["qualType"]),
+                                    "target_definition": target_definition,
+                                    "resolved": target_definition is not None,
+                                    "target_reference_id": reference_id,
+                                }
+                            )
+        children = node.get("inner")
+        if isinstance(children, list):
+            for child in children:
+                visit(child, next_caller)
+
+    visit(ast, None)
+    if expected and source_key is None:
+        unsupported.append("source key is required to bind caller stable identities")
+    if unsupported:
+        _fail("raw_ast.calls", f"unsupported source call evidence: {unsupported[:3]}")
+    facts = _object(normalized.get("facts"), "normalized.facts")
+    normalized_calls = _as_rows(facts.get("calls"), "normalized.calls")
+
+    def normalized_caller(row: dict[str, JSONValue]) -> JSONValue:
+        """Return the innermost normalized caller when present.
+
+        Parameters
+        ----------
+        row : dict[str, JSONValue]
+            Normalized call fact.
+
+        Returns
+        -------
+        JSONValue
+            Last caller-chain value, or None when absent.
+        """
+        chain = row.get("caller_chain")
+        if not isinstance(chain, list) or not chain:
+            return None
+        return chain[-1]
+
+    raw_projection = Counter(
+        _canonical(
+            cast(
+                "JSONValue",
+                {
+                    "caller": row["caller_name"],
+                    "line": row["line"],
+                    "target": row["target_name"],
+                    "type": row["target_type"],
+                },
+            )
+        )
+        for row in expected
+    )
+    normalized_projection = Counter(
+        _canonical(
+            cast(
+                "JSONValue",
+                {
+                    "caller": normalized_caller(row),
+                    "line": row.get("line"),
+                    "target": _object(
+                        row.get("direct_target"), "normalized.call.direct_target"
+                    ).get("name"),
+                    "type": _object(
+                        row.get("direct_target"), "normalized.call.direct_target"
+                    ).get("type"),
+                },
+            )
+        )
+        for row in normalized_calls
+    )
+    if raw_projection != normalized_projection:
+        _fail(
+            "raw_ast.calls",
+            "raw source calls differ from the replayed normalized multiset",
+        )
+    return expected
+
+
+def _grade_source_call_rows(
+    expected: list[dict[str, JSONValue]],
+    backend_rows: dict[str, dict[str, JSONValue]],
+    source_key: str | None,
+) -> dict[str, JSONValue]:
+    """Compare raw source call occurrences with persisted backend call rows.
+
+    Parameters
+    ----------
+    expected : list[dict[str, JSONValue]]
+        Raw AST occurrences with bound source coordinates and caller facts.
+    backend_rows : dict[str, dict[str, JSONValue]]
+        Selected call rows from SQLite and DuckDB.
+    source_key : str or None
+        Repository-relative source key used to derive stable source identities.
+
+    Returns
+    -------
+    dict[str, JSONValue]
+        Call occurrence comparison, with unresolved targets held.
+    """
+    expected_projection = Counter(
+        _canonical(
+            cast(
+                "JSONValue",
+                {
+                    key: row[key]
+                    for key in (
+                        "line",
+                        "column",
+                        "origin",
+                        "caller_name",
+                        "caller_stable_id",
+                        "target_name",
+                        "resolved",
+                    )
+                },
+            )
+        )
+        for row in expected
+    )
+    observed: dict[str, Counter[str]] = {}
+    failures: list[dict[str, JSONValue]] = []
+    unresolved_counts: dict[str, int] = {}
+    resolved_counts: dict[str, int] = {}
+    for backend, case in backend_rows.items():
+        rows = _as_rows(case.get("calls"), f"{backend}.calls")
+        projection: list[dict[str, JSONValue]] = []
+        unresolved = 0
+        resolved = 0
+        for row in rows:
+            target_name = (
+                row.get("callee_qualified_name")
+                if row.get("resolved") is True
+                else row.get("unresolved_target_qualified_name")
+            )
+            projection.append(
+                {
+                    "line": row.get("line"),
+                    "column": row.get("column"),
+                    "origin": row.get("origin"),
+                    "caller_name": row.get("caller_qualified_name"),
+                    "caller_stable_id": row.get("caller_stable_id"),
+                    "target_name": target_name,
+                    "resolved": row.get("resolved"),
+                }
+            )
+            target_usr = row.get("target_identity_value")
+            if (
+                row.get("target_identity_namespace") != "clang.usr.v1"
+                or not isinstance(target_usr, str)
+                or not target_usr
+            ):
+                failures.append(
+                    {
+                        "backend": backend,
+                        "reason": "target USR field is absent or malformed",
+                    }
+                )
+            if row.get("resolution_mode") != "exact":
+                failures.append(
+                    {"backend": backend, "reason": "call resolution mode is not exact"}
+                )
+            if row.get("resolved") is True:
+                resolved += 1
+                target_definition = next(
+                    (
+                        expected_row.get("target_definition")
+                        for expected_row in expected
+                        if expected_row.get("line") == row.get("line")
+                        and expected_row.get("column") == row.get("column")
+                        and expected_row.get("target_name") == target_name
+                        and expected_row.get("origin") == row.get("origin")
+                    ),
+                    None,
+                )
+                if not isinstance(target_definition, dict):
+                    failures.append(
+                        {
+                            "backend": backend,
+                            "reason": "resolved callee lacks a source definition",
+                        }
+                    )
+                else:
+                    definition_name = target_definition.get("name")
+                    definition_line = target_definition.get("definition_line")
+                    definition_type = target_definition.get("type")
+                    if not isinstance(definition_type, str):
+                        failures.append(
+                            {
+                                "backend": backend,
+                                "reason": "resolved target lacks a source definition type",
+                            }
+                        )
+                        continue
+                    return_type, parameter_types = _parse_simple_function_type(
+                        definition_type
+                    )
+                    expected_stable_id = f"c:function:{source_key}:{definition_name}"
+                    if (
+                        row.get("callee_stable_id") != expected_stable_id
+                        or row.get("callee_qualified_name") != definition_name
+                        or row.get("callee_definition_line") != definition_line
+                        or row.get("callee_source") != source_key
+                        or row.get("return_type") != return_type
+                        or row.get("parameter_types") != parameter_types
+                    ):
+                        failures.append(
+                            {
+                                "backend": backend,
+                                "reason": "resolved callee identity differs from raw source definition",
+                            }
+                        )
+            else:
+                unresolved += 1
+                if (
+                    row.get("resolved") is not False
+                    or row.get("callee_stable_id") is not None
+                    or row.get("callee_qualified_name") is not None
+                    or row.get("callee_source") is not None
+                    or row.get("callee_definition_line") is not None
+                    or row.get("parameter_types") is not None
+                    or row.get("return_type") is not None
+                    or row.get("unresolved_target_qualified_name") != target_name
+                ):
+                    failures.append(
+                        {
+                            "backend": backend,
+                            "reason": "unresolved call row has inconsistent target state",
+                        }
+                    )
+        observed[backend] = Counter(
+            _canonical(cast("JSONValue", row)) for row in projection
+        )
+        unresolved_counts[backend] = unresolved
+        resolved_counts[backend] = resolved
+    parity = observed.get("sqlite") == observed.get("duckdb") and len(observed) == 2
+    exact = {
+        backend: value == expected_projection for backend, value in observed.items()
+    }
+    full_rows = {
+        backend: Counter(
+            _canonical(cast("JSONValue", row))
+            for row in _as_rows(case.get("calls"), f"{backend}.calls")
+        )
+        for backend, case in backend_rows.items()
+    }
+    full_backend_parity = (
+        full_rows.get("sqlite") == full_rows.get("duckdb") and len(full_rows) == 2
+    )
+    if not parity:
+        failures.append({"reason": "backend occurrence projections differ"})
+    if not full_backend_parity:
+        failures.append(
+            {"reason": "backend call rows differ beyond the source projection"}
+        )
+    for backend, matches in exact.items():
+        if not matches:
+            failures.append(
+                {"backend": backend, "reason": "raw AST occurrence multiset differs"}
+            )
+    unresolved_total = max(unresolved_counts.values(), default=0)
+    target_usr_proved = False
+    no_calls = not expected and not any(unresolved_counts.values())
+    state = "graded" if no_calls and not failures else "held"
+    return cast(
+        "dict[str, JSONValue]",
+        {
+            "state": state,
+            "semantic_validation": "raw-Clang-AST-origin-aware-occurrence-multiset",
+            "expected_count": len(expected),
+            "observed_counts": {
+                backend: sum(counter.values()) for backend, counter in observed.items()
+            },
+            "exact_occurrence_multiset_by_backend": exact,
+            "backend_occurrence_parity": parity,
+            "full_backend_row_parity": full_backend_parity,
+            "source_resolved_target_count": min(resolved_counts.values(), default=0),
+            "unresolved_target_count": unresolved_total,
+            "target_usr_verified": target_usr_proved,
+            "target_usr_limitation": (
+                "Raw Clang JSON AST does not emit USRs; no USR values were inferred."
+            ),
+            "failures": failures,
+        },
+    )
 
 
 def grade_source_owned_ast_evidence(  # noqa: C901, PLR0912, PLR0915 -- end-to-end evidence chain
@@ -3309,6 +3949,7 @@ def grade_source_owned_ast_evidence(  # noqa: C901, PLR0912, PLR0915 -- end-to-e
         rows_by_backend,
         normalizer_path,
         profile.working_directory,
+        request.source_key,
     )
     report["evidence"] = cast(
         "JSONValue",
