@@ -78,6 +78,33 @@ class FrontendInclude:
 
 
 @dataclass(frozen=True)
+class FrontendMacroDefinitionLink:
+    """Identify the active physical definition selected for one expansion.
+
+    Parameters
+    ----------
+    name : str
+        Compiler-reported macro name at the definition site.
+    name_token : str
+        Exact source spelling of the macro name token.
+    location : SourcePoint
+        Physical definition-name location reported by Clang.
+    function_like : bool
+        Whether the selected definition takes parameters.
+
+    Returns
+    -------
+    None
+        Immutable link from one expansion event to its active definition.
+    """
+
+    name: str
+    name_token: str
+    location: SourcePoint
+    function_like: bool
+
+
+@dataclass(frozen=True)
 class FrontendPreprocessorEvent:
     """One macro or evaluated conditional event emitted by Clang.
 
@@ -109,6 +136,13 @@ class FrontendPreprocessorEvent:
         Callback source location with spelling and expansion provenance.
     span : SourceSpan or None
         Callback expression range when available.
+    macro_definition_link : FrontendMacroDefinitionLink or None
+        Active macro definition selected by Clang for a v6 expansion event.
+    macro_definition_link_status : {'resolved', 'unavailable', 'legacy_protocol'} or None
+        Whether a link was resolved, explicitly unavailable, or absent because
+        the native helper used protocol v3 through v5.
+    macro_definition_link_reason : str or None
+        Stable reason when the v6 helper could not expose a physical definition.
 
     Returns
     -------
@@ -129,6 +163,11 @@ class FrontendPreprocessorEvent:
     invocation: str | None
     location: SourcePoint | None
     span: SourceSpan | None
+    macro_definition_link: FrontendMacroDefinitionLink | None = None
+    macro_definition_link_status: (
+        Literal["resolved", "unavailable", "legacy_protocol"] | None
+    ) = None
+    macro_definition_link_reason: str | None = None
 
 
 @dataclass(frozen=True)

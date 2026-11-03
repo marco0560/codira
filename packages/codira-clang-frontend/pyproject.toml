@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codira-clang-frontend"
-version = "0.4.0"
+version = "0.4.1"
 description = "Optional shared Clang LibTooling frontend for Codira C-family analyzers"
 readme = "README.md"
 requires-python = ">=3.13"

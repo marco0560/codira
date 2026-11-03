@@ -101,6 +101,23 @@ and definition share one USR. Calls without a reported owner remain visible as
 unowned calls. Unknown provenance stays `unknown`; the frontend does not
 promote it to source-written.
 
+Native protocol v6 adds a `macro_definition_link` to every macro-expansion
+event. A resolved link names the active physical definition selected by Clang
+and includes the exact source spelling of its name token, spelling/expansion
+coordinates, and function-like status. When Clang cannot provide a physical
+definition record, the event carries an explicit bounded unavailable reason.
+The link comes from the active `MacroDefinition` passed to the preprocessor
+callback, so same-name redefinitions retain their selected definition site.
+It does not infer a definition from a macro name alone.
+
+Protocols v3 through v5 remain readable for existing frontend behavior. Their
+macro-expansion events decode with `macro_definition_link_status` set to
+`legacy_protocol` and no link; a v5 response cannot claim the v6-only field.
+Consumers that require the definition edge must hold legacy events and v6
+unavailable links. They must also verify the returned path and byte offset
+against the exact source/profile dependency hashes before using the link as
+source evidence.
+
 Malformed protocol data, helper failure, nonzero Clang tool return codes, and
 fatal/error diagnostics cannot produce a complete successful result. Optional
 frontend unavailability or a held/failed result is for the analyzer plugin to

@@ -6,10 +6,19 @@ import pytest
 
 import hashlib
 import json
+from types import SimpleNamespace
 from codira.generated import (
     CompilerObservedCallableProvenance,
     generated_provenance_payload,
     generated_provenance_rows,
+)
+from codira.models import (
+    AnalysisResult,
+    DeclarationArtifact,
+    DocumentationArtifact,
+    FunctionArtifact,
+    ImportArtifact,
+    ModuleArtifact,
 )
 from codira_clang_frontend.contracts import (
     DependencyClosure,
@@ -23,6 +32,7 @@ import tomllib
 from pathlib import Path
 
 
+import codira_analyzer_c as c_analyzer_module
 from codira_analyzer_c import CAnalyzer, _analysis_from_clang_result, build_analyzer
 from codira_clang_frontend.frontend import _decode_entities
 from codira_clang_frontend.contracts import (
@@ -51,7 +61,7 @@ def test_c_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.21"
+    assert project["project"]["version"] == "2.0.22"
     assert "codira>=2.0.0,<3.0.0" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "c": "codira_analyzer_c:build_analyzer"
@@ -75,7 +85,7 @@ def test_c_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CAnalyzer)
     assert analyzer.name == "c"
-    assert analyzer.version == "30"
+    assert analyzer.version == "31"
 
 
 def test_c_clang_frontend_is_opt_in_and_missing_profile_is_visible(
@@ -109,6 +119,172 @@ def test_c_clang_frontend_is_opt_in_and_missing_profile_is_visible(
     assert analysis.status.coverage_state == "partial"
     assert analysis.status.target_contract["selected_frontend"] == "tree-sitter"
     assert analysis.status.diagnostics[-1].category == "clang_frontend_fallback"
+
+
+def _clang_output_options_fixture(path: Path) -> AnalysisResult:
+    """Build normalized C artifacts for frontend-option routing tests.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Source path assigned to each test artifact.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        C analysis containing each output category affected by Clang options.
+    """
+    function = FunctionArtifact(
+        name="run",
+        stable_id="c:function:run",
+        lineno=1,
+        end_lineno=1,
+        signature="int run(void)",
+        docstring="Run docs",
+        has_docstring=1,
+        is_method=0,
+        is_public=1,
+        parameters=(),
+        returns_value=1,
+        yields_value=0,
+        raises=0,
+        has_asserts=0,
+        decorators=(),
+        calls=(),
+        callable_refs=(),
+    )
+    documentation = DocumentationArtifact(
+        stable_id="doc:function:run",
+        kind="declaration",
+        source_format="doxygen",
+        source_path=path,
+        lineno=1,
+        end_lineno=1,
+        title="run",
+        heading_path=(),
+        text="Run docs",
+        owner_stable_id=function.stable_id,
+        owner_kind="function",
+        attachment_confidence="explicit",
+    )
+    return AnalysisResult(
+        source_path=path,
+        module=ModuleArtifact("sample", "c:module:sample", "File docs", 1),
+        classes=(),
+        functions=(function,),
+        declarations=(
+            DeclarationArtifact(
+                "PROJECT_MACRO", "macro:project", "macro", 1, "#define PROJECT_MACRO 1"
+            ),
+            DeclarationArtifact(
+                "VALUE",
+                "c:constant:VALUE",
+                "constant",
+                1,
+                "int VALUE",
+                docstring="Value docs",
+            ),
+        ),
+        imports=(
+            ImportArtifact("stdio.h", None, 1, "include_system"),
+            ImportArtifact("local.h", None, 1, "include_local"),
+        ),
+        documentation=(documentation,),
+    )
+
+
+def test_c_clang_route_applies_output_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Apply configured output filters to normalized Clang results.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary source path used by the mocked Clang route.
+    monkeypatch : pytest.MonkeyPatch
+        Replaces profile execution and native mapping with fixed normalized facts.
+
+    Returns
+    -------
+    None
+        The test verifies filters for comments, macros, imports, and docs.
+    """
+    source = tmp_path / "sample.c"
+    source.write_text("int run(void) { return 1; }\n", encoding="utf-8")
+    expected = _clang_output_options_fixture(source)
+    fake_frontend_result = SimpleNamespace(callables=(), declarations=())
+    analyzer = CAnalyzer()
+    analyzer.configure(
+        {
+            "frontend": "clang",
+            "use_leading_comments": False,
+            "include_system_includes": False,
+            "emit_macros": False,
+        }
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "_try_clang_frontend",
+        lambda _path, _root: (fake_frontend_result, ""),
+    )
+    monkeypatch.setattr(
+        c_analyzer_module,
+        "_analysis_from_clang_result",
+        lambda _path, _root, _result, *, context_identity=None: expected,
+    )
+
+    analysis = analyzer.analyze_file(source, tmp_path)
+
+    assert analysis.module.docstring is None
+    assert analysis.module.has_docstring == 0
+    assert analysis.functions[0].docstring is None
+    assert analysis.functions[0].has_docstring == 0
+    assert [item.kind for item in analysis.declarations] == ["constant"]
+    assert analysis.declarations[0].docstring is None
+    assert [item.kind for item in analysis.imports] == ["include_local"]
+    assert [item.title for item in analysis.documentation] == ["run"]
+
+
+def test_c_clang_doxygen_option_keeps_semantic_docstrings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Disable Doxygen artifacts without clearing artifact docstring fields.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary source path used by the mocked Clang route.
+    monkeypatch : pytest.MonkeyPatch
+        Replaces profile execution and native mapping with fixed normalized facts.
+
+    Returns
+    -------
+    None
+        The test checks independent behavior of documentation output toggles.
+    """
+    source = tmp_path / "sample.c"
+    source.write_text("int run(void) { return 1; }\n", encoding="utf-8")
+    expected = _clang_output_options_fixture(source)
+    fake_frontend_result = SimpleNamespace(callables=(), declarations=())
+    analyzer = CAnalyzer()
+    analyzer.configure({"frontend": "clang", "emit_doxygen_documentation": False})
+    monkeypatch.setattr(
+        analyzer,
+        "_try_clang_frontend",
+        lambda _path, _root: (fake_frontend_result, ""),
+    )
+    monkeypatch.setattr(
+        c_analyzer_module,
+        "_analysis_from_clang_result",
+        lambda _path, _root, _result, *, context_identity=None: expected,
+    )
+
+    analysis = analyzer.analyze_file(source, tmp_path)
+
+    assert analysis.documentation == ()
+    assert analysis.functions[0].docstring == "Run docs"
+    assert analysis.module.docstring == "File docs"
 
 
 def test_c_clang_projection_emits_fields_only_for_file_scope_records(

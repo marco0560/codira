@@ -21,7 +21,7 @@ python-preference = "only-managed"
 
 [dependency-groups]
 dev = [
-    "codira-clang-frontend==0.4.0",
+    "codira-clang-frontend==0.4.1",
     "mypy",
     "ruff",
     "semgrep",
@@ -39,8 +39,8 @@ dev = [
     "codira-installer==2.0.8",
     "codira-analyzer-python==2.0.2",
     "codira-analyzer-json==2.0.0",
-    "codira-analyzer-c==2.0.21",
-    "codira-analyzer-cpp==2.0.51",
+    "codira-analyzer-c==2.0.22",
+    "codira-analyzer-cpp==2.0.52",
     "codira-analyzer-rust==2.0.3",
     "codira-analyzer-javascript==2.0.0",
     "codira-analyzer-typescript==2.0.3",
@@ -80,8 +80,8 @@ bundle-official = [
     "einops>=0.8,<1.0",
     "codira-analyzer-python==2.0.2",
     "codira-analyzer-json==2.0.0",
-    "codira-analyzer-c==2.0.21",
-    "codira-analyzer-cpp==2.0.51",
+    "codira-analyzer-c==2.0.22",
+    "codira-analyzer-cpp==2.0.52",
     "codira-analyzer-rust==2.0.3",
     "codira-analyzer-javascript==2.0.0",
     "codira-analyzer-typescript==2.0.3",

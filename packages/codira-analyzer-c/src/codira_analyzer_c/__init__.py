@@ -4129,7 +4129,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "30"
+    version = "31"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 
@@ -4559,11 +4559,74 @@ class CAnalyzer:
             result,
             context_identity=self.analysis_input_fingerprint(path, root),
         )
-        return mapped or self._clang_header_held_result(
-            path,
-            root,
-            "clang_header_entities_outside_supported_dto_scope",
-            frontend_result=result,
+        return (
+            self._apply_clang_output_options(mapped)
+            if mapped is not None
+            else self._clang_header_held_result(
+                path,
+                root,
+                "clang_header_entities_outside_supported_dto_scope",
+                frontend_result=result,
+            )
+        )
+
+    def _apply_clang_output_options(self, analysis: AnalysisResult) -> AnalysisResult:
+        """Apply the C analyzer output filters to normalized Clang artifacts.
+
+        Parameters
+        ----------
+        analysis : codira.models.AnalysisResult
+            Fully mapped Clang analysis before user-facing output filters.
+
+        Returns
+        -------
+        codira.models.AnalysisResult
+            Analysis with the same configured comment, macro, import, and
+            documentation options as the Tree-sitter route.
+        """
+        module = analysis.module
+        functions = analysis.functions
+        declarations = analysis.declarations
+        if not self._use_leading_comments:
+            module = replace(module, docstring=None, has_docstring=0)
+            functions = tuple(
+                replace(function, docstring=None, has_docstring=0)
+                for function in functions
+            )
+            declarations = tuple(
+                replace(declaration, docstring=None) for declaration in declarations
+            )
+        removed_stable_ids: set[str] = set()
+        if not self._emit_macros:
+            removed_stable_ids = {
+                declaration.stable_id
+                for declaration in declarations
+                if declaration.kind == "macro"
+            }
+            declarations = tuple(
+                declaration
+                for declaration in declarations
+                if declaration.kind != "macro"
+            )
+        imports = analysis.imports
+        if not self._include_system_includes:
+            imports = tuple(item for item in imports if item.kind != "include_system")
+        documentation = analysis.documentation
+        if not self._emit_doxygen_documentation:
+            documentation = ()
+        elif removed_stable_ids:
+            documentation = tuple(
+                item
+                for item in documentation
+                if item.owner_stable_id not in removed_stable_ids
+            )
+        return replace(
+            analysis,
+            module=module,
+            functions=functions,
+            declarations=declarations,
+            imports=imports,
+            documentation=documentation,
         )
 
     def _clang_header_held_result(
@@ -4865,7 +4928,7 @@ class CAnalyzer:
                     context_identity=context_identity,
                 )
                 if mapped is not None:
-                    return mapped
+                    return self._apply_clang_output_options(mapped)
                 clang_fallback_reason = "clang_entities_outside_supported_c_dto_scope"
         context = read_include_context(
             path,

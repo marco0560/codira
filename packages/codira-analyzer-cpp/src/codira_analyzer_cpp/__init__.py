@@ -6762,7 +6762,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "50"
+    version = "51"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -7283,11 +7283,92 @@ class CppAnalyzer:
             result,
             context_identity=self.analysis_input_fingerprint(path, root),
         )
-        return mapped or self._clang_header_held_result(
-            path,
-            root,
-            "clang_header_entities_outside_supported_dto_scope",
-            frontend_result=result,
+        return (
+            self._apply_clang_output_options(mapped)
+            if mapped is not None
+            else self._clang_header_held_result(
+                path,
+                root,
+                "clang_header_entities_outside_supported_dto_scope",
+                frontend_result=result,
+            )
+        )
+
+    def _apply_clang_output_options(self, analysis: AnalysisResult) -> AnalysisResult:
+        """Apply the C++ analyzer output filters to normalized Clang artifacts.
+
+        Parameters
+        ----------
+        analysis : codira.models.AnalysisResult
+            Fully mapped Clang analysis before user-facing output filters.
+
+        Returns
+        -------
+        codira.models.AnalysisResult
+            Analysis with the same configured comment, namespace, macro,
+            import, and documentation options as the Tree-sitter route.
+        """
+        module = analysis.module
+        classes = analysis.classes
+        functions = analysis.functions
+        declarations = analysis.declarations
+        if not self._use_leading_comments:
+            module = replace(module, docstring=None, has_docstring=0)
+            classes = tuple(
+                replace(
+                    item,
+                    docstring=None,
+                    has_docstring=0,
+                    methods=tuple(
+                        replace(method, docstring=None, has_docstring=0)
+                        for method in item.methods
+                    ),
+                )
+                for item in classes
+            )
+            functions = tuple(
+                replace(function, docstring=None, has_docstring=0)
+                for function in functions
+            )
+            declarations = tuple(
+                replace(declaration, docstring=None) for declaration in declarations
+            )
+        excluded_kinds: set[str] = set()
+        if not self._emit_namespaces:
+            excluded_kinds.add("namespace")
+        if not self._emit_macros:
+            excluded_kinds.add("macro")
+        removed_stable_ids = {
+            declaration.stable_id
+            for declaration in declarations
+            if declaration.kind in excluded_kinds
+        }
+        if excluded_kinds:
+            declarations = tuple(
+                declaration
+                for declaration in declarations
+                if declaration.kind not in excluded_kinds
+            )
+        imports = analysis.imports
+        if not self._include_system_includes:
+            imports = tuple(item for item in imports if item.kind != "include_system")
+        documentation = analysis.documentation
+        if not self._emit_doxygen_documentation:
+            documentation = ()
+        elif removed_stable_ids:
+            documentation = tuple(
+                item
+                for item in documentation
+                if item.owner_stable_id not in removed_stable_ids
+            )
+        return replace(
+            analysis,
+            module=module,
+            classes=classes,
+            functions=functions,
+            declarations=declarations,
+            imports=imports,
+            documentation=documentation,
         )
 
     def _clang_header_held_result(
@@ -7605,7 +7686,7 @@ class CppAnalyzer:
                     context_identity=context_identity,
                 )
                 if mapped is not None:
-                    return mapped
+                    return self._apply_clang_output_options(mapped)
                 clang_fallback_reason = "clang_entities_outside_supported_cpp_dto_scope"
         context = read_include_context(
             path, root, include_paths=self._include_search_paths

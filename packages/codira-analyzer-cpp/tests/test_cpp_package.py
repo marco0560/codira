@@ -8,6 +8,15 @@ import hashlib
 import json
 from codira.generated import CompilerObservedCallableProvenance
 from codira_clang_frontend.contracts import SourcePoint, SourcePosition, SourceSpan
+from codira.models import (
+    AnalysisResult,
+    ClassArtifact,
+    DeclarationArtifact,
+    DocumentationArtifact,
+    FunctionArtifact,
+    ImportArtifact,
+    ModuleArtifact,
+)
 
 import inspect
 from importlib.metadata import version
@@ -43,8 +52,8 @@ def test_cpp_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.51"
-    assert version("codira-analyzer-cpp") == "2.0.51"
+    assert project["project"]["version"] == "2.0.52"
+    assert version("codira-analyzer-cpp") == "2.0.52"
     assert (
         Path(inspect.getfile(CppAnalyzer)).resolve()
         == (
@@ -74,7 +83,7 @@ def test_cpp_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CppAnalyzer)
     assert analyzer.name == "cpp"
-    assert analyzer.version == "50"
+    assert analyzer.version == "51"
 
 
 def test_cpp_clang_frontend_is_opt_in_and_missing_profile_is_visible(
@@ -108,6 +117,207 @@ def test_cpp_clang_frontend_is_opt_in_and_missing_profile_is_visible(
     assert analysis.status.coverage_state == "partial"
     assert analysis.status.target_contract["selected_frontend"] == "tree-sitter"
     assert analysis.status.diagnostics[-1].category == "clang_frontend_fallback"
+
+
+def _clang_output_options_fixture(path: Path) -> AnalysisResult:
+    """Build normalized C++ artifacts for frontend-option routing tests.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Source path assigned to each test artifact.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        C++ analysis containing every Clang output category controlled by config.
+    """
+    method = FunctionArtifact(
+        name="method",
+        stable_id="cpp:method:Thing::method",
+        lineno=1,
+        end_lineno=1,
+        signature="void Thing::method()",
+        docstring="Method docs",
+        has_docstring=1,
+        is_method=1,
+        is_public=1,
+        parameters=(),
+        returns_value=0,
+        yields_value=0,
+        raises=0,
+        has_asserts=0,
+        decorators=(),
+        calls=(),
+        callable_refs=(),
+    )
+    function = FunctionArtifact(
+        name="run",
+        stable_id="cpp:function:run",
+        lineno=1,
+        end_lineno=1,
+        signature="int run()",
+        docstring="Run docs",
+        has_docstring=1,
+        is_method=0,
+        is_public=1,
+        parameters=(),
+        returns_value=1,
+        yields_value=0,
+        raises=0,
+        has_asserts=0,
+        decorators=(),
+        calls=(),
+        callable_refs=(),
+    )
+    namespace = DeclarationArtifact(
+        "api",
+        "cpp:namespace:api",
+        "namespace",
+        1,
+        "namespace api",
+        docstring="API docs",
+    )
+    macro = DeclarationArtifact("FLAG", "cpp:macro:FLAG", "macro", 1, "#define FLAG 1")
+    value = DeclarationArtifact(
+        "VALUE",
+        "cpp:constant:VALUE",
+        "constant",
+        1,
+        "int VALUE",
+        docstring="Value docs",
+    )
+    documentation = tuple(
+        DocumentationArtifact(
+            stable_id=f"doc:{owner.stable_id}",
+            kind="declaration",
+            source_format="doxygen",
+            source_path=path,
+            lineno=1,
+            end_lineno=1,
+            title=owner.name,
+            heading_path=(),
+            text=owner.docstring or "docs",
+            owner_stable_id=owner.stable_id,
+            owner_kind="declaration",
+            attachment_confidence="explicit",
+        )
+        for owner in (namespace, macro, value)
+    )
+    return AnalysisResult(
+        source_path=path,
+        module=ModuleArtifact("sample", "cpp:module:sample", "File docs", 1),
+        classes=(
+            ClassArtifact("Thing", "cpp:type:Thing", 1, 1, "Type docs", 1, (method,)),
+        ),
+        functions=(function,),
+        declarations=(namespace, macro, value),
+        imports=(
+            ImportArtifact("vector", None, 1, "include_system"),
+            ImportArtifact("local.hpp", None, 1, "include_local"),
+        ),
+        documentation=documentation,
+    )
+
+
+def test_cpp_clang_route_applies_output_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Apply configured output filters to normalized Clang results.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary source path used by the mocked Clang route.
+    monkeypatch : pytest.MonkeyPatch
+        Replaces profile execution and native mapping with fixed normalized facts.
+
+    Returns
+    -------
+    None
+        The test verifies comment, namespace, macro, import, and docs filters.
+    """
+    source = tmp_path / "sample.cpp"
+    source.write_text("int run() { return 1; }\n", encoding="utf-8")
+    expected = _clang_output_options_fixture(source)
+    fake_frontend_result = SimpleNamespace(callables=(), declarations=())
+    analyzer = CppAnalyzer()
+    analyzer.configure(
+        {
+            "frontend": "clang",
+            "use_leading_comments": False,
+            "include_system_includes": False,
+            "emit_namespaces": False,
+            "emit_macros": False,
+        }
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "_try_clang_frontend",
+        lambda _path, _root: (fake_frontend_result, ""),
+    )
+    monkeypatch.setattr(
+        cpp_analyzer_module,
+        "_analysis_from_clang_result",
+        lambda _path, _root, _result, *, context_identity=None: expected,
+    )
+
+    analysis = analyzer.analyze_file(source, tmp_path)
+
+    assert analysis.module.docstring is None
+    assert analysis.module.has_docstring == 0
+    assert analysis.classes[0].docstring is None
+    assert analysis.classes[0].has_docstring == 0
+    assert analysis.classes[0].methods[0].docstring is None
+    assert analysis.classes[0].methods[0].has_docstring == 0
+    assert analysis.functions[0].docstring is None
+    assert analysis.functions[0].has_docstring == 0
+    assert [item.kind for item in analysis.declarations] == ["constant"]
+    assert analysis.declarations[0].docstring is None
+    assert [item.kind for item in analysis.imports] == ["include_local"]
+    assert [item.title for item in analysis.documentation] == ["VALUE"]
+
+
+def test_cpp_clang_doxygen_option_keeps_semantic_docstrings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Disable Doxygen records without clearing semantic docstring fields.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary source path used by the mocked Clang route.
+    monkeypatch : pytest.MonkeyPatch
+        Replaces profile execution and native mapping with fixed normalized facts.
+
+    Returns
+    -------
+    None
+        The test checks Doxygen output can be disabled independently.
+    """
+    source = tmp_path / "sample.cpp"
+    source.write_text("int run() { return 1; }\n", encoding="utf-8")
+    expected = _clang_output_options_fixture(source)
+    fake_frontend_result = SimpleNamespace(callables=(), declarations=())
+    analyzer = CppAnalyzer()
+    analyzer.configure({"frontend": "clang", "emit_doxygen_documentation": False})
+    monkeypatch.setattr(
+        analyzer,
+        "_try_clang_frontend",
+        lambda _path, _root: (fake_frontend_result, ""),
+    )
+    monkeypatch.setattr(
+        cpp_analyzer_module,
+        "_analysis_from_clang_result",
+        lambda _path, _root, _result, *, context_identity=None: expected,
+    )
+
+    analysis = analyzer.analyze_file(source, tmp_path)
+
+    assert analysis.documentation == ()
+    assert analysis.module.docstring == "File docs"
+    assert analysis.classes[0].docstring == "Type docs"
+    assert analysis.functions[0].docstring == "Run docs"
 
 
 def test_cpp_clang_projection_preserves_source_using_alias(tmp_path: Path) -> None:

@@ -503,7 +503,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-c"
-version = "2.0.21"
+version = "2.0.22"
 source = { editable = "packages/codira-analyzer-c" }
 dependencies = [
     { name = "codira" },
@@ -515,7 +515,7 @@ dependencies = [
 requires-dist = [
     { name = "black", marker = "extra == 'test'" },
     { name = "codira", specifier = ">=2.0.0,<3.0.0" },
-    { name = "codira-clang-frontend", marker = "extra == 'clang'", specifier = "==0.4.0" },
+    { name = "codira-clang-frontend", marker = "extra == 'clang'", specifier = "==0.4.1" },
     { name = "mypy", marker = "extra == 'test'" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "ruff", marker = "extra == 'test'" },
@@ -526,7 +526,7 @@ provides-extras = ["clang", "test"]
 
 [[package]]
 name = "codira-analyzer-cpp"
-version = "2.0.51"
+version = "2.0.52"
 source = { editable = "packages/codira-analyzer-cpp" }
 dependencies = [
     { name = "codira" },
@@ -538,7 +538,7 @@ dependencies = [
 requires-dist = [
     { name = "black", marker = "extra == 'test'" },
     { name = "codira", specifier = ">=2.0.0,<3.0.0" },
-    { name = "codira-clang-frontend", marker = "extra == 'clang'", specifier = "==0.4.0" },
+    { name = "codira-clang-frontend", marker = "extra == 'clang'", specifier = "==0.4.1" },
     { name = "mypy", marker = "extra == 'test'" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "ruff", marker = "extra == 'test'" },
@@ -749,7 +749,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-clang-frontend"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "packages/codira-clang-frontend" }
 
 [package.metadata]

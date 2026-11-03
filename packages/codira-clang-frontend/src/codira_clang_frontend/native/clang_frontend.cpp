@@ -524,7 +524,8 @@ public:
         {"name", clang::Lexer::getSpelling(Name, SM, LangOpts)},
         {"invocation", sourceText(Range, SM, LangOpts)},
         {"range", sourceRange(Range, SM)},
-        {"location", location(Name.getLocation(), SM)}});
+        {"location", location(Name.getLocation(), SM)},
+        {"macro_definition_link", macroDefinitionLink(Name, Definition)}});
   }
 
   void If(clang::SourceLocation Loc, clang::SourceRange Condition,
@@ -580,6 +581,78 @@ private:
 
   bool keepsLocation(clang::SourceLocation Loc) const {
     return ProjectionFile.empty() || isInPhysicalFile(Loc, SM, ProjectionFile);
+  }
+
+  Value physicalMacroDefinitionLocation(clang::SourceLocation Location) const {
+    const clang::SourceLocation FileLocation =
+        SM.getFileLoc(SM.getSpellingLoc(Location));
+    if (FileLocation.isInvalid())
+      return nullptr;
+    const clang::FileID File = SM.getFileID(FileLocation);
+    if (File.isInvalid())
+      return nullptr;
+    const auto FileEntry = SM.getFileEntryRefForID(File);
+    if (!FileEntry)
+      return nullptr;
+    bool InvalidBuffer = false;
+    const llvm::StringRef Buffer = SM.getBufferData(File, &InvalidBuffer);
+    const unsigned Offset = SM.getFileOffset(FileLocation);
+    if (InvalidBuffer || Offset >= Buffer.size())
+      return nullptr;
+
+    bool InvalidLine = false;
+    bool InvalidColumn = false;
+    const unsigned Line = SM.getLineNumber(File, Offset, &InvalidLine);
+    const unsigned Column = SM.getColumnNumber(File, Offset, &InvalidColumn);
+    if (InvalidLine || InvalidColumn || Line == 0 || Column == 0)
+      return nullptr;
+    auto makePhysicalCoordinate = [&]() -> Value {
+      return Object{{"path", FileEntry->getName().str()},
+                    {"line", Line},
+                    {"column", Column},
+                    {"offset", static_cast<int64_t>(Offset)}};
+    };
+    return Object{{"spelling", makePhysicalCoordinate()},
+                  {"expansion", makePhysicalCoordinate()},
+                  {"is_macro", false}};
+  }
+
+  Value macroDefinitionLink(const clang::Token &ExpansionName,
+                            const clang::MacroDefinition &Definition) const {
+    const clang::MacroInfo *Info = Definition.getMacroInfo();
+    if (!Info)
+      return Object{{"status", "unavailable"},
+                    {"reason", "definition_record_missing"}};
+    const auto Found = MacroDefinitions.find(Info);
+    if (Found == MacroDefinitions.end() || Found->second.Info != Info)
+      return Object{{"status", "unavailable"},
+                    {"reason", "definition_record_missing"}};
+    const MacroDefinitionRecord &Record = Found->second;
+    const std::string ExpansionSpelling =
+        clang::Lexer::getSpelling(ExpansionName, SM, LangOpts);
+    if (Record.Name != ExpansionSpelling)
+      return Object{{"status", "unavailable"},
+                    {"reason", "definition_name_mismatch"}};
+
+    const clang::SourceLocation FileLocation =
+        SM.getFileLoc(SM.getSpellingLoc(Record.Location));
+    if (FileLocation.isInvalid())
+      return Object{{"status", "unavailable"},
+                    {"reason", "definition_location_unavailable"}};
+    const std::string NameToken = sourceText(
+        clang::SourceRange(Record.Location, Record.Location), SM, LangOpts);
+    if (NameToken.empty())
+      return Object{{"status", "unavailable"},
+                    {"reason", "definition_location_unavailable"}};
+    Value PhysicalLocation = physicalMacroDefinitionLocation(Record.Location);
+    if (PhysicalLocation.kind() == Value::Null)
+      return Object{{"status", "unavailable"},
+                    {"reason", "definition_location_unavailable"}};
+    return Object{{"status", "resolved"},
+                  {"name", Record.Name},
+                  {"name_token", NameToken},
+                  {"location", std::move(PhysicalLocation)},
+                  {"function_like", Info->isFunctionLike()}};
   }
 
   Value macroDefinitionEvent(const MacroDefinitionRecord &Record) const {
@@ -1193,7 +1266,7 @@ int main() {
   const std::string ProjectionMode = ProjectionFile.empty()
                                          ? CaptureMode
                                          : "header_projection";
-  Object Output{{"schema_version", "codira.clang-frontend-native/5"},
+  Object Output{{"schema_version", "codira.clang-frontend-native/6"},
                 {"translation_unit_file", File->str()},
                 {"projection_file", ProjectionFile.empty()
                                          ? Value(nullptr)

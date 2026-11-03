@@ -29,6 +29,7 @@ import platform
 import re
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
@@ -500,6 +501,377 @@ def has_analysis_failures(indexed: dict[str, Any]) -> bool:
         or indexed.get("analysis_failures")
         or indexed.get("failed_files")
     )
+
+
+def audit_clang_frontend_database(
+    database: Path,
+    backend: str,
+    repository: Path,
+    source_hashes: dict[Path, str],
+    validated_profile_ids: dict[Path, str] | None = None,
+) -> dict[str, Any]:
+    """Classify every C/C++ source as Clang-proven or explicitly held.
+
+    Parameters
+    ----------
+    database : pathlib.Path
+        Closed backend database produced by the just-completed index stage.
+    backend : str
+        Backend name, either ``sqlite`` or ``duckdb``.
+    repository : pathlib.Path
+        Exact indexed corpus root.
+    source_hashes : dict[pathlib.Path, str]
+        Translation units and headers mapped to their captured source digests.
+    validated_profile_ids : dict[pathlib.Path, str] or None
+        Exact profile identities independently validated before preparation.
+
+    Returns
+    -------
+    dict[str, Any]
+        Machine-readable exact Clang counts, held paths and infrastructure
+        failures. Fallback is accounted as held and never as Clang evidence.
+    """
+    expected = {path.resolve(): digest for path, digest in source_hashes.items()}
+    rows: list[tuple[Any, ...]] = []
+    connection: Any
+    database_errors: tuple[type[BaseException], ...] = (
+        ImportError,
+        OSError,
+        sqlite3.Error,
+    )
+    try:
+        if backend == "sqlite":
+            connection = sqlite3.connect(f"file:{database.resolve()}?mode=ro", uri=True)
+        elif backend == "duckdb":
+            import duckdb
+
+            database_errors = (*database_errors, duckdb.Error)
+            connection = duckdb.connect(str(database.resolve()), read_only=True)
+        else:
+            return {"passed": False, "reason": f"unsupported backend: {backend}"}
+        try:
+            rows = connection.execute(
+                "SELECT files.path, files.hash, files.analyzer_name, "
+                "analysis_status.grammar, analysis_status.target_contract, "
+                "analysis_status.coverage_state, analysis_status.omitted_categories "
+                "FROM files LEFT JOIN analysis_status ON files.path = analysis_status.path"
+            ).fetchall()
+        finally:
+            connection.close()
+    except database_errors as error:
+        return {"passed": False, "reason": f"backend status read failed: {error}"}
+    observed: dict[Path, tuple[Any, ...]] = {}
+    failures: list[dict[str, str]] = []
+    for row in rows:
+        path = Path(str(row[0])).resolve()
+        if path in observed:
+            failures.append(
+                {"path": str(path), "reason": "duplicate persisted file row"}
+            )
+        observed[path] = row
+    held_sources: list[dict[str, str]] = []
+    tree_sitter_fallbacks = 0
+    clang_rows = 0
+    for path, source_hash in expected.items():
+        persisted_row = observed.get(path)
+        if persisted_row is None:
+            held_sources.append({"path": str(path), "reason": "no persisted file row"})
+            continue
+        classification, reason, is_fallback, row_failures = _classify_clang_status_row(
+            path,
+            source_hash,
+            persisted_row,
+            (validated_profile_ids or {}).get(path),
+        )
+        failures.extend(row_failures)
+        if is_fallback:
+            tree_sitter_fallbacks += 1
+        if classification == "clang":
+            clang_rows += 1
+        elif not row_failures:
+            held_sources.append(
+                {"path": str(path), "reason": reason or "Clang status unavailable"}
+            )
+    return {
+        "passed": not failures and clang_rows + len(held_sources) == len(expected),
+        "coverage_complete": not failures
+        and clang_rows == len(expected)
+        and not held_sources,
+        "database_path": str(database.resolve()),
+        "backend": backend,
+        "repository": str(repository.resolve()),
+        "expected_source_count": len(expected),
+        "clang_proven_count": clang_rows,
+        "held_source_count": len(held_sources),
+        "held_sources": held_sources,
+        "tree_sitter_fallback_count": tree_sitter_fallbacks,
+        "failures": failures,
+    }
+
+
+def _classify_clang_status_row(
+    path: Path,
+    expected_hash: str,
+    row: tuple[Any, ...],
+    expected_profile_identity: str | None,
+) -> tuple[str, str | None, bool, list[dict[str, str]]]:
+    """Classify one persisted source row without upgrading fallback evidence.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Expected corpus source path.
+    expected_hash : str
+        Captured exact source digest.
+    row : tuple[Any, ...]
+        Joined file and analysis-status columns from the backend.
+    expected_profile_identity : str or None
+        Preparation-bound unique profile identity for this source.
+
+    Returns
+    -------
+    tuple
+        Classification, hold reason, fallback marker, and integrity failures.
+    """
+    (
+        _stored_path,
+        stored_hash,
+        analyzer_name,
+        grammar,
+        target_json,
+        state,
+        omitted_json,
+    ) = row
+    failures: list[dict[str, str]] = []
+    if stored_hash != expected_hash:
+        failures.append({"path": str(path), "reason": "persisted source hash differs"})
+    suffix = path.suffix.lower()
+    expected_analyzer = (
+        "c" if suffix == ".c" else "cpp" if suffix in {".cc", ".cpp", ".cxx"} else None
+    )
+    if expected_analyzer is not None and analyzer_name != expected_analyzer:
+        failures.append(
+            {
+                "path": str(path),
+                "reason": f"persisted analyzer is {analyzer_name}, expected {expected_analyzer}",
+            }
+        )
+    if grammar is None and target_json is None and state is None:
+        return "held", "persisted analysis status is absent", False, failures
+    try:
+        target = json.loads(str(target_json))
+        omitted = json.loads(str(omitted_json))
+    except (TypeError, json.JSONDecodeError):
+        failures.append(
+            {"path": str(path), "reason": "persisted status JSON is invalid"}
+        )
+        return "invalid", None, False, failures
+    if not isinstance(target, dict) or not isinstance(omitted, list):
+        failures.append(
+            {"path": str(path), "reason": "persisted status shape is invalid"}
+        )
+        return "invalid", None, False, failures
+    fallback = target.get("selected_frontend") == "tree-sitter" or str(
+        grammar
+    ).startswith("tree-sitter-")
+    expected_language = (
+        "c"
+        if grammar == "clang-c-frontend"
+        else "cpp"
+        if grammar == "clang-cpp-frontend"
+        else None
+    )
+    status_ok = (
+        expected_language is not None
+        and target.get("frontend") == "clang"
+        and target.get("language") == expected_language
+        and target.get("requested_source_path") == str(path)
+        and target.get("requested_source_sha256") == expected_hash
+        and isinstance(target.get("profile_identity"), str)
+        and target.get("profile_identity") == expected_profile_identity
+        and isinstance(target.get("compilation_context"), dict)
+        and state == "complete"
+        and not omitted
+        and target.get("selected_frontend") != "tree-sitter"
+    )
+    if failures:
+        return "invalid", None, fallback, failures
+    if status_ok:
+        return "clang", None, False, []
+    if fallback:
+        return "held", "Tree-sitter fallback", True, []
+    if expected_profile_identity is None:
+        return "held", "no uniquely validated captured profile was selected", False, []
+    if target.get("profile_identity") != expected_profile_identity:
+        return (
+            "held",
+            "persisted profile identity differs from selected profile",
+            False,
+            [],
+        )
+    return "held", f"Clang status unavailable or partial: {state}", False, []
+
+
+def verify_clang_external_inputs(spec: dict[str, Any]) -> dict[str, Any]:
+    """Recheck every immutable Clang context input named by the manifest.
+
+    Parameters
+    ----------
+    spec : dict[str, Any]
+        Validated benchmark manifest with Clang context bindings.
+
+    Returns
+    -------
+    dict[str, Any]
+        Toolchain identity re-read from the exact helper build receipt.
+
+    Raises
+    ------
+    ValueError
+        An input is absent, malformed, changed, or the live Clang toolchain
+        differs from the manifest-bound identity.
+    """
+    if spec.get("require_clang_frontend_status") is not True:
+        return {}
+    unique = _checked_clang_external_paths(spec.get("clang_external_inputs"))
+    expected_identity = spec.get("clang_toolchain")
+    if not isinstance(expected_identity, dict):
+        reject("Clang manifest lacks its toolchain identity")
+    helper_value = expected_identity.get("helper_path")
+    receipt_value = expected_identity.get("build_receipt_path")
+    if not isinstance(helper_value, str) or not isinstance(receipt_value, str):
+        reject("Clang manifest toolchain paths are malformed")
+    helper_path = Path(helper_value).resolve()
+    receipt_path = Path(receipt_value).resolve()
+    if helper_path not in unique or receipt_path not in unique:
+        reject("Clang toolchain paths are not included in external input bindings")
+    try:
+        from codira_clang_frontend import ClangFrontend, __version__
+
+        frontend = ClangFrontend(helper_path, receipt_path, package_version=__version__)
+        identity = frontend._load_toolchain_identity()
+    except (ImportError, OSError, ValueError, json.JSONDecodeError) as error:
+        reject("live Clang toolchain validation failed: " + str(error))
+    actual_identity = {
+        "helper_path": str(identity.helper_path),
+        "helper_sha256": identity.helper_sha256,
+        "build_receipt_path": str(identity.build_receipt_path),
+        "build_receipt_sha256": identity.build_receipt_sha256,
+        "compiler_path": str(identity.compiler_path),
+        "compiler_sha256": identity.compiler_sha256,
+        "compiler_version": identity.compiler_version,
+        "resource_dir": str(identity.resource_dir),
+        "resource_probe_sha256": identity.resource_probe_sha256,
+        "frontend_package_version": identity.package_version,
+    }
+    if expected_identity != actual_identity:
+        reject("live Clang toolchain identity differs from the manifest")
+    return actual_identity
+
+
+def _checked_clang_external_paths(bindings: object) -> dict[Path, str]:
+    """Validate exact external profile, helper and receipt files.
+
+    Parameters
+    ----------
+    bindings : object
+        Manifest value expected to map repositories and languages to files.
+
+    Returns
+    -------
+    dict[pathlib.Path, str]
+        Unique canonical paths bound to their expected digest.
+    """
+    if not isinstance(bindings, dict) or not bindings:
+        reject("Clang stress manifest lacks external input bindings")
+    unique: dict[Path, str] = {}
+    for repository, language_rows in bindings.items():
+        if not isinstance(repository, str) or not isinstance(language_rows, dict):
+            reject("Clang external input binding is malformed")
+        for language, inputs in language_rows.items():
+            if language not in {"c", "cpp"} or not isinstance(inputs, list):
+                reject("Clang external input language binding is malformed")
+            for item in inputs:
+                if not isinstance(item, dict):
+                    reject("Clang external input row is malformed")
+                path_value = item.get("path")
+                expected = item.get("sha256")
+                if not isinstance(path_value, str) or not isinstance(expected, str):
+                    reject("Clang external input path or digest is malformed")
+                path = Path(path_value).resolve()
+                if not path.is_file() or digest(path) != expected:
+                    reject("Clang external input changed: " + str(path))
+                previous = unique.setdefault(path, expected)
+                if previous != expected:
+                    reject("Clang external input has conflicting digests: " + str(path))
+    return unique
+
+
+def _clang_source_hash_inventory(
+    repository: Path, analyzer_loc: dict[str, Any]
+) -> tuple[dict[Path, str], list[str], list[dict[str, object]], list[str]]:
+    """Hash the C/C++ source and header paths selected by manifest coverage.
+
+    Parameters
+    ----------
+    repository : pathlib.Path
+        Pinned corpus repository root.
+    analyzer_loc : dict[str, Any]
+        Manifest analyzer LOC declaration.
+
+    Returns
+    -------
+    tuple[dict[pathlib.Path, str], list[str], list[dict[str, object]], list[str]]
+        Exact inventoried hashes, held symlink directories, held source/header
+        symlinks, and inventory failures such as an unavailable source root.
+    """
+    suffixes: set[str] = set()
+    if int(analyzer_loc.get("c", 0)) > 0:
+        suffixes.update({".c", ".h"})
+    if int(analyzer_loc.get("cpp", 0)) > 0:
+        suffixes.update({".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".ipp"})
+    expected: dict[Path, str] = {}
+    failures: list[str] = []
+    held_directories: list[str] = []
+    held_symlink_files: list[dict[str, object]] = []
+    if not repository.is_dir():
+        return (
+            expected,
+            held_directories,
+            held_symlink_files,
+            ["source repository is absent"],
+        )
+    repository_root = repository.resolve()
+    for directory, dirnames, filenames in os.walk(repository, followlinks=False):
+        current = Path(directory)
+        retained: list[str] = []
+        for name in sorted(dirnames):
+            candidate = current / name
+            if name in {".git", ".codira", ".artifacts"}:
+                continue
+            if candidate.is_symlink():
+                held_directories.append(str(candidate.resolve()))
+                continue
+            retained.append(name)
+        dirnames[:] = retained
+        for name in filenames:
+            path = current / name
+            if path.suffix.lower() in suffixes:
+                if path.is_symlink():
+                    target = path.resolve()
+                    held_symlink_files.append(
+                        {
+                            "path": str(path.absolute()),
+                            "target": str(target),
+                            "outside_repository": not target.is_relative_to(
+                                repository_root
+                            ),
+                        }
+                    )
+                    continue
+                resolved = path.resolve()
+                expected[resolved] = digest(resolved)
+    return expected, held_directories, held_symlink_files, failures
 
 
 def classify_index(payload: dict[str, Any], exit_code: int) -> dict[str, Any] | None:
@@ -1565,10 +1937,20 @@ class Campaign:
         if profile["embeddings"]:
             args.append("--defer-embeddings")
         indexed = self.cli(prefix + "/index-full", name, args)
-        if indexed["status"] not in QUERYABLE_STATUSES or not indexed.get(
-            "usable", indexed["status"] in SUCCESS_STATUSES
+        clang_gate_passed = self.gate_clang_frontend_status(
+            indexed, repo, profile, state, prefix
+        )
+        if (
+            not clang_gate_passed
+            or indexed["status"] not in QUERYABLE_STATUSES
+            or not indexed.get("usable", indexed["status"] in SUCCESS_STATUSES)
         ):
-            self.exclude_queries(prefix, "full index is " + indexed["status"])
+            reason = (
+                "Clang frontend status gate failed"
+                if not clang_gate_passed
+                else "full index is " + indexed["status"]
+            )
+            self.exclude_queries(prefix, reason)
             return None
         self.member_coverage[name] = indexed.get(
             "index_coverage", {"partial": indexed["status"] in PARTIAL_STATUSES}
@@ -1708,6 +2090,128 @@ class Campaign:
             "index_coverage": self.member_coverage[name],
             "embedding_ready": self.embedding_ready[name],
         }
+
+    def gate_clang_frontend_status(
+        self,
+        indexed: dict[str, Any],
+        repo: dict[str, Any],
+        profile: dict[str, Any],
+        state: Path,
+        prefix: str,
+    ) -> bool:
+        """Require actual persisted Clang status before measuring a strict profile.
+
+        Parameters
+        ----------
+        indexed : dict[str, Any]
+            Completed index-stage result.
+        repo : dict[str, Any]
+            Frozen corpus member.
+        profile : dict[str, Any]
+            Backend profile used for the workspace.
+        state : pathlib.Path
+            Isolated workspace state root.
+        prefix : str
+            Repository/profile stage prefix.
+
+        Returns
+        -------
+        bool
+            Whether the database proves complete Clang analysis for every
+            selected C/C++ source and header file.
+        """
+        if self.spec.get("require_clang_frontend_status") is not True:
+            return True
+        source_hashes, held_directories, held_symlink_files, inventory_failures = (
+            _clang_source_hash_inventory(
+                Path(repo["path"]), repo.get("analyzer_loc", {})
+            )
+        )
+        selected_profiles = self.spec.get("clang_context_profiles", {}).get(
+            repo["label"], {}
+        )
+        validated_profile_ids: dict[Path, str] = {}
+        if isinstance(selected_profiles, dict):
+            for profile_rows in selected_profiles.values():
+                if not isinstance(profile_rows, list):
+                    continue
+                for profile_row in profile_rows:
+                    if not isinstance(profile_row, dict):
+                        continue
+                    path_value = profile_row.get("path")
+                    identity = profile_row.get("profile_identity")
+                    if isinstance(path_value, str) and isinstance(identity, str):
+                        source = Path(path_value).resolve()
+                        prior = validated_profile_ids.get(source)
+                        if prior is None or prior == identity:
+                            validated_profile_ids[source] = identity
+                        else:
+                            validated_profile_ids.pop(source, None)
+        database_name = "index.db" if profile["backend"] == "sqlite" else "index.duckdb"
+        audit = audit_clang_frontend_database(
+            state / ".codira" / database_name,
+            profile["backend"],
+            Path(repo["path"]),
+            source_hashes,
+            validated_profile_ids,
+        )
+        audit["inventory_failures"] = inventory_failures
+        audit["held_directories"] = held_directories
+        symlink_holds = [
+            {
+                "path": str(row["path"]),
+                "reason": (
+                    "source symlink target is outside pinned repository"
+                    if row["outside_repository"]
+                    else "source symlink is excluded from inventory"
+                ),
+            }
+            for row in held_symlink_files
+        ]
+        audit["held_symlink_files"] = held_symlink_files
+        audit["held_sources"] = [*audit.get("held_sources", []), *symlink_holds]
+        audit["held_source_count"] = len(audit["held_sources"])
+        if symlink_holds:
+            audit["coverage_complete"] = False
+        if not source_hashes:
+            audit["held_scope_reasons"] = [
+                "no regular C/C++ source paths were available for this analyzer"
+            ]
+        audit["passed"] = bool(audit.get("passed")) and not inventory_failures
+        indexed["clang_frontend_gate"] = audit
+        if audit["passed"]:
+            if not audit.get("coverage_complete") or (
+                audit.get("held_source_count", 0)
+                or held_directories
+                or held_symlink_files
+                or not source_hashes
+            ):
+                indexed.update(
+                    status="partial",
+                    comparison_group="partial_coverage",
+                    partial_timing_valid=True,
+                    clang_held_source_count=audit["held_source_count"],
+                    clang_held_sources=audit["held_sources"],
+                    clang_held_directories=held_directories,
+                    clang_held_symlink_files=held_symlink_files,
+                    clang_held_scope_reasons=audit.get("held_scope_reasons", []),
+                )
+            return True
+        indexed.update(
+            status="unusable",
+            usable=False,
+            reason="persisted database did not prove complete Clang analysis",
+            comparison_group="unusable_index",
+        )
+        write(
+            self.root / "stages" / (prefix + "/index-full") / "result.json",
+            indexed,
+        )
+        history = indexed.get("attempt_history", [])
+        if history:
+            write(Path(history[-1]), indexed)
+        self.exclude_queries(prefix, "Clang frontend status gate failed")
+        return False
 
     def record_embedding_exclusion(self, prefix: str, name: str) -> None:
         """Expose missing population prerequisites without blocking structural reads.
@@ -2380,7 +2884,7 @@ def verify_revisions(spec: dict[str, Any]) -> None:
     None
         Mismatched or dirty repositories raise a diagnostic exception.
     """
-    # Check all revisions and tracked modifications before running any index.
+    # Check revisions, tracked modifications and untracked files before indexing.
     for repo in spec["repositories"]:
         head = subprocess.check_output(
             [
@@ -2394,17 +2898,51 @@ def verify_revisions(spec: dict[str, Any]) -> None:
         ).strip()
         if head != repo["revision"]:
             reject("revision drift: " + repo["label"])
-        subprocess.run(
+        status = subprocess.check_output(
             [
                 shutil.which("git") or "/usr/bin/git",
                 "-C",
                 repo["path"],
-                "diff",
-                "--quiet",
-                "HEAD",
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
             ],
-            check=True,
+            text=True,
         )
+        if status:
+            reject("dirty or untracked corpus files: " + repo["label"])
+
+
+def post_run_integrity_result(spec: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a failed stage if source or compiler evidence drifted mid-run.
+
+    Parameters
+    ----------
+    spec : dict[str, Any]
+        Frozen benchmark manifest.
+
+    Returns
+    -------
+    dict[str, Any] or None
+        Durable failure result when an integrity check changed after execution.
+    """
+    failures = []
+    checks = (
+        ("post-run corpus revision and cleanliness", lambda: verify_revisions(spec)),
+        ("post-run Clang external inputs", lambda: verify_clang_external_inputs(spec)),
+    )
+    for label, check in checks:
+        try:
+            check()
+        except (OSError, ValueError, subprocess.CalledProcessError) as error:
+            failures.append(f"{label}: {error}")
+    if not failures:
+        return None
+    return {
+        "key": "corpus-integrity/post-run",
+        "status": "failed",
+        "reason": "; ".join(failures),
+    }
 
 
 def execute_extension(operation: Callable[[], object]) -> None:
@@ -2946,6 +3484,7 @@ def main() -> int:
     validate_timeout(args.svg_timeout_seconds, name="SVG timeout")
     spec = json.loads(args.manifest.read_text())
     validate_plan(args.manifest, spec)
+    clang_toolchain_identity = verify_clang_external_inputs(spec)
     plan = {
         "suite": spec["name"],
         "repositories": len(spec["repositories"]),
@@ -2980,6 +3519,8 @@ def main() -> int:
             for r in spec["repositories"]
             for p in r["configs"].values()
         },
+        "clang_external_inputs": spec.get("clang_external_inputs", {}),
+        "clang_toolchain": clang_toolchain_identity,
         "codira_commit": subprocess.check_output(
             [
                 shutil.which("git") or "/usr/bin/git",
@@ -3112,6 +3653,13 @@ def main() -> int:
                 "--plan-dir",
                 str(root / "installer-plans"),
             ],
+        )
+    integrity_result = post_run_integrity_result(spec)
+    if integrity_result is not None:
+        campaign.results.append(integrity_result)
+        write(
+            root / "stages" / "corpus-integrity/post-run" / "result.json",
+            integrity_result,
         )
     failures = [
         r["key"]

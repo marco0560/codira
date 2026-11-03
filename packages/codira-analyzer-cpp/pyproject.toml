@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codira-analyzer-cpp"
-version = "2.0.51"
+version = "2.0.52"
 description = "First-party C++ analyzer plugin for codira"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-clang = ["codira-clang-frontend==0.4.0"]
+clang = ["codira-clang-frontend==0.4.1"]
 test = [
     "black",
     "mypy",

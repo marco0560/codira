@@ -26,6 +26,7 @@ from .contracts import (
     FrontendDiagnostic,
     FrontendDocumentationComment,
     FrontendInclude,
+    FrontendMacroDefinitionLink,
     FrontendPreprocessorEvent,
     FrontendResult,
     HeaderProjectionCandidate,
@@ -56,7 +57,7 @@ from .profile import (
 try:
     __version__ = version("codira-clang-frontend")
 except PackageNotFoundError:
-    __version__ = "0.4.0"
+    __version__ = "0.4.1"
 
 
 def create_frontend_profile(
@@ -169,6 +170,7 @@ __all__ = [
     "FrontendDiagnostic",
     "FrontendDocumentationComment",
     "FrontendInclude",
+    "FrontendMacroDefinitionLink",
     "FrontendPreprocessorEvent",
     "FrontendResult",
     "HeaderProjectionCandidate",

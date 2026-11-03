@@ -36,6 +36,7 @@ from .contracts import (
     FrontendDiagnostic,
     FrontendDocumentationComment,
     FrontendInclude,
+    FrontendMacroDefinitionLink,
     FrontendPreprocessorEvent,
     FrontendResult,
     FrontendStatus,
@@ -243,6 +244,7 @@ def _validate_response(response: dict[str, object]) -> str | None:
         "codira.clang-frontend-native/3",
         "codira.clang-frontend-native/4",
         "codira.clang-frontend-native/5",
+        "codira.clang-frontend-native/6",
     }:
         return "unsupported_native_protocol_version"
     array_fields = (
@@ -309,10 +311,21 @@ def _validate_response(response: dict[str, object]) -> str | None:
         "endif",
     }
     allowed_condition_results = {"true", "false", "not_evaluated", "unknown"}
+    protocol_version = response.get("schema_version")
     for item in cast("list[object]", response["preprocessing"]):
         row = cast("dict[str, object]", _mapping(item))
         if row.get("kind") not in allowed_events:
             return "invalid_native_protocol_preprocessing_kind"
+        has_definition_link = "macro_definition_link" in row
+        if protocol_version == "codira.clang-frontend-native/6":
+            if row.get("kind") == "macro_expansion":
+                link_error = _macro_definition_link_error(row)
+                if link_error is not None:
+                    return link_error
+            elif has_definition_link:
+                return "invalid_native_protocol_macro_definition_link_event_kind"
+        elif has_definition_link:
+            return "invalid_native_protocol_macro_definition_link_version"
         if "replacement" in row and (
             not isinstance(row["replacement"], list)
             or any(not isinstance(token, str) for token in row["replacement"])
@@ -356,6 +369,7 @@ def _validate_response(response: dict[str, object]) -> str | None:
     if response.get("schema_version") in {
         "codira.clang-frontend-native/4",
         "codira.clang-frontend-native/5",
+        "codira.clang-frontend-native/6",
     }:
         if not isinstance(response.get("translation_unit_file"), str):
             return "invalid_native_protocol_translation_unit_file"
@@ -363,7 +377,10 @@ def _validate_response(response: dict[str, object]) -> str | None:
             response.get("projection_file"), str
         ):
             return "invalid_native_protocol_projection_file"
-    if response.get("schema_version") == "codira.clang-frontend-native/5":
+    if response.get("schema_version") in {
+        "codira.clang-frontend-native/5",
+        "codira.clang-frontend-native/6",
+    }:
         for item in cast("list[object]", response["declarations"]):
             row = cast("dict[str, object]", _mapping(item))
             if "has_body" not in row or not isinstance(row.get("has_body"), bool):
@@ -417,6 +434,66 @@ def _validate_response(response: dict[str, object]) -> str | None:
                 or alias_usr is not None
             ):
                 return "inconsistent_native_protocol_alias_facts"
+    return None
+
+
+def _macro_definition_link_error(row: dict[str, object]) -> str | None:
+    """Validate one v6 selected-macro-definition link record.
+
+    Parameters
+    ----------
+    row : dict[str, object]
+        Native macro-expansion event from a protocol-v6 response.
+
+    Returns
+    -------
+    str or None
+        Stable protocol error, or ``None`` when the link is resolved or
+        explicitly unavailable with a supported reason.
+    """
+    if not isinstance(row.get("name"), str) or not row["name"]:
+        return "invalid_native_protocol_macro_definition_link_name"
+    link = _mapping(row.get("macro_definition_link"))
+    if link is None:
+        return "invalid_native_protocol_macro_definition_link_shape"
+    status = link.get("status")
+    if status == "unavailable":
+        if set(link) != {"status", "reason"} or link.get("reason") not in {
+            "definition_record_missing",
+            "definition_name_mismatch",
+            "definition_location_unavailable",
+        }:
+            return "invalid_native_protocol_macro_definition_link_unavailable"
+        return None
+    if status != "resolved" or set(link) != {
+        "status",
+        "name",
+        "name_token",
+        "location",
+        "function_like",
+    }:
+        return "invalid_native_protocol_macro_definition_link_shape"
+    name = row.get("name")
+    location = _mapping(link.get("location"))
+    spelling = _mapping(location.get("spelling")) if location is not None else None
+    offset = spelling.get("offset") if spelling is not None else None
+    if (
+        not isinstance(name, str)
+        or not name
+        or link.get("name") != name
+        or not isinstance(link.get("name_token"), str)
+        or not link["name_token"]
+        or not isinstance(link.get("function_like"), bool)
+        or location is None
+        or location.get("is_macro") is not False
+        or spelling is None
+        or not isinstance(spelling.get("path"), str)
+        or not spelling["path"]
+        or not isinstance(offset, int)
+        or isinstance(offset, bool)
+        or offset < 0
+    ):
+        return "invalid_native_protocol_macro_definition_link_location"
     return None
 
 
@@ -1215,6 +1292,7 @@ class ClangFrontend:
             if response.get("schema_version") not in {
                 "codira.clang-frontend-native/4",
                 "codira.clang-frontend-native/5",
+                "codira.clang-frontend-native/6",
             }:
                 return self._held(
                     profile,
@@ -1305,7 +1383,10 @@ class ClangFrontend:
             )
         declarations, callables, unowned_calls = _decode_entities(response)
         includes = _decode_includes(response.get("includes"))
-        preprocessing = _decode_preprocessing(response.get("preprocessing"))
+        preprocessing = _decode_preprocessing(
+            response.get("preprocessing"),
+            protocol_version=cast("str", response["schema_version"]),
+        )
         documentation_comments = _decode_documentation_comments(
             response.get("documentation_comments")
         )
@@ -2196,13 +2277,20 @@ def _decode_includes(value: object) -> tuple[FrontendInclude, ...]:
     return tuple(includes)
 
 
-def _decode_preprocessing(value: object) -> tuple[FrontendPreprocessorEvent, ...]:
+def _decode_preprocessing(
+    value: object,
+    *,
+    protocol_version: str = "codira.clang-frontend-native/5",
+) -> tuple[FrontendPreprocessorEvent, ...]:
     """Decode captured macro and conditional events from Clang callbacks.
 
     Parameters
     ----------
     value : object
         Native helper preprocessing array.
+    protocol_version : str, optional
+        Exact native protocol version, used to distinguish absent legacy links
+        from explicit v6 unavailability.
 
     Returns
     -------
@@ -2224,6 +2312,33 @@ def _decode_preprocessing(value: object) -> tuple[FrontendPreprocessorEvent, ...
         )
         kind = cast("PreprocessorEventKind", row.get("kind", "endif"))
         result = row.get("result")
+        link_row = _mapping(row.get("macro_definition_link"))
+        link_status: Literal["resolved", "unavailable", "legacy_protocol"] | None = None
+        link: FrontendMacroDefinitionLink | None = None
+        link_reason: str | None = None
+        if kind == "macro_expansion":
+            if protocol_version == "codira.clang-frontend-native/6":
+                if link_row is not None and link_row.get("status") == "resolved":
+                    link_location = _point(link_row.get("location"))
+                    if link_location is not None:
+                        link = FrontendMacroDefinitionLink(
+                            name=cast("str", link_row.get("name")),
+                            name_token=cast("str", link_row.get("name_token")),
+                            location=link_location,
+                            function_like=cast("bool", link_row.get("function_like")),
+                        )
+                    link_status = "resolved"
+                else:
+                    link_status = "unavailable"
+                    link_reason = (
+                        cast("str", link_row["reason"])
+                        if link_row is not None
+                        and isinstance(link_row.get("reason"), str)
+                        else None
+                    )
+            else:
+                link_status = "legacy_protocol"
+                link_reason = "native_protocol_has_no_macro_definition_link"
         events.append(
             FrontendPreprocessorEvent(
                 kind=kind,
@@ -2247,6 +2362,9 @@ def _decode_preprocessing(value: object) -> tuple[FrontendPreprocessorEvent, ...
                 invocation=_optional_string(row.get("invocation")),
                 location=_point(row.get("location")),
                 span=_span(row.get("range")),
+                macro_definition_link=link,
+                macro_definition_link_status=link_status,
+                macro_definition_link_reason=link_reason,
             )
         )
     return tuple(events)

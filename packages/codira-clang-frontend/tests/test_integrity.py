@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -37,6 +38,7 @@ from codira_clang_frontend import (
 )
 from codira_clang_frontend.contracts import (
     DependencyInput,
+    FrontendMacroDefinitionLink,
     IncludeDirectoryInput,
     ToolchainIdentity,
 )
@@ -46,6 +48,7 @@ from codira_clang_frontend.header_projection_cli import (
 from codira_clang_frontend.frontend import (
     _decode_compilation_context,
     _decode_entities,
+    _decode_preprocessing,
     _dependency_closure,
     _validate_response,
 )
@@ -65,6 +68,108 @@ def sha256(path: Path) -> str:
         Lowercase SHA-256 digest.
     """
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def native_response(
+    schema_version: str, preprocessing: list[dict[str, object]]
+) -> dict[str, object]:
+    """Build the minimum structurally valid response for a protocol test.
+
+    Parameters
+    ----------
+    schema_version : str
+        Native helper protocol schema identifier.
+    preprocessing : list[dict[str, object]]
+        Ordered native preprocessor event records.
+
+    Returns
+    -------
+    dict[str, object]
+        Minimal response accepted by the common native protocol validator.
+    """
+    response: dict[str, object] = {
+        "schema_version": schema_version,
+        "declarations": [],
+        "non_function_declarations": [],
+        "calls": [],
+        "diagnostics": [],
+        "dependency_paths": [],
+        "search_directories": [],
+        "includes": [],
+        "preprocessing": preprocessing,
+        "documentation_comments": [],
+        "capture_mode": "source_relevant",
+        "clang_version": "Clang protocol fixture",
+        "target_triple": "x86_64-unknown-linux-gnu",
+        "sysroot": "/",
+        "tool_return_code": 0,
+        "capture_projection": {},
+    }
+    if schema_version in {
+        "codira.clang-frontend-native/4",
+        "codira.clang-frontend-native/5",
+        "codira.clang-frontend-native/6",
+    }:
+        response["translation_unit_file"] = "/repo/main.c"
+        response["projection_file"] = None
+    return response
+
+
+def macro_expansion_event() -> dict[str, object]:
+    """Build a valid source macro expansion for native protocol tests.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    dict[str, object]
+        Macro expansion with a resolved physical definition link.
+    """
+    location = {
+        "spelling": {
+            "path": "/repo/include/macros.h",
+            "line": 12,
+            "column": 9,
+            "offset": 277,
+        },
+        "expansion": {
+            "path": "/repo/include/macros.h",
+            "line": 12,
+            "column": 9,
+            "offset": 277,
+        },
+        "is_macro": False,
+    }
+    return {
+        "kind": "macro_expansion",
+        "name": "SELECT",
+        "invocation": "SELECT(7)",
+        "range": {},
+        "location": {
+            "spelling": {
+                "path": "/repo/main.c",
+                "line": 20,
+                "column": 7,
+                "offset": 355,
+            },
+            "expansion": {
+                "path": "/repo/main.c",
+                "line": 20,
+                "column": 7,
+                "offset": 355,
+            },
+            "is_macro": False,
+        },
+        "macro_definition_link": {
+            "status": "resolved",
+            "name": "SELECT",
+            "name_token": "SELECT",
+            "location": location,
+            "function_like": True,
+        },
+    }
 
 
 class FrontendIntegrityTests(unittest.TestCase):
@@ -569,6 +674,162 @@ class FrontendIntegrityTests(unittest.TestCase):
             _validate_response(response), "inconsistent_native_protocol_alias_facts"
         )
 
+    def test_v5_macro_expansion_is_legacy_unlinked_and_cannot_claim_v6_link(
+        self,
+    ) -> None:
+        """Keep v5 parsing available while making missing links explicit.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Test assertion result.
+        """
+        event = macro_expansion_event()
+        event.pop("macro_definition_link")
+        response = native_response("codira.clang-frontend-native/5", [event])
+        self.assertIsNone(_validate_response(response))
+        decoded = _decode_preprocessing(
+            response["preprocessing"],
+            protocol_version="codira.clang-frontend-native/5",
+        )
+        self.assertEqual(len(decoded), 1)
+        self.assertIsNone(decoded[0].macro_definition_link)
+        self.assertEqual(decoded[0].macro_definition_link_status, "legacy_protocol")
+        self.assertEqual(
+            decoded[0].macro_definition_link_reason,
+            "native_protocol_has_no_macro_definition_link",
+        )
+
+        event["macro_definition_link"] = macro_expansion_event()[
+            "macro_definition_link"
+        ]
+        response = native_response("codira.clang-frontend-native/5", [event])
+        self.assertEqual(
+            _validate_response(response),
+            "invalid_native_protocol_macro_definition_link_version",
+        )
+
+    def test_v6_macro_expansion_requires_and_decodes_resolved_definition_link(
+        self,
+    ) -> None:
+        """Validate and type the exact definition selected by a v6 helper.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Test assertion result.
+        """
+        event = macro_expansion_event()
+        response = native_response("codira.clang-frontend-native/6", [event])
+        self.assertIsNone(_validate_response(response))
+        decoded = _decode_preprocessing(
+            response["preprocessing"],
+            protocol_version="codira.clang-frontend-native/6",
+        )
+        self.assertEqual(len(decoded), 1)
+        self.assertEqual(decoded[0].macro_definition_link_status, "resolved")
+        self.assertIsInstance(
+            decoded[0].macro_definition_link, FrontendMacroDefinitionLink
+        )
+        assert decoded[0].macro_definition_link is not None
+        spelling = decoded[0].macro_definition_link.location.spelling
+        assert spelling is not None
+        self.assertEqual(decoded[0].macro_definition_link.name, "SELECT")
+        self.assertEqual(decoded[0].macro_definition_link.name_token, "SELECT")
+        self.assertEqual(spelling.path, "/repo/include/macros.h")
+        self.assertEqual(spelling.offset, 277)
+        self.assertTrue(decoded[0].macro_definition_link.function_like)
+
+        event.pop("macro_definition_link")
+        response = native_response("codira.clang-frontend-native/6", [event])
+        self.assertEqual(
+            _validate_response(response),
+            "invalid_native_protocol_macro_definition_link_shape",
+        )
+
+    def test_v6_macro_definition_link_unavailable_is_explicit_and_bounded(
+        self,
+    ) -> None:
+        """Accept a known unavailable reason without fabricating a target.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Test assertion result.
+        """
+        event = macro_expansion_event()
+        event["macro_definition_link"] = {
+            "status": "unavailable",
+            "reason": "definition_record_missing",
+        }
+        response = native_response("codira.clang-frontend-native/6", [event])
+        self.assertIsNone(_validate_response(response))
+        decoded = _decode_preprocessing(
+            response["preprocessing"],
+            protocol_version="codira.clang-frontend-native/6",
+        )
+        self.assertIsNone(decoded[0].macro_definition_link)
+        self.assertEqual(decoded[0].macro_definition_link_status, "unavailable")
+        self.assertEqual(
+            decoded[0].macro_definition_link_reason, "definition_record_missing"
+        )
+
+        event["macro_definition_link"] = {
+            "status": "unavailable",
+            "reason": "guessed_by_name",
+        }
+        response = native_response("codira.clang-frontend-native/6", [event])
+        self.assertEqual(
+            _validate_response(response),
+            "invalid_native_protocol_macro_definition_link_unavailable",
+        )
+
+    def test_v6_macro_definition_link_rejects_name_and_physical_location_mismatch(
+        self,
+    ) -> None:
+        """Reject a target with a different name or no physical byte anchor.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Test assertion result.
+        """
+        event = macro_expansion_event()
+        link = cast("dict[str, object]", event["macro_definition_link"])
+        link["name"] = "OTHER"
+        response = native_response("codira.clang-frontend-native/6", [event])
+        self.assertEqual(
+            _validate_response(response),
+            "invalid_native_protocol_macro_definition_link_location",
+        )
+
+        event = macro_expansion_event()
+        link = cast("dict[str, object]", event["macro_definition_link"])
+        location = cast("dict[str, object]", link["location"])
+        spelling = cast("dict[str, object]", location["spelling"])
+        spelling["offset"] = None
+        response = native_response("codira.clang-frontend-native/6", [event])
+        self.assertEqual(
+            _validate_response(response),
+            "invalid_native_protocol_macro_definition_link_location",
+        )
+
     def test_header_projection_uses_only_captured_dependency_owners(self) -> None:
         """Resolve one owner and hold ambiguous captured dependency contexts.
 
@@ -1054,6 +1315,144 @@ class FrontendIntegrityTests(unittest.TestCase):
                 source.parent.resolve(),
                 {item.path for item in closure.search_directories},
             )
+
+    @unittest.skipUnless(
+        os.environ.get("CODIRA_CLANG_FRONTEND_NATIVE_HELPER"),
+        "set CODIRA_CLANG_FRONTEND_NATIVE_HELPER to run native helper controls",
+    )
+    def test_native_macro_links_use_physical_file_path_under_line_directive(
+        self,
+    ) -> None:
+        """Bind source-authored macro links to physical bytes under #line.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Test assertion result.
+        """
+        helper = Path(os.environ["CODIRA_CLANG_FRONTEND_NATIVE_HELPER"]).resolve(
+            strict=True
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            source = root / "input.c"
+            source_lines = (
+                b"#define REPICK 1",
+                b"int first = REPICK;",
+                b"#undef REPICK",
+                b'#line 900 "logical/remapped.c"',
+                b"#if __LINE__ == 900",
+                b"#define LINE_CONTROL 1",
+                b"#endif",
+                b"#define REPICK 2",
+                b"int second = REPICK;",
+                b'#if __has_include("missing-native-link-control.h")',
+                b"int unexpected_header = 1;",
+                b"#endif",
+            )
+            for newline in (b"\r", b"\r\n"):
+                with self.subTest(newline=newline):
+                    source.write_bytes(newline.join(source_lines) + newline)
+                    request = {
+                        "file": str(source),
+                        "directory": str(root),
+                        "repository_root": str(root),
+                        "argv": ["-x", "c", "-std=c11"],
+                        "capture_mode": "source_relevant",
+                    }
+                    result = subprocess.run(
+                        [str(helper)],
+                        input=json.dumps(request).encode("utf-8"),
+                        cwd=root,
+                        capture_output=True,
+                        check=False,
+                        shell=False,
+                    )
+                    self.assertEqual(
+                        result.returncode, 0, result.stderr.decode("utf-8")
+                    )
+                    response = json.loads(result.stdout)
+                    self.assertEqual(
+                        _validate_response(response),
+                        None,
+                        "native response must satisfy the v6 protocol",
+                    )
+                    self.assertEqual(
+                        response["schema_version"], "codira.clang-frontend-native/6"
+                    )
+                    self.assertTrue(
+                        any(
+                            event.get("kind") == "if"
+                            and event.get("result") == "true"
+                            and "900" in str(event.get("condition", ""))
+                            for event in response["preprocessing"]
+                        ),
+                        "the native source must activate its #line remapping",
+                    )
+                    events = _decode_preprocessing(
+                        response["preprocessing"],
+                        protocol_version=response["schema_version"],
+                    )
+                    macro_expansions = [
+                        event for event in events if event.kind == "macro_expansion"
+                    ]
+                    repick_events = [
+                        event for event in macro_expansions if event.name == "REPICK"
+                    ]
+                    self.assertEqual(len(repick_events), 2)
+                    physical_source = source.read_bytes()
+                    definition_offsets: set[int] = set()
+                    for event in repick_events:
+                        link = event.macro_definition_link
+                        self.assertEqual(event.macro_definition_link_status, "resolved")
+                        self.assertIsNotNone(link)
+                        assert link is not None
+                        self.assertEqual(link.name, "REPICK")
+                        self.assertEqual(link.name_token, "REPICK")
+                        self.assertFalse(link.function_like)
+                        self.assertFalse(link.location.is_macro)
+                        definition = link.location.spelling
+                        self.assertIsNotNone(definition)
+                        assert definition is not None
+                        self.assertEqual(definition.path, str(source))
+                        self.assertIsNotNone(definition.offset)
+                        assert definition.offset is not None
+                        source_prefix = physical_source[: definition.offset]
+                        normalized_prefix = source_prefix.replace(
+                            b"\r\n", b"\n"
+                        ).replace(b"\r", b"\n")
+                        physical_line = normalized_prefix.count(b"\n") + 1
+                        self.assertEqual(definition.line, physical_line)
+                        line_start = (
+                            max(source_prefix.rfind(b"\n"), source_prefix.rfind(b"\r"))
+                            + 1
+                        )
+                        self.assertEqual(
+                            definition.column,
+                            definition.offset - line_start + 1,
+                        )
+                        self.assertEqual(
+                            physical_source[
+                                definition.offset : definition.offset + len(b"REPICK")
+                            ],
+                            b"REPICK",
+                        )
+                        definition_offsets.add(definition.offset)
+                    self.assertEqual(len(definition_offsets), 2)
+                    self.assertTrue(
+                        any(
+                            event.name == "__has_include"
+                            and event.macro_definition_link_status == "unavailable"
+                            and event.macro_definition_link_reason
+                            == "definition_record_missing"
+                            for event in macro_expansions
+                        ),
+                        "compiler builtin expansion should retain explicit unavailable state",
+                    )
 
 
 if __name__ == "__main__":
