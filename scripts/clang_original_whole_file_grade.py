@@ -2668,6 +2668,646 @@ def _parse_simple_function_type(signature: str) -> tuple[str, list[str]]:
     return return_type, parts
 
 
+def _scan_c_doxygen_comment_offsets(  # noqa: C901 -- lexical inventory must skip C literals
+    source: bytes,
+) -> list[int]:
+    """Find Doxygen comment starts outside C string and character literals.
+
+    Parameters
+    ----------
+    source : bytes
+        Exact captured C translation-unit bytes.
+
+    Returns
+    -------
+    list[int]
+        Byte offsets of lexical Doxygen comment markers.
+
+    Raises
+    ------
+    OracleFormatError
+        If encoding, line splices, trigraphs, strings, or comments are outside
+        the supported lexical subset.
+    """
+    if source.startswith(b"\xef\xbb\xbf"):
+        _fail("source.documentation", "UTF-8 BOM is outside the lexical subset")
+    if b"??" in source or re.search(rb"\\(?:\r\n|\n|\r)", source):
+        _fail(
+            "source.documentation",
+            "trigraphs and line splices are outside the lexical subset",
+        )
+    if b"\x00" in source:
+        _fail("source.documentation", "NUL bytes are outside the lexical subset")
+
+    offsets: list[int] = []
+    index = 0
+    while index < len(source):
+        current = source[index]
+        if current in {ord('"'), ord("'")}:
+            delimiter = current
+            index += 1
+            while index < len(source) and source[index] != delimiter:
+                if source[index] in {ord("\n"), ord("\r")}:
+                    _fail(
+                        "source.documentation",
+                        "unterminated string or character literal",
+                    )
+                if source[index] == ord("\\"):
+                    index += 1
+                    if index >= len(source):
+                        _fail(
+                            "source.documentation",
+                            "literal ends with an incomplete escape",
+                        )
+                index += 1
+            if index >= len(source):
+                _fail(
+                    "source.documentation", "unterminated string or character literal"
+                )
+            index += 1
+            continue
+        if source.startswith(b"//", index):
+            marker = source[index : index + 3]
+            if marker in {b"///", b"//!"}:
+                offsets.append(index)
+            newline_positions = [
+                position
+                for position in (
+                    source.find(b"\n", index + 2),
+                    source.find(b"\r", index + 2),
+                )
+                if position >= 0
+            ]
+            newline = min(newline_positions) if newline_positions else -1
+            if newline < 0:
+                index = len(source)
+            elif source[newline : newline + 2] == b"\r\n":
+                index = newline + 2
+            else:
+                index = newline + 1
+            continue
+        if source.startswith(b"/*", index):
+            marker = source[index : index + 3]
+            if marker in {b"/**", b"/*!"}:
+                offsets.append(index)
+            close = source.find(b"*/", index + 2)
+            if close < 0:
+                _fail("source.documentation", "unterminated block comment")
+            index = close + 2
+            continue
+        index += 1
+    return offsets
+
+
+def _source_ast_file_bindings(
+    ast: dict[str, object], working_directory: Path
+) -> dict[int, Path | None]:
+    """Map raw AST source-location objects to their inherited physical files.
+
+    Parameters
+    ----------
+    ast : dict[str, object]
+        Raw Clang JSON AST.
+    working_directory : pathlib.Path
+        Working directory used to resolve relative location paths.
+
+    Returns
+    -------
+    dict[int, pathlib.Path or None]
+        AST object identities mapped to inherited resolved paths.
+    """
+    location_files: dict[int, Path | None] = {}
+    active_file: list[Path | None] = [None]
+
+    def annotate(value: object) -> None:
+        """Annotate nested AST coordinate dictionaries with active file scope.
+
+        Parameters
+        ----------
+        value : object
+            One raw AST value.
+
+        Returns
+        -------
+        None
+        """
+        if isinstance(value, list):
+            for child in value:
+                annotate(child)
+            return
+        if not isinstance(value, dict):
+            return
+        if "offset" in value:
+            explicit_path = value.get("file")
+            if isinstance(explicit_path, str):
+                path = Path(explicit_path)
+                active_file[0] = (
+                    path.resolve()
+                    if path.is_absolute()
+                    else (working_directory / path).resolve()
+                )
+            location_files[id(value)] = active_file[0]
+        for key, child in value.items():
+            if key not in {"file", "includedFrom"}:
+                annotate(child)
+
+    annotate(ast)
+    return location_files
+
+
+def _point_file(point: object, location_files: dict[int, Path | None]) -> Path | None:
+    """Return the inherited physical path for one raw source point.
+
+    Parameters
+    ----------
+    point : object
+        Raw Clang source-point dictionary.
+    location_files : dict[int, pathlib.Path or None]
+        File bindings from the raw AST traversal.
+
+    Returns
+    -------
+    pathlib.Path or None
+        Resolved physical file, when known.
+    """
+    return location_files.get(id(point)) if isinstance(point, dict) else None
+
+
+def _raw_source_enum_members(  # noqa: C901 -- raw enum inventory has explicit fail-closed gates
+    ast: dict[str, object],
+    source: bytes,
+    source_path: Path,
+    working_directory: Path,
+    source_key: str | None,
+) -> tuple[list[dict[str, JSONValue]], dict[str, JSONValue]]:
+    """Build a bounded inventory of source-written enum members from Clang AST.
+
+    Parameters
+    ----------
+    ast : dict[str, object]
+        Full raw Clang translation-unit AST.
+    source : bytes
+        Exact source bytes selected by the compile profile.
+    source_path : pathlib.Path
+        Physical translation-unit source path.
+    working_directory : pathlib.Path
+        Compiler working directory for resolving raw AST files.
+    source_key : str or None
+        Repository-relative stable identity key for the selected source.
+
+    Returns
+    -------
+    tuple[list[dict[str, JSONValue]], dict[str, JSONValue]]
+        Expected source enum-member rows and census diagnostics.
+    """
+    if ast.get("kind") != "TranslationUnitDecl":
+        _fail("raw_ast.enum_members", "root is not a translation unit")
+    location_files = _source_ast_file_bindings(ast, working_directory)
+    source_path = source_path.resolve()
+    expected: list[dict[str, JSONValue]] = []
+    failures: list[str] = []
+    source_enum_count = 0
+    macro_enum_count = 0
+    external_enum_count = 0
+    unknown_enum_count = 0
+
+    def location_status(point: object) -> str:
+        """Classify source spelling and expansion ownership for one location.
+
+        Parameters
+        ----------
+        point : object
+            Raw Clang source location.
+
+        Returns
+        -------
+        str
+            ``source_written``, ``source_macro``, ``external``, or ``unknown``.
+        """
+        if not isinstance(point, dict):
+            return "unknown"
+        spelling = point.get("spellingLoc")
+        expansion = point.get("expansionLoc")
+        if isinstance(spelling, dict) or isinstance(expansion, dict):
+            spelling_path = _point_file(spelling, location_files)
+            expansion_path = _point_file(expansion, location_files)
+            if source_path in {spelling_path, expansion_path}:
+                return "source_macro"
+            if spelling_path is not None or expansion_path is not None:
+                return "external"
+            return "unknown"
+        path = _point_file(point, location_files)
+        if path == source_path:
+            return "source_written"
+        return "external" if path is not None else "unknown"
+
+    def physical_point(point: object, context: str) -> tuple[int, int]:
+        """Validate and return one offset and token length in source bytes.
+
+        Parameters
+        ----------
+        point : object
+            Raw Clang point with offset and token length.
+        context : str
+            Error-report context for this point.
+
+        Returns
+        -------
+        tuple[int, int]
+            Byte offset and token length.
+        """
+        if not isinstance(point, dict):
+            _fail(context, "source point is absent")
+        offset, token_length = point.get("offset"), point.get("tokLen")
+        if (
+            not isinstance(offset, int)
+            or isinstance(offset, bool)
+            or not isinstance(token_length, int)
+            or isinstance(token_length, bool)
+            or token_length <= 0
+            or offset < 0
+            or offset + token_length > len(source)
+        ):
+            _fail(context, "source point is outside captured bytes")
+        return offset, token_length
+
+    def visit(  # noqa: C901, PLR0912 -- exhaustive enum ownership and origin gates
+        node: object, top_level: bool
+    ) -> None:
+        """Traverse declarations and collect only bounded source enums.
+
+        Parameters
+        ----------
+        node : object
+            Raw AST node or nested value.
+        top_level : bool
+            Whether this enum is directly owned by the translation unit.
+
+        Returns
+        -------
+        None
+        """
+        nonlocal source_enum_count, macro_enum_count, external_enum_count
+        nonlocal unknown_enum_count
+        if not isinstance(node, dict):
+            return
+        kind = node.get("kind")
+        if kind == "EnumDecl":
+            status = location_status(node.get("loc"))
+            children = node.get("inner")
+            enum_children = (
+                [
+                    child
+                    for child in children
+                    if isinstance(child, dict)
+                    and child.get("kind") == "EnumConstantDecl"
+                ]
+                if isinstance(children, list)
+                else []
+            )
+            if status == "external":
+                external_enum_count += 1
+            elif status == "unknown":
+                unknown_enum_count += 1
+                failures.append("enum declaration has no bound physical file")
+            elif status == "source_macro":
+                macro_enum_count += 1
+                failures.append("source expansion touches an enum declaration")
+            else:
+                source_enum_count += 1
+                enum_name = node.get("name")
+                if not top_level:
+                    failures.append("nested source enum is outside the bounded subset")
+                if not isinstance(enum_name, str) or not enum_name:
+                    failures.append(
+                        "anonymous source enum is outside the bounded subset"
+                    )
+                else:
+                    enum_offset, enum_token_length = physical_point(
+                        node.get("loc"), "raw_ast.enum_decl.loc"
+                    )
+                    if source[
+                        enum_offset : enum_offset + enum_token_length
+                    ] != enum_name.encode("utf-8"):
+                        failures.append("enum tag token differs from source bytes")
+                if enum_children and (
+                    not isinstance(enum_name, str) or source_key is None
+                ):
+                    failures.append("source enum member owner identity is unavailable")
+                if isinstance(enum_name, str) and enum_name and source_key is not None:
+                    for ordinal, member in enumerate(enum_children, start=1):
+                        member_status = location_status(member.get("loc"))
+                        if member_status != "source_written":
+                            failures.append(
+                                "enum member uses macro or unknown source origin"
+                            )
+                            continue
+                        name = member.get("name")
+                        if not isinstance(name, str) or not name:
+                            failures.append("source enum member has no name")
+                            continue
+                        offset, token_length = physical_point(
+                            member.get("loc"), "raw_ast.enum_member.loc"
+                        )
+                        if source[offset : offset + token_length] != name.encode(
+                            "utf-8"
+                        ):
+                            failures.append(
+                                "enum member token differs from source bytes"
+                            )
+                        line = source.count(b"\n", 0, offset) + 1
+                        coordinate_line = (
+                            member.get("loc", {}).get("line")
+                            if isinstance(member.get("loc"), dict)
+                            else None
+                        )
+                        if (
+                            isinstance(coordinate_line, int)
+                            and not isinstance(coordinate_line, bool)
+                            and coordinate_line != line
+                        ):
+                            failures.append(
+                                "enum member line differs from source bytes"
+                            )
+                        source_range = member.get("range")
+                        if not isinstance(source_range, dict):
+                            failures.append("enum member source range is absent")
+                            continue
+                        begin, end = source_range.get("begin"), source_range.get("end")
+                        if (
+                            location_status(begin) != "source_written"
+                            or location_status(end) != "source_written"
+                        ):
+                            failures.append("enum member range crosses a macro origin")
+                            continue
+                        begin_offset, _ = physical_point(
+                            begin, "raw_ast.enum_member.range.begin"
+                        )
+                        end_offset, end_length = physical_point(
+                            end, "raw_ast.enum_member.range.end"
+                        )
+                        if (
+                            begin_offset != offset
+                            or end_offset + end_length < offset + token_length
+                        ):
+                            failures.append(
+                                "enum member range does not cover its source token"
+                            )
+                        expected.append(
+                            {
+                                "owner": enum_name,
+                                "name": name,
+                                "ordinal": ordinal,
+                                "line": line,
+                            }
+                        )
+            if isinstance(children, list):
+                for child in children:
+                    if (
+                        isinstance(child, dict)
+                        and child.get("kind") != "EnumConstantDecl"
+                    ):
+                        visit(child, False)
+            return
+        if (
+            kind == "EnumConstantDecl"
+            and location_status(node.get("loc")) == "source_written"
+        ):
+            failures.append("source enum constant has no supported enum owner")
+        children = node.get("inner")
+        if isinstance(children, list):
+            for child in children:
+                visit(child, False)
+
+    children = ast.get("inner")
+    if isinstance(children, list):
+        for child in children:
+            visit(child, True)
+    census: dict[str, JSONValue] = {
+        "source_enum_declaration_count": source_enum_count,
+        "macro_origin_enum_declaration_count": macro_enum_count,
+        "external_enum_declaration_count": external_enum_count,
+        "unbound_enum_declaration_count": unknown_enum_count,
+        "source_enum_member_count": len(expected),
+        "failures": cast("JSONValue", failures),
+    }
+    return expected, census
+
+
+def _grade_source_doxygen_absence(  # noqa: C901 -- absence uses lexical and AST evidence
+    source: bytes,
+    ast: dict[str, object],
+    source_path: Path,
+    working_directory: Path,
+    backend_rows: dict[str, dict[str, JSONValue]],
+) -> dict[str, JSONValue]:
+    """Grade only the proven absence of source-owned Doxygen documentation.
+
+    Parameters
+    ----------
+    source : bytes
+        Exact source bytes selected by the compile profile.
+    ast : dict[str, object]
+        Full raw Clang translation-unit AST.
+    source_path : pathlib.Path
+        Physical translation-unit source path.
+    working_directory : pathlib.Path
+        Compiler working directory for raw AST file references.
+    backend_rows : dict[str, dict[str, JSONValue]]
+        Documentation snapshot rows from SQLite and DuckDB.
+
+    Returns
+    -------
+    dict[str, JSONValue]
+        Absence-only documentation category report. Any source Doxygen
+        candidate remains held until its semantic owner is independently bound.
+    """
+    offsets = _scan_c_doxygen_comment_offsets(source)
+    location_files = _source_ast_file_bindings(ast, working_directory)
+    source_path = source_path.resolve()
+    source_comments = 0
+    unbound_comments = 0
+
+    def visit(node: object, source_owner: bool) -> None:
+        """Count source-owned FullComment nodes in raw compiler AST.
+
+        Parameters
+        ----------
+        node : object
+            Raw AST value.
+        source_owner : bool
+            Whether an enclosing declaration belongs to the selected source.
+
+        Returns
+        -------
+        None
+        """
+        nonlocal source_comments, unbound_comments
+        if isinstance(node, list):
+            for child in node:
+                visit(child, source_owner)
+            return
+        if not isinstance(node, dict):
+            return
+        kind = node.get("kind")
+        loc = node.get("loc")
+        if not isinstance(loc, dict):
+            source_range = node.get("range")
+            loc = source_range.get("begin") if isinstance(source_range, dict) else None
+        node_path = _point_file(loc, location_files)
+        if kind == "FullComment":
+            if node_path == source_path:
+                source_comments += 1
+            elif node_path is None and source_owner:
+                unbound_comments += 1
+        next_owner = source_owner or (
+            kind in {"FunctionDecl", "RecordDecl", "EnumDecl", "EnumConstantDecl"}
+            and node_path == source_path
+        )
+        for key, child in node.items():
+            if key not in {"file", "includedFrom"}:
+                visit(child, next_owner)
+
+    visit(ast, False)
+    failures: list[dict[str, JSONValue]] = []
+    if offsets:
+        failures.append(
+            {
+                "reason": "source Doxygen comments exist but owner attachment is outside this absence evaluator",
+                "marker_count": len(offsets),
+            }
+        )
+    if source_comments:
+        failures.append(
+            {
+                "reason": "compiler AST contains source-owned FullComment nodes",
+                "count": source_comments,
+            }
+        )
+    if unbound_comments:
+        failures.append(
+            {
+                "reason": "compiler AST FullComment source path is unbound",
+                "count": unbound_comments,
+            }
+        )
+    observed: dict[str, Counter[str]] = {}
+    for backend, case in backend_rows.items():
+        rows = _as_rows(case.get("documentation"), f"{backend}.documentation")
+        observed[backend] = Counter(_canonical(cast("JSONValue", row)) for row in rows)
+        if rows:
+            failures.append(
+                {
+                    "backend": backend,
+                    "reason": "documentation rows exist despite absence candidate evaluation",
+                }
+            )
+    parity = observed.get("sqlite") == observed.get("duckdb") and len(observed) == 2
+    if not parity:
+        failures.append({"reason": "backend documentation rows differ"})
+    return cast(
+        "dict[str, JSONValue]",
+        {
+            "state": "graded" if not failures else "held",
+            "semantic_validation": "source-byte-and-Clang-AST-Doxygen-absence",
+            "expected_count": 0 if not offsets and not source_comments else None,
+            "source_doxygen_marker_count": len(offsets),
+            "compiler_ast_source_full_comment_count": source_comments,
+            "compiler_ast_unbound_full_comment_count": unbound_comments,
+            "observed_counts": {
+                backend: sum(counter.values()) for backend, counter in observed.items()
+            },
+            "backend_parity": parity,
+            "absence_proved": not failures,
+            "failures": failures,
+        },
+    )
+
+
+def _grade_source_enum_members(  # noqa: PLR0913 -- explicit source and backend inputs
+    ast: dict[str, object],
+    source: bytes,
+    source_path: Path,
+    working_directory: Path,
+    source_key: str | None,
+    backend_rows: dict[str, dict[str, JSONValue]],
+) -> dict[str, JSONValue]:
+    """Compare bounded source-written enum members with both backend snapshots.
+
+    Parameters
+    ----------
+    ast : dict[str, object]
+        Full raw Clang translation-unit AST.
+    source : bytes
+        Exact source bytes selected by the compile profile.
+    source_path : pathlib.Path
+        Physical translation-unit source path.
+    working_directory : pathlib.Path
+        Compiler working directory for raw AST file references.
+    source_key : str or None
+        Repository-relative source identity key.
+    backend_rows : dict[str, dict[str, JSONValue]]
+        Enum-member snapshot rows from SQLite and DuckDB.
+
+    Returns
+    -------
+    dict[str, JSONValue]
+        Exact enum-member category report. Macro-origin, nested, anonymous, or
+        unbound source enum evidence remains held.
+    """
+    expected, census = _raw_source_enum_members(
+        ast, source, source_path, working_directory, source_key
+    )
+    failures: list[dict[str, JSONValue]] = [
+        {"reason": message} for message in cast("list[str]", census["failures"])
+    ]
+    expected_multiset = Counter(_canonical(cast("JSONValue", row)) for row in expected)
+    observed: dict[str, Counter[str]] = {}
+    for backend, case in backend_rows.items():
+        rows = _as_rows(case.get("enum_members"), f"{backend}.enum_members")
+        projected = [
+            {key: row.get(key) for key in ("owner", "name", "ordinal", "line")}
+            for row in rows
+        ]
+        observed[backend] = Counter(
+            _canonical(cast("JSONValue", row)) for row in projected
+        )
+    parity = observed.get("sqlite") == observed.get("duckdb") and len(observed) == 2
+    exact = {backend: value == expected_multiset for backend, value in observed.items()}
+    if not parity:
+        failures.append({"reason": "backend enum-member rows differ"})
+    for backend, matches in exact.items():
+        if not matches:
+            failures.append(
+                {
+                    "backend": backend,
+                    "missing": cast(
+                        "JSONValue",
+                        list((expected_multiset - observed[backend]).elements()),
+                    ),
+                    "extra": cast(
+                        "JSONValue",
+                        list((observed[backend] - expected_multiset).elements()),
+                    ),
+                }
+            )
+    return cast(
+        "dict[str, JSONValue]",
+        {
+            "state": "graded" if not failures else "held",
+            "semantic_validation": "source-byte-bound-Clang-enum-member-multiset",
+            "expected_count": len(expected),
+            "observed_counts": {
+                backend: sum(counter.values()) for backend, counter in observed.items()
+            },
+            "exact_by_backend": exact,
+            "backend_parity": parity,
+            "source_enum_census": census,
+            "failures": failures,
+        },
+    )
+
+
 def grade_source_owned_ast_categories(  # noqa: PLR0913 -- explicit evidence inputs
     normalized: dict[str, JSONValue],
     raw_ast: dict[str, object],
@@ -2722,6 +3362,7 @@ def grade_source_owned_ast_categories(  # noqa: PLR0913 -- explicit evidence inp
         working_directory,
         source_key,
     )
+    source_path = Path(_string(normalized.get("source_path"), "normalized.source_path"))
     reports: dict[str, JSONValue] = {}
     for category, expected_rows in expected.items():
         expected_multiset = Counter(_canonical(row) for row in expected_rows)
@@ -2786,8 +3427,23 @@ def grade_source_owned_ast_categories(  # noqa: PLR0913 -- explicit evidence inp
             },
         )
     reports["calls"] = _grade_source_call_rows(expected_calls, backend_rows, source_key)
+    reports["documentation"] = _grade_source_doxygen_absence(
+        source,
+        raw_ast,
+        source_path,
+        working_directory,
+        backend_rows,
+    )
+    reports["enum_members"] = _grade_source_enum_members(
+        raw_ast,
+        source,
+        source_path,
+        working_directory,
+        source_key,
+        backend_rows,
+    )
     return {
-        "scope": "source-owned-records-fields-function-definitions-and-call-occurrences",
+        "scope": "source-owned-records-fields-functions-calls-enum-members-and-doxygen-absence",
         "interpretation": "clang_parity_only_same_compiler_not_compiler_independent_truth",
         "whole_file_admission": False,
         "scope_complete": False,
@@ -2808,6 +3464,8 @@ def grade_source_owned_ast_categories(  # noqa: PLR0913 -- explicit evidence inp
             "Calls with unresolved targets remain held; the raw CLI AST does not contain compiler USRs.",
             "The macro replacement and macro argument at the shared source expansion are separate origin-bound call occurrences.",
             "Raw CLI AST expansion locations do not independently prove the macro-definition-name edge.",
+            "Doxygen documentation is graded only when both lexical source scanning and the bound Clang AST prove absence; positive source documentation remains held pending owner attachment proof.",
+            "Enum members with macro, nested, anonymous, or unbound source origin remain held.",
             "The result does not establish whole-file parity or file admission.",
         ],
     }

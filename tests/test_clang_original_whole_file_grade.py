@@ -1472,7 +1472,9 @@ def _source_owned_ast_fixture() -> tuple[
     }
     category_rows: dict[str, JSONValue] = {
         "calls": [],
+        "documentation": [],
         "declarations": [{"kind": "struct", "line": 1, "name": "R"}],
+        "enum_members": [],
         "fields": [{"line": 1, "name": "x", "owner": "R", "type": "int"}],
         "callables": [
             {
@@ -1784,6 +1786,8 @@ def _source_owned_wrapper_fixture(
                     "fields": rows[backend]["fields"],
                     "callables": rows[backend]["callables"],
                     "calls": rows[backend]["calls"],
+                    "documentation": rows[backend]["documentation"],
+                    "enum_members": rows[backend]["enum_members"],
                 }
             },
         }
@@ -1883,7 +1887,14 @@ def test_source_owned_ast_categories_reconcile_exact_facts() -> None:
     assert report["whole_file_admission"] is False
     assert report["scope_complete"] is False
     categories = cast("dict[str, JSONValue]", report["categories"])
-    assert set(categories) == {"declarations", "fields", "callables", "calls"}
+    assert set(categories) == {
+        "declarations",
+        "fields",
+        "callables",
+        "calls",
+        "documentation",
+        "enum_members",
+    }
     assert all(
         cast("dict[str, JSONValue]", item)["state"] == "graded"
         for item in categories.values()
@@ -2233,6 +2244,511 @@ def test_source_call_occurrences_bind_macro_origins_and_hold_unproven_usrs() -> 
     assert report["state"] == "held"
 
 
+def _source_enum_member_fixture() -> tuple[
+    bytes,
+    Path,
+    dict[str, object],
+    list[dict[str, JSONValue]],
+    dict[str, dict[str, JSONValue]],
+]:
+    """Build exact source-written enum member evidence for one C tag.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    tuple
+        Source bytes, source path, raw Clang AST, expected persisted rows, and
+        equivalent SQLite and DuckDB snapshot cases.
+    """
+    source = b"enum Color { RED = 1, GREEN };\n"
+    source_path = Path("/fixture.c")
+
+    def point(offset: int, token: bytes) -> dict[str, object]:
+        """Build a source coordinate matching one exact token.
+
+        Parameters
+        ----------
+        offset : int
+            Zero-based byte offset of the token.
+        token : bytes
+            Token spelling at that offset.
+
+        Returns
+        -------
+        dict[str, object]
+            Clang-style source point.
+        """
+        return {
+            "file": str(source_path),
+            "line": 1,
+            "col": offset + 1,
+            "offset": offset,
+            "tokLen": len(token),
+        }
+
+    enum_offset = source.index(b"Color")
+    red_offset = source.index(b"RED")
+    red_value_offset = source.index(b"1")
+    green_offset = source.index(b"GREEN")
+    close_offset = source.index(b"}")
+    enum_node: dict[str, object] = {
+        "id": "enum-color",
+        "kind": "EnumDecl",
+        "name": "Color",
+        "loc": point(enum_offset, b"Color"),
+        "range": {"begin": point(0, b"enum"), "end": point(close_offset, b"}")},
+        "inner": [
+            {
+                "id": "enum-red",
+                "kind": "EnumConstantDecl",
+                "name": "RED",
+                "loc": point(red_offset, b"RED"),
+                "range": {
+                    "begin": point(red_offset, b"RED"),
+                    "end": point(red_value_offset, b"1"),
+                },
+            },
+            {
+                "id": "enum-green",
+                "kind": "EnumConstantDecl",
+                "name": "GREEN",
+                "loc": point(green_offset, b"GREEN"),
+                "range": {
+                    "begin": point(green_offset, b"GREEN"),
+                    "end": point(green_offset, b"GREEN"),
+                },
+            },
+        ],
+    }
+    ast: dict[str, object] = {"kind": "TranslationUnitDecl", "inner": [enum_node]}
+    expected: list[dict[str, JSONValue]] = [
+        {"owner": "Color", "name": "RED", "ordinal": 1, "line": 1},
+        {"owner": "Color", "name": "GREEN", "ordinal": 2, "line": 1},
+    ]
+    backend_rows: dict[str, dict[str, JSONValue]] = {
+        "sqlite": {"enum_members": cast("JSONValue", expected)},
+        "duckdb": {"enum_members": cast("JSONValue", [dict(row) for row in expected])},
+    }
+    return source, source_path, ast, expected, backend_rows
+
+
+def test_source_owned_enum_member_inventory_matches_clang_ast() -> None:
+    """Grade exact source enum owners, ordinals, names, and lines.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+    source, source_path, ast, expected, rows = _source_enum_member_fixture()
+
+    report = grader._grade_source_enum_members(
+        ast, source, source_path, Path.cwd(), "src/colors.c", rows
+    )
+
+    assert report["state"] == "graded"
+    assert report["expected_count"] == 2
+    assert report["exact_by_backend"] == {"sqlite": True, "duckdb": True}
+    assert cast("dict[str, JSONValue]", report["source_enum_census"])[
+        "source_enum_member_count"
+    ] == len(expected)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra", "duplicate", "wrong_line"])
+def test_source_owned_enum_member_inventory_holds_snapshot_mutations(
+    mutation: str,
+) -> None:
+    """Hold enum-member snapshots with missing or incorrect source facts.
+
+    Parameters
+    ----------
+    mutation : str
+        Backend enum-member row mutation.
+
+    Returns
+    -------
+    None
+    """
+    source, source_path, ast, _, rows = _source_enum_member_fixture()
+    sqlite_rows = cast("list[JSONValue]", rows["sqlite"]["enum_members"])
+    duckdb_rows = cast("list[JSONValue]", rows["duckdb"]["enum_members"])
+    if mutation == "missing":
+        sqlite_rows.pop()
+        rows["duckdb"]["enum_members"] = cast(
+            "JSONValue",
+            [dict(cast("dict[str, JSONValue]", row)) for row in sqlite_rows],
+        )
+    elif mutation == "extra":
+        sqlite_rows.append({"owner": "Color", "name": "BLUE", "ordinal": 3, "line": 1})
+        rows["duckdb"]["enum_members"] = cast(
+            "JSONValue",
+            [dict(cast("dict[str, JSONValue]", row)) for row in sqlite_rows],
+        )
+    elif mutation == "duplicate":
+        sqlite_rows.append(dict(cast("dict[str, JSONValue]", sqlite_rows[0])))
+        rows["duckdb"]["enum_members"] = cast(
+            "JSONValue",
+            [dict(cast("dict[str, JSONValue]", row)) for row in sqlite_rows],
+        )
+    else:
+        cast("dict[str, JSONValue]", sqlite_rows[0])["line"] = 2
+        cast("dict[str, JSONValue]", duckdb_rows[0])["line"] = 2
+
+    report = grader._grade_source_enum_members(
+        ast, source, source_path, Path.cwd(), "src/colors.c", rows
+    )
+
+    assert report["state"] == "held"
+    assert report["failures"]
+
+
+def test_source_owned_enum_member_inventory_holds_macro_generated_enum() -> None:
+    """Keep a macro-origin enum held even when snapshots omit its members.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+    source = b"#define MAKE_ENUM enum Color { RED }\nMAKE_ENUM\n"
+    source_path = Path("/fixture.c")
+    invocation = source.index(b"MAKE_ENUM", source.index(b"\n") + 1)
+    expansion = {
+        "file": str(source_path),
+        "line": 2,
+        "col": 1,
+        "offset": invocation,
+        "tokLen": len(b"MAKE_ENUM"),
+    }
+    spelling = {
+        "file": "/fixture.h",
+        "line": 1,
+        "col": 18,
+        "offset": 17,
+        "tokLen": len(b"Color"),
+    }
+    ast: dict[str, object] = {
+        "kind": "TranslationUnitDecl",
+        "inner": [
+            {
+                "kind": "EnumDecl",
+                "name": "Color",
+                "loc": {"spellingLoc": spelling, "expansionLoc": expansion},
+                "inner": [
+                    {
+                        "kind": "EnumConstantDecl",
+                        "name": "RED",
+                        "loc": {"spellingLoc": spelling, "expansionLoc": expansion},
+                    }
+                ],
+            }
+        ],
+    }
+    rows: dict[str, dict[str, JSONValue]] = {
+        "sqlite": {"enum_members": []},
+        "duckdb": {"enum_members": []},
+    }
+
+    report = grader._grade_source_enum_members(
+        ast, source, source_path, Path.cwd(), "src/colors.c", rows
+    )
+
+    assert report["state"] == "held"
+    census = cast("dict[str, JSONValue]", report["source_enum_census"])
+    assert census["macro_origin_enum_declaration_count"] == 1
+
+
+@pytest.mark.parametrize("mutation", ["tag_name", "tag_offset"])
+def test_source_owned_enum_member_inventory_rejects_forged_tag_anchor(
+    mutation: str,
+) -> None:
+    """Reject enum tag identity or coordinates that disagree with source bytes.
+
+    Parameters
+    ----------
+    mutation : str
+        Either the normalized tag name or its physical source offset.
+
+    Returns
+    -------
+    None
+    """
+    source, source_path, ast, _, rows = _source_enum_member_fixture()
+    enum_node = cast("dict[str, object]", cast("list[object]", ast["inner"])[0])
+    if mutation == "tag_name":
+        enum_node["name"] = "Shade"
+    else:
+        enum_node["loc"] = {
+            **cast("dict[str, object]", enum_node["loc"]),
+            "offset": source.index(b"RED"),
+            "col": source.index(b"RED") + 1,
+        }
+
+    report = grader._grade_source_enum_members(
+        ast, source, source_path, Path.cwd(), "src/colors.c", rows
+    )
+
+    assert report["state"] == "held"
+    assert report["failures"]
+
+
+def test_source_owned_enum_member_absence_ignores_strings_and_headers() -> None:
+    """Prove empty source enum inventory without counting literals or headers.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+    source = b'const char *text = "enum Hidden { A };"; /* enum AlsoHidden */\n'
+    source_path = Path("/fixture.c")
+    ast: dict[str, object] = {
+        "kind": "TranslationUnitDecl",
+        "inner": [
+            {
+                "kind": "EnumDecl",
+                "name": "External",
+                "loc": {
+                    "file": "/fixture.h",
+                    "line": 1,
+                    "col": 6,
+                    "offset": 5,
+                    "tokLen": 8,
+                },
+                "inner": [
+                    {
+                        "kind": "EnumConstantDecl",
+                        "name": "VALUE",
+                        "loc": {
+                            "file": "/fixture.h",
+                            "line": 1,
+                            "col": 17,
+                            "offset": 16,
+                            "tokLen": 5,
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    rows: dict[str, dict[str, JSONValue]] = {
+        "sqlite": {"enum_members": []},
+        "duckdb": {"enum_members": []},
+    }
+
+    report = grader._grade_source_enum_members(
+        ast, source, source_path, Path.cwd(), "src/empty.c", rows
+    )
+
+    assert report["state"] == "graded"
+    assert report["expected_count"] == 0
+    assert (
+        cast("dict[str, JSONValue]", report["source_enum_census"])[
+            "external_enum_declaration_count"
+        ]
+        == 1
+    )
+
+
+def test_source_owned_doxygen_absence_scans_comments_and_literals() -> None:
+    """Ignore comment markers in literals while detecting real Doxygen comments.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+    source_path = Path("/fixture.c")
+    no_docs = b'const char *text = "/// not docs /**"; // /** ordinary line comment\n'
+    raw_ast: dict[str, object] = {"kind": "TranslationUnitDecl", "inner": []}
+    empty_rows: dict[str, dict[str, JSONValue]] = {
+        "sqlite": {"documentation": []},
+        "duckdb": {"documentation": []},
+    }
+
+    absent = grader._grade_source_doxygen_absence(
+        no_docs, raw_ast, source_path, Path.cwd(), empty_rows
+    )
+
+    assert absent["state"] == "graded"
+    assert absent["absence_proved"] is True
+    header_ast: dict[str, object] = {
+        "kind": "TranslationUnitDecl",
+        "inner": [
+            {
+                "kind": "FunctionDecl",
+                "name": "header_function",
+                "loc": {
+                    "file": "/fixture.h",
+                    "line": 1,
+                    "col": 1,
+                    "offset": 0,
+                    "tokLen": 1,
+                },
+                "inner": [
+                    {
+                        "kind": "FullComment",
+                        "range": {
+                            "begin": {
+                                "file": "/fixture.h",
+                                "line": 1,
+                                "col": 1,
+                                "offset": 0,
+                                "tokLen": 1,
+                            }
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    header_only = grader._grade_source_doxygen_absence(
+        no_docs, header_ast, source_path, Path.cwd(), empty_rows
+    )
+
+    assert header_only["state"] == "graded"
+    assert header_only["compiler_ast_source_full_comment_count"] == 0
+
+    real_doc = no_docs + b"/** Real source documentation. */\n"
+    documented_ast: dict[str, object] = {
+        "kind": "TranslationUnitDecl",
+        "inner": [
+            {
+                "kind": "FunctionDecl",
+                "name": "f",
+                "loc": {
+                    "file": str(source_path),
+                    "line": 2,
+                    "col": 1,
+                    "offset": real_doc.index(b"Real"),
+                    "tokLen": 4,
+                },
+                "inner": [
+                    {
+                        "kind": "FullComment",
+                        "range": {
+                            "begin": {
+                                "file": str(source_path),
+                                "line": 2,
+                                "col": 1,
+                                "offset": real_doc.index(b"/**"),
+                                "tokLen": 3,
+                            }
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    documented = grader._grade_source_doxygen_absence(
+        real_doc, documented_ast, source_path, Path.cwd(), empty_rows
+    )
+
+    assert documented["state"] == "held"
+    assert documented["source_doxygen_marker_count"] == 1
+    assert documented["compiler_ast_source_full_comment_count"] == 1
+    assert documented["absence_proved"] is False
+
+
+def test_source_owned_doxygen_absence_holds_extra_backend_rows() -> None:
+    """Reject documentation output when source and AST prove no Doxygen input.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+    source = b"int f(void); /* plain comment */\n"
+    source_path = Path("/fixture.c")
+    ast: dict[str, object] = {"kind": "TranslationUnitDecl", "inner": []}
+    rows: dict[str, dict[str, JSONValue]] = {
+        "sqlite": {"documentation": [{"owner": "f", "text": "fabricated", "line": 1}]},
+        "duckdb": {"documentation": []},
+    }
+
+    report = grader._grade_source_doxygen_absence(
+        source, ast, source_path, Path.cwd(), rows
+    )
+
+    assert report["state"] == "held"
+    assert report["absence_proved"] is False
+    assert report["backend_parity"] is False
+
+
+def test_source_owned_doxygen_scanner_recognizes_bare_cr_line_ending() -> None:
+    """Do not let a bare CR line ending hide a later Doxygen comment.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+    source = b"// ordinary comment\r/** source Doxygen comment */\r"
+
+    assert grader._scan_c_doxygen_comment_offsets(source) == [source.index(b"/**")]
+
+    rows: dict[str, dict[str, JSONValue]] = {
+        "sqlite": {"documentation": []},
+        "duckdb": {"documentation": []},
+    }
+    report = grader._grade_source_doxygen_absence(
+        source,
+        {"kind": "TranslationUnitDecl", "inner": []},
+        Path("/fixture.c"),
+        Path.cwd(),
+        rows,
+    )
+
+    assert report["state"] == "held"
+    assert report["absence_proved"] is False
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        b"\xef\xbb\xbfint f(void);\n",
+        b"int f(void);\\\nint g(void);\n",
+        b"int f(void); /* ??= */\n",
+    ],
+)
+def test_source_doxygen_scanner_holds_preprocessing_spellings(source: bytes) -> None:
+    """Keep non-literal preprocessing spellings outside lexical absence proof.
+
+    Parameters
+    ----------
+    source : bytes
+        Source containing a BOM, line splice, or possible trigraph.
+
+    Returns
+    -------
+    None
+    """
+    with pytest.raises(OracleFormatError):
+        grader._scan_c_doxygen_comment_offsets(source)
+
+
 @pytest.mark.parametrize(
     ("old_spelling", "new_spelling", "message"),
     [
@@ -2477,7 +2993,14 @@ def test_source_owned_evidence_wrapper_accepts_bound_fixture(
     categories = cast("dict[str, JSONValue]", report["categories"])
     assert all(
         cast("dict[str, JSONValue]", categories[name])["state"] == "graded"
-        for name in ("declarations", "fields", "callables", "calls")
+        for name in (
+            "declarations",
+            "fields",
+            "callables",
+            "calls",
+            "documentation",
+            "enum_members",
+        )
     )
 
 

@@ -332,7 +332,12 @@ host parser.
 - `scripts/clang_original_whole_file_grade.py:2010` (C901, PLR0913): The bounded AST expectation builder binds raw-source declarations and normalized facts through one exhaustive reconciliation.
 - `scripts/clang_original_whole_file_grade.py:2253` (C901): The raw AST declaration walk checks physical ownership, lexical parents, types and unsupported source constructs.
 - `scripts/clang_original_whole_file_grade.py:2328` (C901, PLR0912): The nested visitor validates source-owned nodes while preserving lexical record and function context.
-- `scripts/clang_original_whole_file_grade.py:2671` (PLR0913): Category-only reconciliation compares exact source-owned facts across both persisted backends.
-- `scripts/clang_original_whole_file_grade.py:3433` (C901, PLR0912, PLR0915): The evidence wrapper validates the complete capture, profile, toolchain, database and snapshot chain before grading.
-- `scripts/clang_original_whole_file_grade.py:2816` (C901, PLR0913, PLR0912): The call reconciliation checks ownership, locations and target evidence across all source occurrences.
-- `scripts/clang_original_whole_file_grade.py:3011` (C901, PLR0912): The nested call visitor retains lexical caller and macro-origin context while traversing Clang AST nodes.
+- `scripts/clang_original_whole_file_grade.py:2671` (C901): The Doxygen scanner skips C literals and rejects preprocessing spellings outside its proven lexical subset.
+- `scripts/clang_original_whole_file_grade.py:2836` (C901): The raw enum inventory binds tag and member tokens to source bytes and fails closed on unsupported origins.
+- `scripts/clang_original_whole_file_grade.py:2934` (C901, PLR0912): The nested enum visitor checks physical ownership, source ranges, macro origins, and supported enum shape.
+- `scripts/clang_original_whole_file_grade.py:3097` (C901): Documentation absence requires both lexical source scanning and bound compiler AST evidence.
+- `scripts/clang_original_whole_file_grade.py:3227` (PLR0913): Enum category comparison receives explicit AST, source, identity, and both backend inputs.
+- `scripts/clang_original_whole_file_grade.py:3311` (PLR0913): Category evaluation keeps source and dual-backend evidence boundaries explicit.
+- `scripts/clang_original_whole_file_grade.py:3474` (C901, PLR0913, PLR0912): The call reconciliation checks ownership, locations and target evidence across all source occurrences.
+- `scripts/clang_original_whole_file_grade.py:3669` (C901, PLR0912): The nested call visitor retains lexical caller and macro-origin context while traversing Clang AST nodes.
+- `scripts/clang_original_whole_file_grade.py:4091` (C901, PLR0912, PLR0915): The evidence wrapper validates the complete capture, profile, toolchain, database and snapshot chain before grading.
