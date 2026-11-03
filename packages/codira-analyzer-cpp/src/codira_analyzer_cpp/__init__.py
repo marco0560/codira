@@ -447,6 +447,115 @@ def _clang_source_anchor(
     return None
 
 
+def _verified_source_position_offset(
+    position: SourcePosition | None,
+    source_path: Path,
+    source_bytes: bytes,
+) -> int | None:
+    """Return a byte offset only when Clang coordinates match source bytes.
+
+    Parameters
+    ----------
+    position : codira_clang_frontend.SourcePosition or None
+        Physical source coordinate reported by Clang.
+    source_path : pathlib.Path
+        Translation unit that must own the coordinate.
+    source_bytes : bytes
+        Captured translation-unit bytes used to verify the coordinates.
+
+    Returns
+    -------
+    int or None
+        The verified zero-based byte offset, or ``None`` when path, range, line,
+        or column evidence is absent or inconsistent.
+    """
+    if (
+        position is None
+        or position.path is None
+        or position.offset is None
+        or position.line is None
+        or position.column is None
+    ):
+        return None
+    try:
+        if Path(position.path).resolve() != source_path.resolve():
+            return None
+    except OSError:
+        return None
+    offset = position.offset
+    if not 0 <= offset < len(source_bytes):
+        return None
+    line = source_bytes.count(b"\n", 0, offset) + 1
+    line_start = source_bytes.rfind(b"\n", 0, offset) + 1
+    column = offset - line_start + 1
+    if position.line != line or position.column != column:
+        return None
+    return offset
+
+
+def _sourcewritten_definition_identifier_offset(
+    declaration: FrontendDeclaration,
+    source_path: Path,
+    source_bytes: bytes,
+) -> int | None:
+    """Verify a source-written declaration site names its exact identifier.
+
+    Parameters
+    ----------
+    declaration : codira_clang_frontend.FrontendDeclaration
+        Source-written definition whose identifier location is being checked.
+    source_path : pathlib.Path
+        Translation unit that must own the definition site.
+    source_bytes : bytes
+        Captured translation-unit bytes used to verify the identifier token.
+
+    Returns
+    -------
+    int or None
+        Verified byte offset of the declaration name, or ``None`` if any path,
+        coordinate, or source-token check fails.
+    """
+    if declaration.location is None or declaration.location.is_macro:
+        return None
+    position = declaration.location.spelling
+    offset = _verified_source_position_offset(position, source_path, source_bytes)
+    if offset is None:
+        return None
+    identifier = declaration.name.encode("utf-8")
+    end = offset + len(identifier)
+    if not identifier or source_bytes[offset:end] != identifier:
+        return None
+
+    def is_identifier_byte(value: int) -> bool:
+        """Return whether one UTF-8 byte can continue an identifier token.
+
+        Parameters
+        ----------
+        value : int
+            Byte value adjacent to the candidate identifier.
+
+        Returns
+        -------
+        bool
+            Whether the byte is an ASCII identifier byte or UTF-8 continuation
+            byte sequence member.
+        """
+        return (
+            value >= 0x80
+            or value in {0x24, 0x5C}
+            or value == 0x5F
+            or 0x30 <= value <= 0x39
+            or 0x41 <= value <= 0x5A
+            or 0x61 <= value <= 0x7A
+        )
+
+    if offset > 0 and is_identifier_byte(source_bytes[offset - 1]):
+        return None
+    if end < len(source_bytes) and is_identifier_byte(source_bytes[end]):
+        return None
+    return offset
+
+
 def _declaration_occurrence_suffix(
     declaration: FrontendDeclaration, source_path: Path
 ) -> str:
@@ -488,6 +597,124 @@ def _declaration_occurrence_suffix(
         )
     )
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+
+
+def _proven_macro_static_definition_pairs(
+    declarations: Sequence[FrontendDeclaration],
+    source_path: Path,
+    source_bytes: bytes,
+) -> dict[int, int]:
+    """Find exact macro static-member declarations paired with definitions.
+
+    Parameters
+    ----------
+    declarations : collections.abc.Sequence[FrontendDeclaration]
+        Compiler declaration rows for the translation unit.
+    source_path : pathlib.Path
+        Translation unit that must own both declaration sites and their class.
+    source_bytes : bytes
+        Captured source bytes used to verify the physical definition token.
+
+    Returns
+    -------
+    dict[int, int]
+        Object-identity mapping from a proven macro declaration row to its
+        unique source-written out-of-line definition row.
+
+    Notes
+    -----
+    Only a two-row same-USR group is eligible. The macro row must be a
+    source-located, non-defining C++ record variable with known type, access,
+    and owner; its partner must be the matching source-written definition at a
+    distinct source site. Any additional redeclaration remains held.
+    """
+    declarations_by_usr: dict[str, list[FrontendDeclaration]] = {}
+    identity_counts: dict[tuple[str, str], int] = {}
+    for declaration in declarations:
+        if declaration.usr:
+            declarations_by_usr.setdefault(declaration.usr, []).append(declaration)
+        identity = (declaration.kind, declaration.qualified_name or declaration.name)
+        identity_counts[identity] = identity_counts.get(identity, 0) + 1
+
+    pairs: dict[int, int] = {}
+    for group in declarations_by_usr.values():
+        if len(group) != 2:
+            continue
+        macro_rows = [
+            item
+            for item in group
+            if item.provenance in {"macro_argument", "macro_replacement"}
+        ]
+        definition_rows = [
+            item for item in group if item.provenance == "source_written"
+        ]
+        if len(macro_rows) != 1 or len(definition_rows) != 1:
+            continue
+        macro_row = macro_rows[0]
+        definition_row = definition_rows[0]
+        identity = (
+            macro_row.kind,
+            macro_row.qualified_name or macro_row.name,
+        )
+        if (
+            identity_counts.get(identity) != 2
+            or definition_row.usr != macro_row.usr
+            or (
+                definition_row.kind,
+                definition_row.qualified_name or definition_row.name,
+            )
+            != identity
+            or macro_row.kind != "variable"
+            or macro_row.decl_kind != "Var"
+            or definition_row.decl_kind != "Var"
+            or macro_row.is_definition is not False
+            or definition_row.is_definition is not True
+            or macro_row.is_file_scope is not False
+            or definition_row.is_file_scope is not False
+            or macro_row.location is None
+            or not macro_row.location.is_macro
+            or definition_row.location is None
+            or definition_row.location.is_macro
+            or macro_row.owner_kind != "CXXRecord"
+            or definition_row.owner_kind != "CXXRecord"
+            or not macro_row.name
+            or macro_row.name != definition_row.name
+            or not macro_row.qualified_name
+            or macro_row.qualified_name != definition_row.qualified_name
+            or not macro_row.type_text
+            or macro_row.type_text != definition_row.type_text
+            or not macro_row.access
+            or macro_row.access != definition_row.access
+            or not macro_row.owner_usr
+            or macro_row.owner_usr != definition_row.owner_usr
+            or not macro_row.owner_name
+            or macro_row.owner_name != definition_row.owner_name
+        ):
+            continue
+        macro_site = (
+            _verified_source_position_offset(
+                macro_row.location.expansion, source_path, source_bytes
+            )
+            if macro_row.location is not None
+            else None
+        )
+        definition_site = _sourcewritten_definition_identifier_offset(
+            definition_row, source_path, source_bytes
+        )
+        macro_owner = _clang_source_anchor(macro_row.owner_location, source_path)
+        definition_owner = _clang_source_anchor(
+            definition_row.owner_location, source_path
+        )
+        if (
+            macro_site is None
+            or definition_site is None
+            or macro_site == definition_site
+            or macro_owner is None
+            or macro_owner != definition_owner
+        ):
+            continue
+        pairs[id(macro_row)] = id(definition_row)
+    return pairs
 
 
 def _disambiguate_documentation_stable_ids(
@@ -1978,6 +2205,13 @@ def _analysis_from_clang_result(
             artifact_identity_counts.get(identity, 0) + 1
         )
 
+    macro_static_definition_pairs = (
+        _proven_macro_static_definition_pairs(
+            result.declarations, path, captured_source[1]
+        )
+        if captured_source is not None
+        else {}
+    )
     declaration_evidence_by_id: dict[int, CompilerObservedDeclarationProvenance] = {}
     omitted_generated_declaration = False
     for declaration in result.declarations:
@@ -2011,7 +2245,7 @@ def _analysis_from_clang_result(
             declaration.usr is not None
             and usr_counts.get(declaration.usr) == 1
             and artifact_identity_counts.get(identity) == 1
-        )
+        ) or id(declaration) in macro_static_definition_pairs
         declaration_observation = (
             _clang_macro_invocation_for_declaration(
                 declaration,
@@ -2029,6 +2263,11 @@ def _analysis_from_clang_result(
             omitted_generated_declaration = True
             continue
         declaration_evidence_by_id[id(declaration)] = declaration_observation[0]
+        paired_definition_id = macro_static_definition_pairs.get(id(declaration))
+        if paired_definition_id is not None:
+            declaration_evidence_by_id[paired_definition_id] = declaration_observation[
+                0
+            ]
 
     for member in result.declarations:
         if (
@@ -2069,6 +2308,8 @@ def _analysis_from_clang_result(
     ] = []
     eligible_declarations: list[FrontendDeclaration] = []
     for declaration in result.declarations:
+        if id(declaration) in macro_static_definition_pairs:
+            continue
         declaration_evidence = declaration_evidence_by_id.get(id(declaration))
         if declaration.provenance != "source_written" and declaration_evidence is None:
             continue
@@ -2172,6 +2413,7 @@ def _analysis_from_clang_result(
         signature = (
             declaration.type_text or declaration.name
             if declaration_evidence is not None
+            and declaration.provenance != "source_written"
             else declaration.signature
             or (declaration.source_text if declaration.kind != "namespace" else None)
             or declaration.type_text
@@ -6520,7 +6762,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "49"
+    version = "50"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",

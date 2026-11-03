@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 REFERENCE_SCHEMA = "codira.clang-reference-facts/1"
+OWNERSHIP_DIAGNOSTICS_SAMPLE_LIMIT = 32
 CLANG_JSON_DUMPER_VERSION = "22.1.8"
 CLANG_JSON_DUMPER_SOURCE = (
     "https://raw.githubusercontent.com/llvm/llvm-project/"
@@ -328,6 +329,164 @@ def _node_location(
     return value, resolved, origin
 
 
+def _proven_lambda_product_owner(
+    node: dict[str, object],
+    source: bytes,
+    source_path: Path,
+    bindings: dict[int, tuple[Path | None, str]],
+    authored_callable_stack: list[str],
+) -> tuple[str, ...] | None:
+    """Map a proven lambda wrapper to its unique authored enclosing function.
+
+    Parameters
+    ----------
+    node : dict[str, object]
+        Clang ``LambdaExpr`` node.
+    source : bytes
+        Bound translation-unit bytes.
+    source_path : pathlib.Path
+        Exact source path used for this AST.
+    bindings : dict[int, tuple[pathlib.Path or None, str]]
+        Clang JSON global file-context bindings.
+    authored_callable_stack : list[str]
+        Source-authored callable definitions enclosing this lambda.
+
+    Returns
+    -------
+    tuple[str, ...] or None
+        The unique source-authored caller chain when the lambda capture
+        introducer and implicit record/operator wrapper are all proven.
+        Otherwise, ``None`` leaves the product caller owner unresolved.
+    """
+    if len(authored_callable_stack) != 1:
+        return None
+    raw_range = node.get("range")
+    if not isinstance(raw_range, dict):
+        return None
+    raw_begin = raw_range.get("begin")
+    if not isinstance(raw_begin, dict) or any(
+        key in raw_begin for key in ("expansionLoc", "spellingLoc")
+    ):
+        return None
+    lambda_begin, lambda_file, _lambda_origin = _node_location(node, "range", bindings)
+    if (
+        lambda_begin is None
+        or lambda_file != source_path
+        or not _source_position_matches(source, lambda_begin)
+    ):
+        return None
+    bracket_offset = lambda_begin.get("offset")
+    if (
+        not isinstance(bracket_offset, int)
+        or source[bracket_offset : bracket_offset + 1] != b"["
+    ):
+        return None
+    children = node.get("inner")
+    if not isinstance(children, list):
+        return None
+    matching_records = sum(
+        _is_bound_implicit_lambda_record(child, source_path, bracket_offset, bindings)
+        for child in children
+        if isinstance(child, dict)
+    )
+    if matching_records != 1:
+        return None
+    return tuple(authored_callable_stack)
+
+
+def _is_bound_implicit_lambda_record(
+    node: dict[str, object],
+    source_path: Path,
+    bracket_offset: int,
+    bindings: dict[int, tuple[Path | None, str]],
+) -> bool:
+    """Check an implicit closure record and its unique implicit call operator.
+
+    Parameters
+    ----------
+    node : dict[str, object]
+        Candidate direct child of a LambdaExpr.
+    source_path : pathlib.Path
+        Translation-unit path bound to this AST.
+    bracket_offset : int
+        Proven source byte offset of the lambda capture introducer.
+    bindings : dict[int, tuple[pathlib.Path or None, str]]
+        Clang JSON global file-context bindings.
+
+    Returns
+    -------
+    bool
+        True when exactly one implicit operator wrapper shares the bracket.
+    """
+    if node.get("kind") != "CXXRecordDecl" or node.get("isImplicit") is not True:
+        return False
+    raw_location = node.get("loc")
+    if not isinstance(raw_location, dict) or any(
+        key in raw_location for key in ("expansionLoc", "spellingLoc")
+    ):
+        return False
+    record_location, record_file, _record_origin = _node_location(node, "loc", bindings)
+    if (
+        record_location is None
+        or record_file != source_path
+        or record_location.get("offset") != bracket_offset
+    ):
+        return False
+    children = node.get("inner")
+    if not isinstance(children, list):
+        return False
+    matching_methods = sum(
+        _is_bound_implicit_lambda_operator(child, source_path, bracket_offset, bindings)
+        for child in children
+        if isinstance(child, dict)
+    )
+    return matching_methods == 1
+
+
+def _is_bound_implicit_lambda_operator(
+    node: dict[str, object],
+    source_path: Path,
+    bracket_offset: int,
+    bindings: dict[int, tuple[Path | None, str]],
+) -> bool:
+    """Check an implicit lambda operator is located at its capture bracket.
+
+    Parameters
+    ----------
+    node : dict[str, object]
+        Candidate direct child of a closure record.
+    source_path : pathlib.Path
+        Translation-unit path bound to this AST.
+    bracket_offset : int
+        Proven source byte offset of the lambda capture introducer.
+    bindings : dict[int, tuple[pathlib.Path or None, str]]
+        Clang JSON global file-context bindings.
+
+    Returns
+    -------
+    bool
+        True when this is the unique implicit operator() at the bracket.
+    """
+    if node.get("kind") != "CXXMethodDecl" or node.get("name") != "operator()":
+        return False
+    # Clang 22 JSON omits isImplicit on the lambda's operator() even though
+    # its parent closure record is explicitly implicit. Accept only omission;
+    # an explicit false or malformed marker still fails closed.
+    if "isImplicit" in node and node["isImplicit"] is not True:
+        return False
+    raw_location = node.get("loc")
+    if not isinstance(raw_location, dict) or any(
+        key in raw_location for key in ("expansionLoc", "spellingLoc")
+    ):
+        return False
+    location, physical_file, _origin = _node_location(node, "loc", bindings)
+    return (
+        location is not None
+        and physical_file == source_path
+        and location.get("offset") == bracket_offset
+    )
+
+
 def _source_name_match(source: bytes, offset: object, name: object) -> bool:
     """Check an AST declaration name against its physical source bytes.
 
@@ -343,12 +502,46 @@ def _source_name_match(source: bytes, offset: object, name: object) -> bool:
     Returns
     -------
     bool
-        Whether the source bytes at the offset begin with the exact name.
+        Whether the name occupies a complete, exact source token. Non-ASCII
+        bytes and universal-character-name introducers are treated as
+        identifier continuations at token boundaries.
     """
     if not isinstance(offset, int) or not isinstance(name, str) or not name:
         return False
-    token = name.encode("utf-8")
-    return 0 <= offset <= len(source) and source[offset : offset + len(token)] == token
+    try:
+        token = name.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    end = offset + len(token)
+    if not 0 <= offset <= end <= len(source) or source[offset:end] != token:
+        return False
+    return not (
+        (offset > 0 and _is_identifier_continuation_byte(source[offset - 1]))
+        or (end < len(source) and _is_identifier_continuation_byte(source[end]))
+    )
+
+
+def _is_identifier_continuation_byte(value: int) -> bool:
+    """Conservatively recognize bytes that can continue a C/C++ identifier.
+
+    Parameters
+    ----------
+    value : int
+        One source byte.
+
+    Returns
+    -------
+    bool
+        True for ASCII identifier bytes, dollar extensions, non-ASCII bytes,
+        and a backslash that may begin a universal-character-name escape.
+    """
+    return (
+        48 <= value <= 57
+        or 65 <= value <= 90
+        or 97 <= value <= 122
+        or value in {36, 92, 95}
+        or value >= 128
+    )
 
 
 def _source_position_matches(source: bytes, location: dict[str, object]) -> bool:
@@ -410,6 +603,24 @@ def _declaration_index(ast: dict[str, object]) -> dict[str, dict[str, object]]:
     return declarations
 
 
+def _new_ownership_diagnostic_groups() -> dict[str, dict[str, object]]:
+    """Create ownership classes with exact counters and bounded samples.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    dict[str, dict[str, object]]
+        Mutable diagnostic groups for root, external, and unknown ownership.
+    """
+    return {
+        ownership_class: {"counts_by_reason": Counter(), "samples": []}
+        for ownership_class in ("root_intersecting", "proved_external", "unknown")
+    }
+
+
 def normalize_ast(  # noqa: C901 -- category projection shares ownership decisions
     ast: dict[str, object],
     source_path: Path,
@@ -433,6 +644,11 @@ def normalize_ast(  # noqa: C901 -- category projection shares ownership decisio
     -------
     dict[str, object]
         Deterministic source-owned fact lists and explicit ungraded categories.
+
+    Raises
+    ------
+    TypeError
+        If internal ownership diagnostic data has an unexpected shape.
     """
     source_path = source_path.resolve()
     bindings, binding_counts = _annotate_ast_locations(ast, working_directory)
@@ -448,7 +664,15 @@ def normalize_ast(  # noqa: C901 -- category projection shares ownership decisio
     }
     owner_stack: list[str] = []
     callable_stack: list[str] = []
+    authored_callable_stack: list[str] = []
+    lambda_product_owner_stack: list[tuple[str, ...] | None] = []
     ungraded_counts: Counter[str] = Counter()
+    ownership_diagnostics: dict[str, object] = {
+        "schema_version": 1,
+        "sample_limit_per_class": OWNERSHIP_DIAGNOSTICS_SAMPLE_LIMIT,
+        "declarations": _new_ownership_diagnostic_groups(),
+        "calls": _new_ownership_diagnostic_groups(),
+    }
     duplicate_calls: Counter[tuple[object, ...]] = Counter()
     call_facts: dict[tuple[object, ...], dict[str, object]] = {}
     declaration_kinds = {
@@ -494,6 +718,89 @@ def normalize_ast(  # noqa: C901 -- category projection shares ownership decisio
         "CXXOperatorCallExpr",
     }
 
+    def record_ownership_diagnostic(
+        category: str,
+        ownership_class: str,
+        reason: str,
+        node: dict[str, object],
+        locations: list[dict[str, object]],
+    ) -> None:
+        """Count a rejected AST fact and retain a bounded provenance sample.
+
+        Parameters
+        ----------
+        category : str
+            ``declarations`` or ``calls``.
+        ownership_class : str
+            ``root_intersecting``, ``proved_external``, or ``unknown``.
+        reason : str
+            Specific rejection or exclusion reason.
+        node : dict[str, object]
+            Rejected Clang AST node.
+        locations : list[dict[str, object]]
+            Relevant source coordinate descriptors.
+
+        Returns
+        -------
+        None
+            The diagnostic counters and bounded sample list are updated.
+        """
+        groups = ownership_diagnostics[category]
+        if not isinstance(groups, dict):
+            raise TypeError
+        group = groups[ownership_class]
+        if not isinstance(group, dict):
+            raise TypeError
+        counts = group["counts_by_reason"]
+        samples = group["samples"]
+        if not isinstance(counts, Counter) or not isinstance(samples, list):
+            raise TypeError
+        counts[reason] += 1
+        if len(samples) < OWNERSHIP_DIAGNOSTICS_SAMPLE_LIMIT:
+            sample: dict[str, object] = {
+                "kind": node.get("kind"),
+                "name": node.get("name"),
+                "reason": reason,
+                "locations": locations,
+            }
+            if owner_stack:
+                sample["owner_chain"] = list(owner_stack)
+            if callable_stack:
+                sample["caller_chain"] = list(callable_stack)
+            samples.append(sample)
+
+    def describe_location(
+        location: dict[str, object] | None,
+        physical_file: Path | None,
+        file_origin: str,
+    ) -> dict[str, object]:
+        """Return source-coordinate ownership evidence without source text.
+
+        Parameters
+        ----------
+        location : dict[str, object] or None
+            Clang location object, if present.
+        physical_file : pathlib.Path or None
+            File bound by the versioned global file-context walk.
+        file_origin : str
+            Binding source, such as explicit, inherited, or unbound.
+
+        Returns
+        -------
+        dict[str, object]
+            Path, byte offset, line, and binding-origin evidence.
+        """
+        descriptor: dict[str, object] = {
+            "path": str(physical_file) if physical_file is not None else None,
+            "binding_origin": file_origin,
+        }
+        if location is not None:
+            for key in ("offset", "line"):
+                value = location.get(key)
+                if isinstance(value, int):
+                    descriptor[key] = value
+        return descriptor
+
     def visit(node: object) -> None:  # noqa: C901, PLR0912 -- fact-category projection
         """Visit one AST node in lexical tree order.
 
@@ -525,10 +832,41 @@ def normalize_ast(  # noqa: C901 -- category projection shares ownership decisio
             "Template" in str(kind) or node.get("isTemplateInstantiation") is True
         )
         if kind in declaration_kinds:
+            declaration_descriptor = describe_location(
+                location, physical_file, file_origin
+            )
             if explicit_implicit:
+                ownership_class = (
+                    "root_intersecting"
+                    if source_owned
+                    else "proved_external"
+                    if physical_file is not None
+                    else "unknown"
+                )
+                record_ownership_diagnostic(
+                    "declarations",
+                    ownership_class,
+                    "implicit_declaration",
+                    node,
+                    [declaration_descriptor],
+                )
                 if source_owned or physical_file is None:
                     ungraded_counts["implicit_declaration"] += 1
             elif template_node:
+                ownership_class = (
+                    "root_intersecting"
+                    if source_owned
+                    else "proved_external"
+                    if physical_file is not None
+                    else "unknown"
+                )
+                record_ownership_diagnostic(
+                    "declarations",
+                    ownership_class,
+                    "template_declaration",
+                    node,
+                    [declaration_descriptor],
+                )
                 if source_owned or physical_file is None:
                     ungraded_counts["template_declaration"] += 1
             elif (
@@ -558,19 +896,52 @@ def normalize_ast(  # noqa: C901 -- category projection shares ownership decisio
                     facts["types"].append(fact)
                 elif kind == "FieldDecl":
                     facts["fields"].append(fact)
-            elif source_owned or physical_file is None:
-                ungraded_counts["declaration_location_or_name_unproven"] += 1
-                facts["ungraded_nodes"].append(
-                    {
-                        "kind": kind,
-                        "name": name,
-                        "offset": offset,
-                        "reason": "physical ownership or source token not proven",
-                    }
+            else:
+                ownership_class = (
+                    "root_intersecting"
+                    if source_owned
+                    else "proved_external"
+                    if physical_file is not None
+                    else "unknown"
                 )
+                if physical_file is not None and not source_owned:
+                    diagnostic_reason = "outside_translation_unit"
+                elif location is None:
+                    diagnostic_reason = "location_missing"
+                elif physical_file is None:
+                    diagnostic_reason = "file_context_unknown"
+                elif not isinstance(offset, int):
+                    diagnostic_reason = "offset_missing"
+                elif not _source_position_matches(source, location):
+                    diagnostic_reason = "source_line_or_offset_invalid"
+                elif not token_matches:
+                    diagnostic_reason = "source_name_token_mismatch"
+                else:
+                    diagnostic_reason = "source_ownership_unproven"
+                record_ownership_diagnostic(
+                    "declarations",
+                    ownership_class,
+                    diagnostic_reason,
+                    node,
+                    [declaration_descriptor],
+                )
+                if source_owned or physical_file is None:
+                    ungraded_counts["declaration_location_or_name_unproven"] += 1
+                    facts["ungraded_nodes"].append(
+                        {
+                            "kind": kind,
+                            "name": name,
+                            "offset": offset,
+                            "reason": "physical ownership or source token not proven",
+                        }
+                    )
         if kind in call_kinds:
             begin, begin_file, begin_origin = _node_location(node, "range", bindings)
             end_loc, end_file, end_origin = _node_location(node, "range_end", bindings)
+            call_locations = [
+                describe_location(begin, begin_file, begin_origin),
+                describe_location(end_loc, end_file, end_origin),
+            ]
             if (
                 begin_file == source_path
                 and end_file == source_path
@@ -590,6 +961,31 @@ def normalize_ast(  # noqa: C901 -- category projection shares ownership decisio
                     and end_offset + end_tok_len <= len(source)
                 ):
                     direct_target = _direct_callee(node, declarations_by_id)
+                    if lambda_product_owner_stack:
+                        proven_owners = [
+                            owner
+                            for owner in lambda_product_owner_stack
+                            if owner is not None
+                        ]
+                        if (
+                            len(proven_owners) == len(lambda_product_owner_stack)
+                            and len(set(proven_owners)) == 1
+                        ):
+                            product_caller_chain: list[str] | None = list(
+                                proven_owners[0]
+                            )
+                            product_owner_mapping_status = (
+                                "proven_enclosing_authored_callable"
+                            )
+                        else:
+                            product_caller_chain = None
+                            product_owner_mapping_status = (
+                                "lambda_product_owner_unproven"
+                            )
+                            ungraded_counts["lambda_product_owner_unproven"] += 1
+                    else:
+                        product_caller_chain = list(callable_stack)
+                        product_owner_mapping_status = "same_as_compiler_callable_chain"
                     fact = {
                         "kind": kind,
                         "begin_offset": begin_offset,
@@ -598,6 +994,8 @@ def normalize_ast(  # noqa: C901 -- category projection shares ownership decisio
                         "line": _source_line_column(source, begin_offset)[0],
                         "owner_chain": list(parent_owners),
                         "caller_chain": list(callable_stack),
+                        "product_caller_chain": product_caller_chain,
+                        "product_owner_mapping_status": product_owner_mapping_status,
                         "file_binding": [begin_origin, end_origin],
                         "source_span_sha256": hashlib.sha256(
                             source[begin_offset : end_offset + end_tok_len]
@@ -620,11 +1018,42 @@ def normalize_ast(  # noqa: C901 -- category projection shares ownership decisio
                     call_facts.setdefault(key, fact)
                 else:
                     ungraded_counts["call_range_offset_missing"] += 1
-            elif source_path in (begin_file, end_file) or None in (
-                begin_file,
-                end_file,
-            ):
-                ungraded_counts["call_physical_ownership_unproven"] += 1
+                    record_ownership_diagnostic(
+                        "calls",
+                        "root_intersecting",
+                        "invalid_offset_range",
+                        node,
+                        call_locations,
+                    )
+            else:
+                endpoint_files = (begin_file, end_file)
+                if source_path in endpoint_files:
+                    ownership_class = "root_intersecting"
+                elif all(path is not None for path in endpoint_files):
+                    ownership_class = "proved_external"
+                else:
+                    ownership_class = "unknown"
+                if ownership_class == "proved_external":
+                    reason = "outside_translation_unit"
+                elif begin is None:
+                    reason = "begin_location_missing"
+                elif end_loc is None:
+                    reason = "end_location_missing"
+                elif begin_file is None or end_file is None:
+                    reason = "file_context_unknown"
+                elif begin_file != end_file:
+                    reason = "cross_file_range"
+                elif not _source_position_matches(source, begin) or not (
+                    _source_position_matches(source, end_loc)
+                ):
+                    reason = "source_line_or_offset_invalid"
+                else:
+                    reason = "source_range_not_owned"
+                record_ownership_diagnostic(
+                    "calls", ownership_class, reason, node, call_locations
+                )
+                if source_path in endpoint_files or None in endpoint_files:
+                    ungraded_counts["call_physical_ownership_unproven"] += 1
         named_owner = (
             isinstance(name, str)
             and bool(name)
@@ -641,9 +1070,35 @@ def normalize_ast(  # noqa: C901 -- category projection shares ownership decisio
         named_callable = kind in callable_kinds and isinstance(name, str) and bool(name)
         if named_callable:
             callable_stack.append(cast("str", name))
+        authored_callable = (
+            named_callable
+            and not explicit_implicit
+            and source_owned
+            and token_matches
+            and isinstance(location, dict)
+            and _source_position_matches(source, location)
+            and _has_definition_body(node)
+        )
+        if authored_callable:
+            authored_callable_stack.append(cast("str", name))
+        is_lambda_expr = kind == "LambdaExpr"
+        if is_lambda_expr:
+            lambda_product_owner_stack.append(
+                _proven_lambda_product_owner(
+                    node,
+                    source,
+                    source_path,
+                    bindings,
+                    authored_callable_stack,
+                )
+            )
         children = node.get("inner")
         if isinstance(children, list):
             visit(children)
+        if is_lambda_expr:
+            lambda_product_owner_stack.pop()
+        if authored_callable:
+            authored_callable_stack.pop()
         if named_owner:
             owner_stack.pop()
         if named_callable:
@@ -735,12 +1190,34 @@ def normalize_ast(  # noqa: C901 -- category projection shares ownership decisio
         facts["source_call_sites"].append(source_call_site)
     for values in facts.values():
         values.sort(key=_fact_sort_key)
+    serialized_ownership_diagnostics: dict[str, object] = {
+        "schema_version": ownership_diagnostics["schema_version"],
+        "sample_limit_per_class": ownership_diagnostics["sample_limit_per_class"],
+    }
+    for category in ("declarations", "calls"):
+        category_groups = ownership_diagnostics[category]
+        if not isinstance(category_groups, dict):
+            raise TypeError
+        serialized_groups: dict[str, object] = {}
+        for ownership_class, group in category_groups.items():
+            if not isinstance(group, dict):
+                raise TypeError
+            counts = group["counts_by_reason"]
+            samples = group["samples"]
+            if not isinstance(counts, Counter) or not isinstance(samples, list):
+                raise TypeError
+            serialized_groups[ownership_class] = {
+                "counts_by_reason": dict(sorted(counts.items())),
+                "samples": samples,
+            }
+        serialized_ownership_diagnostics[category] = serialized_groups
     return {
         "source_path": str(source_path),
         "source_sha256": hashlib.sha256(source).hexdigest(),
         "file_binding_counts": dict(sorted(binding_counts.items())),
         "facts": facts,
         "ungraded_counts": dict(sorted(ungraded_counts.items())),
+        "ownership_diagnostics": serialized_ownership_diagnostics,
         "required_category_coverage": {
             category: {
                 "status": "partially_graded"

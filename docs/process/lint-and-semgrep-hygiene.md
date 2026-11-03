@@ -322,7 +322,10 @@ host parser.
 
 
 - `scripts/clang_parity_qualification.py:3108` (BLE001): Retain terminal evidence for every failed native preparation attempt.
-- `scripts/clang_reference_facts.py:413` (C901): The reference normalizer applies one physical ownership policy across declaration, type, field and call categories.
-- `scripts/clang_reference_facts.py:497` (C901, PLR0912): The nested AST visitor keeps lexical owner and callable stacks together with the corresponding source-range checks.
-- `scripts/clang_reference_facts.py:895` (C901, PLR0912): Profile input validation checks each source, dependency, compiler, resource and receipt binding before capture or reuse.
-- `scripts/clang_reference_facts.py:1429` (C901, PLR0913): The reference runner preserves independently supplied immutable inputs and records every capture and post-capture validation boundary.
+- `scripts/clang_reference_facts.py:624` (C901): The reference normalizer applies one physical ownership policy across declaration, type, field and call categories.
+- `scripts/clang_reference_facts.py:804` (C901, PLR0912): The nested AST visitor keeps lexical owner and callable stacks together with the corresponding source-range checks.
+- `scripts/clang_reference_facts.py:1372` (C901, PLR0912): Profile input validation checks each source, dependency, compiler, resource and receipt binding before capture or reuse.
+- `scripts/clang_reference_facts.py:1906` (C901, PLR0913): The reference runner preserves independently supplied immutable inputs and records every capture and post-capture validation boundary.
+- `scripts/clang_original_whole_file_grade.py:427` (C901): Contract validation checks evidence and control bindings together before grading.
+- `scripts/clang_original_whole_file_grade.py:1305` (C901, PLR0912): Normalized-site reconciliation rejects missing, duplicate, and unbound fact evidence.
+- `scripts/clang_original_whole_file_grade.py:1542` (C901, PLR0912): Source-site reconciliation validates physical coordinates and fact bindings together.

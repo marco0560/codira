@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -27,6 +27,7 @@ from codira_clang_frontend.frontend import _decode_entities
 from codira_analyzer_cpp import (
     _analysis_from_clang_result,
     _clang_macro_invocation_for_declaration,
+    _proven_macro_static_definition_pairs,
 )
 
 
@@ -161,10 +162,10 @@ def test_cpp_object_like_macro_declaration_uses_native_end_token_start(
         )
 
 
-def test_cpp_namespace_macro_declaration_is_evidenced_and_duplicate_anchor_held(
+def test_cpp_namespace_macro_definition_pair_preserves_source_definition_anchor(
     tmp_path: Path,
 ) -> None:
-    """Preserve compiler evidence and avoid misbinding a duplicate static member.
+    """Bind a unique macro declaration to its matching source-written definition.
 
     Parameters
     ----------
@@ -174,8 +175,8 @@ def test_cpp_namespace_macro_declaration_is_evidenced_and_duplicate_anchor_held(
     Returns
     -------
     None
-        A unique namespace variable receives evidence; an ambiguous macro
-        declaration sharing its USR with a source-written definition remains held.
+        The exact static-member pair carries macro evidence on the source-written
+        definition anchor; unrelated ambiguous declarations remain held.
     """
     source = tmp_path / "macro_declarations.cpp"
     source.write_text(
@@ -365,6 +366,8 @@ def test_cpp_namespace_macro_declaration_is_evidenced_and_duplicate_anchor_held(
             "name": "member",
             "qualified_name": "Box::Owner::member",
             "decl_kind": "Var",
+            "signature": "int Box::Owner::member = 11",
+            "source_text": "int Box::Owner::member = 11;",
             "type": "int",
             "is_definition": False,
             "is_file_scope": False,
@@ -443,7 +446,7 @@ def test_cpp_namespace_macro_declaration_is_evidenced_and_duplicate_anchor_held(
             "decl_kind": "Var",
             "type": "int",
             "is_definition": True,
-            "is_file_scope": True,
+            "is_file_scope": False,
             "location": asdict(point(out_of_line_offset)),
             "owner_usr": "c:@N@Box@S@Owner",
             "owner_name": "Box::Owner",
@@ -531,11 +534,15 @@ def test_cpp_namespace_macro_declaration_is_evidenced_and_duplicate_anchor_held(
         json.loads(macro_field.generated.receipt_json)["declaration"]["decl_kind"]
         == "Field"
     )
-    member = next(
+    member_rows = [
         item for item in analysis.declarations if item.name == "Box::Owner::member"
-    )
-    assert member.generated is None
+    ]
+    assert len(member_rows) == 1
+    member = member_rows[0]
     assert member.lineno == 16
+    assert isinstance(member.generated, CompilerObservedDeclarationProvenance)
+    assert member.generated.invocation.text == member_invocation
+    assert member.generated.source_sha256 == source_sha256
     assert all(
         item.name != "Box::Owner::orphan_field" for item in analysis.declarations
     )
@@ -547,4 +554,327 @@ def test_cpp_namespace_macro_declaration_is_evidenced_and_duplicate_anchor_held(
         value.stable_id,
         constant.stable_id,
         macro_field.stable_id,
+        member.stable_id,
     }
+
+    macro_member = next(
+        item
+        for item in declarations
+        if item.provenance == "macro_replacement" and item.name == "member"
+    )
+    source_definition = next(
+        item
+        for item in declarations
+        if item.provenance == "source_written" and item.name == "member"
+    )
+    assert _proven_macro_static_definition_pairs(
+        declarations, source, source_bytes
+    ) == {id(macro_member): id(source_definition)}
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "type",
+        "access",
+        "owner_usr",
+        "owner_name",
+        "owner_kind",
+        "file_scope",
+        "qualified_name",
+    ],
+)
+def test_cpp_macro_static_definition_pair_rejects_mismatched_partner(
+    mutation: str,
+    tmp_path: Path,
+) -> None:
+    """Reject redeclaration pairs when their semantic facts disagree.
+
+    Parameters
+    ----------
+    mutation : str
+        Definition fact to corrupt.
+    tmp_path : pathlib.Path
+        Temporary repository root used by the shared fixture test.
+
+    Returns
+    -------
+    None
+        A nonmatching same-USR pair is not accepted as a generated declaration.
+    """
+    # The positive fixture builds declarations and source anchors locally, so
+    # keep this negative test independent and exercise the pair proof directly.
+    source = tmp_path / "pair.cpp"
+    source.write_text(
+        "#define CPP_STATIC(name) static int name;\n"
+        "struct Owner { public: CPP_STATIC(member) };\n"
+        "int Owner::member = 11;\n",
+        encoding="utf-8",
+    )
+    source_bytes = source.read_bytes()
+
+    def location(offset: int, *, macro: bool = False) -> SourcePoint:
+        """Return a source point at ``offset`` in the test translation unit.
+
+        Parameters
+        ----------
+        offset : int
+            Byte offset in the source file.
+        macro : bool, optional
+            Whether the point represents macro expansion.
+
+        Returns
+        -------
+        codira_clang_frontend.SourcePoint
+            Point anchored to the test translation unit.
+        """
+        prefix = source_bytes[:offset]
+        position = SourcePosition(
+            path=str(source),
+            line=prefix.count(b"\n") + 1,
+            column=offset - prefix.rfind(b"\n"),
+            offset=offset,
+        )
+        return SourcePoint(spelling=position, expansion=position, is_macro=macro)
+
+    macro_start = source_bytes.index(b"CPP_STATIC(member)")
+    definition_start = source_bytes.rindex(b"member")
+    owner_start = source_bytes.index(b"Owner")
+    macro = FrontendDeclaration(
+        usr="c:@S@Owner@member",
+        kind="variable",
+        name="member",
+        qualified_name="Owner::member",
+        decl_kind="Var",
+        type_text="int",
+        signature="static int member",
+        parameters=(),
+        has_prototype=None,
+        source_text=None,
+        location=SourcePoint(
+            spelling=location(macro_start + len("CPP_STATIC(")).spelling,
+            expansion=location(macro_start, macro=True).expansion,
+            is_macro=True,
+        ),
+        is_definition=False,
+        is_file_scope=False,
+        provenance="macro_replacement",
+        span=None,
+        owner_usr="c:@S@Owner",
+        owner_name="Owner",
+        owner_kind="CXXRecord",
+        owner_location=location(owner_start),
+        access="public",
+    )
+    definition = FrontendDeclaration(
+        usr=macro.usr,
+        kind="variable",
+        name="member",
+        qualified_name="Owner::member",
+        decl_kind="Var",
+        type_text="int",
+        signature="int Owner::member = 11",
+        parameters=(),
+        has_prototype=None,
+        source_text="int Owner::member = 11;",
+        location=location(definition_start),
+        is_definition=True,
+        is_file_scope=False,
+        provenance="source_written",
+        span=None,
+        owner_usr=macro.owner_usr,
+        owner_name=macro.owner_name,
+        owner_kind=macro.owner_kind,
+        owner_location=macro.owner_location,
+        access="public",
+    )
+
+    if mutation == "type":
+        mutated_definition = replace(definition, type_text="long")
+    elif mutation == "access":
+        mutated_definition = replace(definition, access="private")
+    elif mutation == "owner_usr":
+        mutated_definition = replace(definition, owner_usr="c:@N@Box@S@Other")
+    elif mutation == "owner_name":
+        mutated_definition = replace(definition, owner_name="Box::Other")
+    elif mutation == "owner_kind":
+        mutated_definition = replace(definition, owner_kind="Namespace")
+    elif mutation == "file_scope":
+        mutated_definition = replace(definition, is_file_scope=True)
+    else:
+        mutated_definition = replace(definition, qualified_name="Box::Owner::different")
+    assert (
+        _proven_macro_static_definition_pairs(
+            (macro, mutated_definition), source, source_bytes
+        )
+        == {}
+    )
+
+
+def test_cpp_macro_static_definition_pair_rejects_ambiguous_or_same_site_pairs(
+    tmp_path: Path,
+) -> None:
+    """Reject extra same-USR rows and pairs that do not have distinct sites.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root used for source anchors.
+
+    Returns
+    -------
+    None
+        Ambiguous and same-site declaration groups remain unsupported.
+    """
+    source = tmp_path / "pair.cpp"
+    source.write_text(
+        "#define CPP_STATIC(name) static int name;\n"
+        "struct Owner { public: CPP_STATIC(member) };\n"
+        "int Owner::member = 11;\n",
+        encoding="utf-8",
+    )
+    source_bytes = source.read_bytes()
+
+    def point(offset: int, *, is_macro: bool = False) -> SourcePoint:
+        """Build an exact source point for one fixture byte offset.
+
+        Parameters
+        ----------
+        offset : int
+            Byte offset in the fixture.
+        is_macro : bool, optional
+            Whether the point is macro-derived.
+
+        Returns
+        -------
+        codira_clang_frontend.SourcePoint
+            Source coordinates at ``offset``.
+        """
+        prefix = source_bytes[:offset]
+        position = SourcePosition(
+            path=str(source),
+            line=prefix.count(b"\n") + 1,
+            column=offset - prefix.rfind(b"\n"),
+            offset=offset,
+        )
+        return SourcePoint(spelling=position, expansion=position, is_macro=is_macro)
+
+    # Reuse a compact three-row native-shaped fixture to cover cardinality and
+    # source-site uniqueness without depending on a live Clang installation.
+    macro_offset = source_bytes.index(b"CPP_STATIC(member)")
+    definition_offset = source_bytes.rindex(b"member")
+    owner_offset = source_bytes.index(b"Owner")
+    macro = FrontendDeclaration(
+        usr="c:@S@Owner@member",
+        kind="variable",
+        name="member",
+        qualified_name="Owner::member",
+        decl_kind="Var",
+        type_text="int",
+        signature="static int member",
+        parameters=(),
+        has_prototype=None,
+        source_text=None,
+        location=SourcePoint(
+            spelling=point(macro_offset + len("CPP_STATIC(")).spelling,
+            expansion=point(macro_offset, is_macro=True).expansion,
+            is_macro=True,
+        ),
+        is_definition=False,
+        is_file_scope=False,
+        provenance="macro_replacement",
+        owner_usr="c:@S@Owner",
+        span=None,
+        owner_name="Owner",
+        owner_kind="CXXRecord",
+        owner_location=point(owner_offset),
+        access="public",
+    )
+    definition = FrontendDeclaration(
+        usr=macro.usr,
+        kind="variable",
+        name="member",
+        qualified_name="Owner::member",
+        decl_kind="Var",
+        type_text="int",
+        signature="int Owner::member = 11",
+        parameters=(),
+        has_prototype=None,
+        source_text="int Owner::member = 11;",
+        location=point(definition_offset),
+        is_definition=True,
+        is_file_scope=False,
+        provenance="source_written",
+        owner_usr=macro.owner_usr,
+        span=None,
+        owner_name=macro.owner_name,
+        owner_kind=macro.owner_kind,
+        owner_location=macro.owner_location,
+        access="public",
+    )
+
+    assert _proven_macro_static_definition_pairs(
+        (macro, definition), source, source_bytes
+    ) == {id(macro): id(definition)}
+    assert (
+        _proven_macro_static_definition_pairs(
+            (macro, definition, replace(definition)), source, source_bytes
+        )
+        == {}
+    )
+    same_site_definition = replace(definition, location=macro.location)
+    assert (
+        _proven_macro_static_definition_pairs(
+            (macro, same_site_definition), source, source_bytes
+        )
+        == {}
+    )
+    assert (
+        _proven_macro_static_definition_pairs(
+            (replace(macro, location=point(macro_offset)), definition),
+            source,
+            source_bytes,
+        )
+        == {}
+    )
+
+    definition_location = definition.location
+    assert definition_location is not None
+    definition_position = definition_location.spelling
+    assert definition_position is not None
+    definition_line = definition_position.line
+    definition_column = definition_position.column
+    assert definition_line is not None
+    assert definition_column is not None
+    invalid_definition_points = (
+        replace(definition_position, path=str(tmp_path / "other.cpp")),
+        replace(definition_position, offset=len(source_bytes)),
+        replace(definition_position, line=definition_line + 1),
+        replace(definition_position, column=definition_column + 1),
+        point(owner_offset).spelling,
+    )
+    for invalid_position in invalid_definition_points:
+        invalid_definition = replace(
+            definition,
+            location=replace(definition_location, spelling=invalid_position),
+        )
+        assert (
+            _proven_macro_static_definition_pairs(
+                (macro, invalid_definition), source, source_bytes
+            )
+            == {}
+        )
+
+    declaration_bytes = b"int Owner::member = 11;"
+    for continuation_byte in (b"$", b"\\"):
+        malformed_source_bytes = source_bytes.replace(
+            declaration_bytes,
+            b"int Owner::member" + continuation_byte + b"suffix = 11;",
+        )
+        source.write_bytes(malformed_source_bytes)
+        assert (
+            _proven_macro_static_definition_pairs(
+                (macro, definition), source, malformed_source_bytes
+            )
+            == {}
+        )

@@ -20,6 +20,7 @@ from typing import cast
 import pytest
 
 from codira_analyzer_cpp import CppAnalyzer
+from codira.generated import CompilerObservedDeclarationProvenance
 from codira.models import DeclarationArtifact
 from tests_support.clang_macro_declaration_qualification import (
     BackendQualificationRequest,
@@ -225,6 +226,14 @@ def test_cpp_namespace_and_static_member_macros_persist_and_query(
             "private",
             "CPP_DECLARE_STATIC_MEMBER(secret_counter, 37)",
         ),
+        "macro_context::MacroOwner::out_of_line_counter": (
+            "variable",
+            23,
+            "int",
+            "macro_context::MacroOwner",
+            "public",
+            "CPP_DECLARE_OUT_OF_LINE_MEMBER(out_of_line_counter)",
+        ),
     }
     context_identity = analyzer.analysis_input_fingerprint(case.source, case.root)
     receipts: dict[str, dict[str, object]] = {}
@@ -250,9 +259,12 @@ def test_cpp_namespace_and_static_member_macros_persist_and_query(
     assert out_of_line[0].lineno == 23
     assert out_of_line[0].owner_name == "macro_context::MacroOwner"
     assert (out_of_line[0].access or None) == "public"
-    assert out_of_line[0].generated is None
-    assert "generated_declaration" in analysis.status.omitted_categories
-    assert analysis.status.coverage_state.value == "partial"
+    assert isinstance(out_of_line[0].generated, CompilerObservedDeclarationProvenance)
+    assert out_of_line[0].generated.invocation.text == (
+        "CPP_DECLARE_OUT_OF_LINE_MEMBER(out_of_line_counter)"
+    )
+    assert analysis.status.omitted_categories == ()
+    assert analysis.status.coverage_state.value == "complete"
 
     raw_path = Path(cast("str", case.capture["stdout_path"]))
     native = cast("dict[str, object]", json.loads(raw_path.read_text(encoding="utf-8")))
@@ -273,7 +285,7 @@ def test_cpp_namespace_and_static_member_macros_persist_and_query(
         "source_written",
     }
 
-    symbol_names = (*expected.keys(), out_of_line_name)
+    symbol_names = tuple(expected)
     indexed = run_index_and_query(
         BackendQualificationRequest(
             case=case,
@@ -304,9 +316,23 @@ def test_cpp_namespace_and_static_member_macros_persist_and_query(
             "dict[str, object]", evidence["compiler_observed_invocation"]
         )
         assert observed_invocation["text"] == values[5]
-    physical_evidence = cast("dict[str, object]", queried[out_of_line_name]["evidence"])
-    assert "generated_provenance" not in physical_evidence
-    assert "compiler_observed_declaration" not in physical_evidence
+    out_of_line_evidence = cast(
+        "dict[str, object]", queried[out_of_line_name]["evidence"]
+    )
+    out_of_line_symbol = cast("dict[str, object]", queried[out_of_line_name]["symbol"])
+    assert out_of_line_evidence["source_kind"] == "compiler_generated"
+    assert out_of_line_evidence["identity"] == out_of_line_symbol["identity"]
+    out_of_line_provenance = cast(
+        "dict[str, object]", out_of_line_evidence["generated_provenance"]
+    )
+    assert out_of_line_provenance["source_sha256"] == case.capture["source_sha256"]
+    assert out_of_line_provenance["context_identity"] == context_identity
+    out_of_line_invocation = cast(
+        "dict[str, object]", out_of_line_evidence["compiler_observed_invocation"]
+    )
+    assert out_of_line_invocation["text"] == (
+        "CPP_DECLARE_OUT_OF_LINE_MEMBER(out_of_line_counter)"
+    )
 
     receipt = {
         "schema": "codira.clang-macro-declaration-backend-qualification/1",
@@ -329,10 +355,10 @@ def test_cpp_namespace_and_static_member_macros_persist_and_query(
             }
             for name, values in expected.items()
         ],
-        "out_of_line_identity_collision": {
+        "out_of_line_redeclaration_pair": {
             "name": out_of_line_name,
             "line": out_of_line[0].lineno,
-            "generated_provenance_attached": False,
+            "generated_provenance_attached": True,
             "native_duplicate_usr": identities[0]["usr"],
             "source_written_anchor_preserved": True,
         },
