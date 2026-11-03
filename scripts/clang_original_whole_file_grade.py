@@ -20,7 +20,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib
+import importlib.util
+import inspect
 import json
+import re
 import shlex
 import sqlite3
 import sys
@@ -66,6 +69,7 @@ SOURCE_FACT_CATEGORIES = frozenset(
 # are enabled separately only when the bounded literal-directive parser accepts
 # the exact source file.
 MACHINE_VALIDATED_CATEGORIES = frozenset({"coverage"})
+AST_MACHINE_CATEGORIES = frozenset({"declarations", "fields", "callables"})
 
 
 @dataclass(frozen=True)
@@ -118,6 +122,59 @@ class GradeRequest:
     receipt_paths: dict[str, Path]
     database_bindings: dict[str, dict[str, JSONValue]]
     profile_document: Path
+
+
+@dataclass(frozen=True)
+class SourceOwnedAstGradeRequest:
+    """Inputs for category-only reconciliation of a retained source AST.
+
+    Parameters
+    ----------
+    source_path : pathlib.Path
+        Exact original source file.
+    source_key : str
+        Relative case key used by retained backend snapshots.
+    normalized_path : pathlib.Path
+        Normalized reference facts generated from the retained raw AST.
+    normalization_record_path : pathlib.Path
+        Receipt binding raw AST, normalizer, profile and normalized output.
+    capture_summary_path : pathlib.Path
+        Independent CLI capture summary with toolchain and source identity.
+    prepared_inputs_path : pathlib.Path
+        Hash-bound compiler profile, dependencies and toolchain inputs.
+    guards_before_path : pathlib.Path
+        Pre-capture dependency and include-directory guard snapshot.
+    guards_after_path : pathlib.Path
+        Post-capture dependency and include-directory guard snapshot.
+    snapshot_paths : dict[str, pathlib.Path]
+        Retained SQLite and DuckDB source snapshots.
+    database_binding_paths : dict[str, pathlib.Path]
+        Filesystem-derived database generation identity receipts.
+    status_paths : dict[str, pathlib.Path]
+        Independently exported persisted analyzer status rows.
+    profile_document_path : pathlib.Path
+        Exact selected profile JSON document bound by the snapshots.
+    repository_root : pathlib.Path
+        Compiler source repository root used to reload the captured profile.
+
+    Returns
+    -------
+    None
+    """
+
+    source_path: Path
+    source_key: str
+    normalized_path: Path
+    normalization_record_path: Path
+    capture_summary_path: Path
+    prepared_inputs_path: Path
+    guards_before_path: Path
+    guards_after_path: Path
+    snapshot_paths: dict[str, Path]
+    database_binding_paths: dict[str, Path]
+    status_paths: dict[str, Path]
+    profile_document_path: Path
+    repository_root: Path
 
 
 def _fail(context: str, requirement: str) -> NoReturn:
@@ -1950,6 +2007,1430 @@ def _validate_snapshot_binding(
     return case
 
 
+def _source_owned_ast_expectations(  # noqa: C901, PLR0913 -- bounded AST evidence gates
+    normalized: dict[str, JSONValue],
+    raw_ast: dict[str, object],
+    source: bytes,
+    analyzer_capabilities: dict[str, JSONValue],
+    normalizer_path: Path,
+    working_directory: Path,
+) -> dict[str, list[dict[str, JSONValue]]]:
+    """Build bounded C record, field and callable expectations from Clang AST.
+
+    Parameters
+    ----------
+    normalized : dict[str, JSONValue]
+        Normalized facts replayed from the retained raw AST.
+    raw_ast : dict[str, object]
+        Parsed independent Clang JSON AST for lexical-parent checks.
+    source : bytes
+        Exact source bytes used by the capture.
+    analyzer_capabilities : dict[str, JSONValue]
+        Explicit production analyzer support and omission declarations.
+    normalizer_path : pathlib.Path
+        Frozen normalizer copy used to replay the retained raw AST.
+    working_directory : pathlib.Path
+        Exact compile working directory used by Clang.
+
+    Returns
+    -------
+    dict[str, list[dict[str, JSONValue]]]
+        Expected persisted rows for declarations, fields and callables.
+
+    Raises
+    ------
+    OracleFormatError
+        If AST facts, physical coordinates, lexical ownership or capabilities
+        fall outside the bounded supported subset.
+    """
+    facts = _object(normalized.get("facts"), "normalized.facts")
+    declarations = _as_rows(facts.get("declarations"), "normalized.declarations")
+    types = _as_rows(facts.get("types"), "normalized.types")
+    fields = _as_rows(facts.get("fields"), "normalized.fields")
+    callables = _as_rows(facts.get("callables"), "normalized.callables")
+
+    def check_location(row: dict[str, JSONValue], context: str) -> None:
+        offset = row.get("offset")
+        line = row.get("line")
+        column = row.get("column")
+        name = row.get("name")
+        if (
+            not isinstance(offset, int)
+            or isinstance(offset, bool)
+            or not isinstance(line, int)
+            or isinstance(line, bool)
+            or not isinstance(column, int)
+            or isinstance(column, bool)
+            or not isinstance(name, str)
+            or not name.isidentifier()
+            or offset < 0
+            or offset >= len(source)
+            or line < 1
+            or column < 1
+        ):
+            _fail(context, "source AST row has invalid physical coordinates or name")
+        line_start = source.rfind(b"\n", 0, offset) + 1
+        actual_line = source.count(b"\n", 0, offset) + 1
+        if actual_line != line or offset - line_start + 1 != column:
+            _fail(context, "source AST line/column do not match its byte offset")
+        encoded_name = name.encode("utf-8")
+        if source[offset : offset + len(encoded_name)] != encoded_name:
+            _fail(context, "AST name does not occupy its bound source byte offset")
+        before = source[offset - 1] if offset else None
+        after_offset = offset + len(encoded_name)
+        after = source[after_offset] if after_offset < len(source) else None
+        if (before is not None and _is_c_identifier_byte(before)) or (
+            after is not None and _is_c_identifier_byte(after)
+        ):
+            _fail(context, "AST name is not a complete source identifier token")
+
+    source_path_value = normalized.get("source_path")
+    if not isinstance(source_path_value, str) or not source_path_value:
+        _fail("normalized.source_path", "must bind the original source path")
+    source_path = Path(source_path_value)
+    if normalized.get("source_sha256") != hashlib.sha256(source).hexdigest():
+        _fail("normalized.source_sha256", "does not match original source bytes")
+    if not normalizer_path.is_file():
+        _fail("normalizer", "frozen normalizer copy is absent")
+    spec = importlib.util.spec_from_file_location(
+        "_frozen_clang_reference_facts", normalizer_path
+    )
+    if spec is None or spec.loader is None:
+        _fail("normalizer", "cannot load frozen normalizer copy")
+    normalizer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(normalizer)
+    normalize = getattr(normalizer, "normalize_ast", None)
+    if not callable(normalize):
+        _fail("normalizer", "does not expose normalize_ast")
+    replayed = normalize(raw_ast, source_path, source, working_directory)
+    if _canonical(cast("JSONValue", replayed)) != _canonical(
+        cast("JSONValue", normalized)
+    ):
+        _fail(
+            "normalized reference",
+            "does not equal a fresh replay of the retained raw AST and source",
+        )
+    ungraded_nodes = _as_rows(facts.get("ungraded_nodes"), "normalized.ungraded_nodes")
+    ungraded_counts = _object(
+        normalized.get("ungraded_counts"), "normalized.ungraded_counts"
+    )
+    unsupported_declaration_counts = {
+        key: value
+        for key, value in ungraded_counts.items()
+        if key not in {"implicit_declaration", "multiple_ast_nodes_at_source_call_site"}
+        and value != 0
+    }
+    if ungraded_nodes or unsupported_declaration_counts:
+        _fail(
+            "normalized.ungraded_declarations",
+            "contains omitted, ambiguous or unsupported source declaration nodes",
+        )
+
+    for index, row in enumerate(declarations):
+        check_location(row, f"normalized.declarations[{index}]")
+    for category, rows in (
+        ("types", types),
+        ("fields", fields),
+        ("callables", callables),
+    ):
+        for index, row in enumerate(rows):
+            check_location(row, f"normalized.{category}[{index}]")
+
+    declaration_kinds = Counter(
+        cast("str", row.get("kind"))
+        for row in declarations
+        if isinstance(row.get("kind"), str)
+    )
+    expected_kinds = Counter(
+        {
+            "VarDecl": sum(row.get("kind") == "VarDecl" for row in declarations),
+            "FunctionDecl": len(callables),
+            "FieldDecl": len(fields),
+            "RecordDecl": len(types),
+        }
+    )
+    if declaration_kinds != expected_kinds or any(
+        row.get("kind") not in {"VarDecl", "FunctionDecl", "FieldDecl", "RecordDecl"}
+        for row in declarations
+    ):
+        _fail(
+            "normalized.declarations",
+            "contains an unsupported declaration class or an unprojected source declaration",
+        )
+    raw_expected = _reconcile_raw_source_declarations(
+        raw_ast, source_path, working_directory, source, normalized
+    )
+    if any(row.get("kind") != "RecordDecl" for row in types):
+        _fail("normalized.types", "only source-owned record definitions are supported")
+    if any(row.get("kind") != "FieldDecl" for row in fields):
+        _fail("normalized.fields", "contains a non-field AST row")
+    if any(
+        row.get("kind") != "FunctionDecl" or row.get("is_definition") is not True
+        for row in callables
+    ):
+        _fail(
+            "normalized.callables",
+            "only source-owned function definitions are supported",
+        )
+
+    supported = analyzer_capabilities.get("supports")
+    unsupported = analyzer_capabilities.get("does_not_support")
+    if (
+        not isinstance(supported, list)
+        or not isinstance(unsupported, list)
+        or "callable" not in supported
+        or "type" not in supported
+        or "variable" not in supported
+        or analyzer_capabilities.get("analyzer_version") != "30"
+    ):
+        _fail(
+            "analyzer_capabilities",
+            "must bind C analyzer v30 with callable/type/variable support",
+        )
+
+    local_variable_offsets = {
+        cast("int", row["offset"])
+        for row in declarations
+        if row.get("kind") == "VarDecl"
+    }
+    if not _raw_ast_var_declarations_are_function_local(
+        raw_ast, local_variable_offsets
+    ):
+        _fail(
+            "normalized.declarations.VarDecl",
+            "every excluded variable must be source-owned and nested under a function definition",
+        )
+
+    records = raw_expected["declarations"]
+    expected_fields = raw_expected["fields"]
+    expected_callables = raw_expected["callables"]
+
+    diagnostics = _object(
+        normalized.get("ownership_diagnostics"), "normalized.ownership_diagnostics"
+    )
+    declaration_diagnostics = _object(
+        diagnostics.get("declarations"), "ownership_diagnostics.declarations"
+    )
+    unknown_declarations = _object(
+        declaration_diagnostics.get("unknown"),
+        "ownership_diagnostics.declarations.unknown",
+    )
+    unknown_samples = unknown_declarations.get("samples")
+    if not isinstance(unknown_samples, list):
+        _fail("ownership_diagnostics.declarations.unknown", "samples must be explicit")
+    unresolved_names = {
+        sample.get("name")
+        for sample in unknown_samples
+        if isinstance(sample, dict)
+        and sample.get("reason") == "implicit_declaration"
+        and isinstance(sample.get("name"), str)
+    }
+    selected_types = [
+        _string(row.get("type"), "source-owned AST type")
+        for row in (*fields, *callables)
+        if isinstance(row.get("type"), str)
+    ]
+    if any(
+        re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(cast('str', name))}(?![A-Za-z0-9_])",
+            type_text,
+        )
+        for name in unresolved_names
+        for type_text in selected_types
+    ):
+        _fail(
+            "normalized.unresolved_implicit_types",
+            "an unresolved implicit header type participates in a selected field or callable signature",
+        )
+
+    return {
+        "declarations": records,
+        "fields": expected_fields,
+        "callables": expected_callables,
+    }
+
+
+def _reconcile_raw_source_declarations(  # noqa: C901 -- raw declaration inventory must be explicit
+    ast: dict[str, object],
+    source_path: Path,
+    working_directory: Path,
+    source: bytes,
+    normalized: dict[str, JSONValue],
+) -> dict[str, list[dict[str, JSONValue]]]:
+    """Enumerate source declarations independently from normalized rows.
+
+    Parameters
+    ----------
+    ast : dict[str, object]
+        Retained raw Clang AST.
+    source_path : pathlib.Path
+        Exact source path bound to the profile.
+    working_directory : pathlib.Path
+        Compile-command directory for relative AST file paths.
+    source : bytes
+        Exact original source bytes.
+    normalized : dict[str, JSONValue]
+        Replayed normalized output checked against the raw inventory.
+
+    Returns
+    -------
+    dict[str, list[dict[str, JSONValue]]]
+        Raw-AST-derived category expectations.
+
+    Raises
+    ------
+    OracleFormatError
+        If the raw AST contains unsupported or unaccounted source declarations.
+    """
+    location_files: dict[int, Path | None] = {}
+    active_file: list[Path | None] = [None]
+
+    def annotate(value: object) -> None:
+        if isinstance(value, list):
+            for child in value:
+                annotate(child)
+        elif isinstance(value, dict):
+            if "offset" in value:
+                explicit_path = value.get("file")
+                if isinstance(explicit_path, str):
+                    path = Path(explicit_path)
+                    active_file[0] = (
+                        path.resolve()
+                        if path.is_absolute()
+                        else (working_directory / path).resolve()
+                    )
+                location_files[id(value)] = active_file[0]
+            for key, child in value.items():
+                if key not in {"file", "includedFrom"}:
+                    annotate(child)
+
+    annotate(ast)
+    source_path = source_path.resolve()
+    declarations: list[dict[str, JSONValue]] = []
+    record_rows: list[dict[str, JSONValue]] = []
+    field_rows: list[dict[str, JSONValue]] = []
+    callable_rows: list[dict[str, JSONValue]] = []
+    supported_kinds = {"RecordDecl", "FieldDecl", "FunctionDecl", "VarDecl"}
+    source_declaration_kinds = supported_kinds | {
+        "TypedefDecl",
+        "EnumDecl",
+        "EnumConstantDecl",
+        "IndirectFieldDecl",
+        "ObjCInterfaceDecl",
+        "NamespaceDecl",
+        "CXXRecordDecl",
+        "CXXMethodDecl",
+        "ClassTemplateDecl",
+        "FunctionTemplateDecl",
+    }
+    seen_anchors: set[tuple[str, int]] = set()
+
+    def visit(  # noqa: C901, PLR0912 -- bounded raw AST source ownership walk
+        node: object, owners: tuple[str, ...], in_function: bool
+    ) -> None:
+        if not isinstance(node, dict):
+            return
+        kind = node.get("kind")
+        location = node.get("loc")
+        path = location_files.get(id(location)) if isinstance(location, dict) else None
+        if isinstance(location, dict) and any(
+            location_files.get(id(location.get(key))) == source_path
+            for key in ("expansionLoc", "spellingLoc")
+        ):
+            _fail(
+                "raw_ast.declarations", "source-owned macro locations are unsupported"
+            )
+        source_owned = path == source_path
+        if (
+            source_owned
+            and kind in source_declaration_kinds
+            and kind not in supported_kinds
+        ):
+            _fail(
+                "raw_ast.declarations",
+                f"source-owned {kind} is outside the supported category projection",
+            )
+        if source_owned and kind in supported_kinds:
+            if not isinstance(location, dict) or any(
+                key in location for key in ("expansionLoc", "spellingLoc")
+            ):
+                _fail("raw_ast.declarations", "macro locations are unsupported")
+            offset, line, column, name = (
+                location.get("offset"),
+                location.get("line"),
+                location.get("col"),
+                node.get("name"),
+            )
+            if (
+                not isinstance(offset, int)
+                or isinstance(offset, bool)
+                or (
+                    line is not None
+                    and (not isinstance(line, int) or isinstance(line, bool))
+                )
+                or not isinstance(column, int)
+                or isinstance(column, bool)
+                or not isinstance(name, str)
+                or not name.isidentifier()
+                or offset < 0
+                or offset >= len(source)
+            ):
+                _fail(
+                    "raw_ast.declarations",
+                    "source declaration lacks a physical name anchor",
+                )
+            token = name.encode("utf-8")
+            if source[offset : offset + len(token)] != token:
+                _fail("raw_ast.declarations", "AST spelling differs from source bytes")
+            before = source[offset - 1] if offset else None
+            after_offset = offset + len(token)
+            after = source[after_offset] if after_offset < len(source) else None
+            if any(
+                byte is not None
+                and (
+                    _is_c_identifier_byte(byte)
+                    or byte in {ord("$"), ord("\\")}
+                    or byte >= 0x80
+                )
+                for byte in (before, after)
+            ):
+                _fail(
+                    "raw_ast.declarations",
+                    "AST spelling is not a complete supported identifier",
+                )
+            actual_line = source.count(b"\n", 0, offset) + 1
+            actual_column = offset - source.rfind(b"\n", 0, offset)
+            if (line is not None and line != actual_line) or column != actual_column:
+                _fail(
+                    "raw_ast.declarations", "AST coordinates differ from source bytes"
+                )
+            line = actual_line
+            anchor = (cast("str", kind), offset)
+            if anchor in seen_anchors:
+                _fail(
+                    "raw_ast.declarations",
+                    "multiple source AST nodes share one physical anchor",
+                )
+            seen_anchors.add(anchor)
+            if (
+                node.get("isImplicit") is True
+                or node.get("isTemplateInstantiation") is True
+            ):
+                _fail(
+                    "raw_ast.declarations",
+                    "implicit/template declarations are unsupported",
+                )
+            node_type = node.get("type")
+            type_text = (
+                node_type.get("qualType")
+                if isinstance(node_type, dict)
+                and isinstance(node_type.get("qualType"), str)
+                else None
+            )
+            children_value = node.get("inner")
+            children = children_value if isinstance(children_value, list) else []
+            definition = any(
+                isinstance(child, dict)
+                and child.get("kind") in {"CompoundStmt", "CXXTryStmt"}
+                for child in children
+            )
+            fact: dict[str, JSONValue] = {
+                "kind": kind,
+                "name": name,
+                "offset": offset,
+                "line": line,
+                "column": column,
+                "owner_chain": list(owners),
+                "type": type_text,
+                "is_definition": definition,
+            }
+            declarations.append(fact)
+            if kind == "RecordDecl":
+                tag = node.get("tagUsed")
+                if tag not in {"struct", "union"}:
+                    _fail(
+                        "raw_ast.RecordDecl",
+                        "only struct and union records are supported",
+                    )
+                record_rows.append({"kind": tag, "line": line, "name": name})
+            elif kind == "FieldDecl":
+                if not owners or type_text is None:
+                    _fail("raw_ast.FieldDecl", "owner and type must be source-proven")
+                field_rows.append(
+                    {"line": line, "name": name, "owner": owners[-1], "type": type_text}
+                )
+            elif kind == "FunctionDecl":
+                if not definition or type_text is None:
+                    _fail(
+                        "raw_ast.FunctionDecl",
+                        "only typed function definitions are supported",
+                    )
+                return_type, parameter_types = _parse_simple_function_type(type_text)
+                callable_rows.append(
+                    {
+                        "definition_line": line,
+                        "kind": "function",
+                        "name": name,
+                        "parameter_types": cast("JSONValue", parameter_types),
+                        "return_type": return_type,
+                    }
+                )
+            elif kind == "VarDecl" and not in_function:
+                _fail("raw_ast.VarDecl", "file-scope variable is outside this proof")
+        next_owners = owners
+        if kind == "RecordDecl" and isinstance(node.get("name"), str):
+            next_owners = (*owners, cast("str", node["name"]))
+        next_function = in_function or kind == "FunctionDecl"
+        child_values = node.get("inner")
+        if isinstance(child_values, list):
+            for child in child_values:
+                visit(child, next_owners, next_function)
+
+    visit(ast, (), False)
+
+    def digest_rows(rows: list[dict[str, JSONValue]]) -> Counter[str]:
+        return Counter(_canonical(cast("JSONValue", row)) for row in rows)
+
+    facts = _object(normalized.get("facts"), "normalized.facts")
+    normalized_declarations = _as_rows(
+        facts.get("declarations"), "normalized.declarations"
+    )
+    declaration_keys = (
+        "kind",
+        "name",
+        "offset",
+        "line",
+        "column",
+        "owner_chain",
+        "type",
+        "is_definition",
+    )
+    raw_identity = [
+        {key: row.get(key) for key in declaration_keys} for row in declarations
+    ]
+    normalized_identity = [
+        {key: row.get(key) for key in declaration_keys}
+        for row in normalized_declarations
+    ]
+    if digest_rows(raw_identity) != digest_rows(normalized_identity):
+        _fail(
+            "raw_ast.declarations",
+            "source-owned raw declaration nodes are not exhaustively represented in normalized facts",
+        )
+    for fact_key, expected_kind in (
+        ("types", "RecordDecl"),
+        ("fields", "FieldDecl"),
+        ("callables", "FunctionDecl"),
+    ):
+        actual = _as_rows(facts.get(fact_key), f"normalized.{fact_key}")
+        expected = [row for row in declarations if row.get("kind") == expected_kind]
+        actual_identity = [
+            {key: row.get(key) for key in declaration_keys} for row in actual
+        ]
+        if digest_rows(actual_identity) != digest_rows(expected):
+            _fail(
+                f"normalized.{fact_key}",
+                "projection differs from raw source AST inventory",
+            )
+    return {
+        "declarations": record_rows,
+        "fields": field_rows,
+        "callables": callable_rows,
+    }
+
+
+def _raw_ast_var_declarations_are_function_local(
+    ast: dict[str, object], expected_offsets: set[int]
+) -> bool:
+    """Verify excluded source variables have a raw AST function parent.
+
+    Parameters
+    ----------
+    ast : dict[str, object]
+        Raw Clang translation-unit AST.
+    expected_offsets : set[int]
+        Source-owned variable offsets selected by normalization.
+
+    Returns
+    -------
+    bool
+        Whether every selected variable appears exactly once beneath a function.
+    """
+    observed: Counter[int] = Counter()
+    invalid: set[int] = set()
+
+    def visit(node: object, under_function: bool) -> None:
+        if not isinstance(node, dict):
+            return
+        kind = node.get("kind")
+        current_under_function = under_function or kind == "FunctionDecl"
+        if kind == "VarDecl":
+            location = node.get("loc")
+            offset = location.get("offset") if isinstance(location, dict) else None
+            if (
+                isinstance(offset, int)
+                and not isinstance(offset, bool)
+                and offset in expected_offsets
+            ):
+                observed[offset] += 1
+                if not current_under_function:
+                    invalid.add(offset)
+        children = node.get("inner")
+        if isinstance(children, list):
+            for child in children:
+                visit(child, current_under_function)
+
+    visit(ast, False)
+    return (
+        set(observed) == expected_offsets
+        and all(count == 1 for count in observed.values())
+        and not invalid
+    )
+
+
+def _is_c_identifier_byte(value: int) -> bool:
+    """Return whether one byte can continue a C identifier token.
+
+    Parameters
+    ----------
+    value : int
+        One source byte.
+
+    Returns
+    -------
+    bool
+        Whether the byte is an ASCII identifier character.
+    """
+    return (
+        ord("a") <= value <= ord("z")
+        or ord("A") <= value <= ord("Z")
+        or ord("0") <= value <= ord("9")
+        or value == ord("_")
+    )
+
+
+def _parse_simple_function_type(signature: str) -> tuple[str, list[str]]:
+    """Parse a bounded Clang function type into return and parameter types.
+
+    Parameters
+    ----------
+    signature : str
+        Clang canonical type spelling.
+
+    Returns
+    -------
+    tuple[str, list[str]]
+        Return type and ordered parameter type list.
+
+    Raises
+    ------
+    OracleFormatError
+        If the spelling is not a supported single-level function type.
+    """
+    opening = signature.find("(")
+    if opening <= 0 or not signature.endswith(")"):
+        _fail(
+            "normalized.callable.type", "is outside the bounded function-type grammar"
+        )
+    return_type = signature[:opening].strip()
+    if not return_type:
+        _fail("normalized.callable.type", "has no return type")
+    parameter_text = signature[opening + 1 : -1].strip()
+    if not parameter_text or parameter_text == "void":
+        return return_type, []
+    parts: list[str] = []
+    start = 0
+    depth = 0
+    for index, character in enumerate(parameter_text):
+        if character in "(<[":
+            depth += 1
+        elif character in ")>]":
+            depth -= 1
+            if depth < 0:
+                _fail("normalized.callable.type", "has unbalanced parameter delimiters")
+        elif character == "," and depth == 0:
+            part = parameter_text[start:index].strip()
+            if not part:
+                _fail("normalized.callable.type", "contains an empty parameter type")
+            parts.append(part)
+            start = index + 1
+    if depth != 0:
+        _fail("normalized.callable.type", "has unbalanced parameter delimiters")
+    final = parameter_text[start:].strip()
+    if not final:
+        _fail("normalized.callable.type", "contains an empty final parameter type")
+    parts.append(final)
+    if any(re.search(r"\b(?:auto|decltype)\b", part) for part in parts):
+        _fail(
+            "normalized.callable.type",
+            "contains an unsupported dependent parameter type",
+        )
+    return return_type, parts
+
+
+def grade_source_owned_ast_categories(  # noqa: PLR0913 -- explicit evidence inputs
+    normalized: dict[str, JSONValue],
+    raw_ast: dict[str, object],
+    source: bytes,
+    analyzer_capabilities: dict[str, JSONValue],
+    backend_rows: dict[str, dict[str, JSONValue]],
+    normalizer_path: Path,
+    working_directory: Path,
+) -> dict[str, JSONValue]:
+    """Reconcile bounded source-owned AST facts against both backend rows.
+
+    Parameters
+    ----------
+    normalized : dict[str, JSONValue]
+        Replayed normalized Clang facts bound to the source and raw AST.
+    raw_ast : dict[str, object]
+        Raw Clang JSON AST for source-scope validation.
+    source : bytes
+        Exact source bytes used by the capture.
+    analyzer_capabilities : dict[str, JSONValue]
+        Explicit capabilities for the selected analyzer version.
+    backend_rows : dict[str, dict[str, JSONValue]]
+        Selected source rows from SQLite and DuckDB snapshots.
+    normalizer_path : pathlib.Path
+        Frozen normalizer copy bound to the capture.
+    working_directory : pathlib.Path
+        Exact compiler working directory bound to the profile.
+
+    Returns
+    -------
+    dict[str, JSONValue]
+        Category-only report. It never admits a whole file.
+    """
+    if set(backend_rows) != {"sqlite", "duckdb"}:
+        _fail("backend_rows", "must contain exactly SQLite and DuckDB")
+    expected = _source_owned_ast_expectations(
+        normalized,
+        raw_ast,
+        source,
+        analyzer_capabilities,
+        normalizer_path,
+        working_directory,
+    )
+    reports: dict[str, JSONValue] = {}
+    for category, expected_rows in expected.items():
+        expected_multiset = Counter(_canonical(row) for row in expected_rows)
+        observed_multisets: dict[str, Counter[str]] = {}
+        for backend, rows in backend_rows.items():
+            values = _as_rows(rows.get(category), f"{backend}.{category}")
+            if category == "declarations":
+                projected = [
+                    {key: row.get(key) for key in ("kind", "line", "name")}
+                    for row in values
+                ]
+            elif category == "fields":
+                projected = [
+                    {key: row.get(key) for key in ("line", "name", "owner", "type")}
+                    for row in values
+                ]
+            else:
+                projected = [
+                    {
+                        key: row.get(key)
+                        for key in (
+                            "definition_line",
+                            "kind",
+                            "name",
+                            "parameter_types",
+                            "return_type",
+                        )
+                    }
+                    for row in values
+                ]
+            observed_multisets[backend] = Counter(
+                _canonical(cast("JSONValue", row)) for row in projected
+            )
+        parity = observed_multisets["sqlite"] == observed_multisets["duckdb"]
+        exact = {
+            backend: observed == expected_multiset
+            for backend, observed in observed_multisets.items()
+        }
+        reports[category] = cast(
+            "JSONValue",
+            {
+                "state": "graded" if parity and all(exact.values()) else "held",
+                "semantic_validation": "source-bound-Clang-AST-exact-multiset",
+                "expected_count": len(expected_rows),
+                "observed_counts": {
+                    backend: sum(observed.values())
+                    for backend, observed in observed_multisets.items()
+                },
+                "exact_by_backend": exact,
+                "backend_parity": parity,
+                "failures": []
+                if parity and all(exact.values())
+                else [
+                    {
+                        "backend": backend,
+                        "missing": list((expected_multiset - observed).elements()),
+                        "extra": list((observed - expected_multiset).elements()),
+                    }
+                    for backend, observed in observed_multisets.items()
+                    if observed != expected_multiset
+                ],
+            },
+        )
+    return {
+        "scope": "source-owned-records-fields-and-function-definitions",
+        "interpretation": "clang_parity_only_same_compiler_not_compiler_independent_truth",
+        "whole_file_admission": False,
+        "scope_complete": False,
+        "categories": reports,
+        "held_categories": cast(
+            "JSONValue", sorted(set(FACT_CATEGORIES) - set(reports) - {"coverage"})
+        ),
+        "limitations": [
+            "Unresolved implicit header typedefs and ambiguous call AST nodes remain outside this category proof.",
+            "The result does not establish whole-file parity or file admission.",
+        ],
+    }
+
+
+def grade_source_owned_ast_evidence(  # noqa: C901, PLR0912, PLR0915 -- end-to-end evidence chain
+    request: SourceOwnedAstGradeRequest,
+) -> dict[str, JSONValue]:
+    """Validate retained capture bindings and grade bounded source AST facts.
+
+    Parameters
+    ----------
+    request : SourceOwnedAstGradeRequest
+        Raw capture, normalization, profile, guard, database and snapshot paths.
+
+    Returns
+    -------
+    dict[str, JSONValue]
+        Category-only report with source, capture, profile and database digests.
+
+    Raises
+    ------
+    OracleFormatError
+        If any retained identity, guard, AST projection or backend comparison
+        is incomplete or inconsistent.
+    OSError
+        If an evidence input cannot be read or a current guard has disappeared.
+    """
+    source_path = request.source_path.resolve()
+    source_bytes = source_path.read_bytes()
+    source_hash = hashlib.sha256(source_bytes).hexdigest()
+    record_path = request.normalization_record_path
+    normalization_record_hash = _sha256(record_path)
+    record = _read_json_object(record_path, "normalization record")
+    normalized_path = request.normalized_path
+    normalized_hash = _sha256(normalized_path)
+    normalized = _read_json_object(normalized_path, "normalized AST facts")
+    if (
+        record.get("schema") != "codira.clang-cfp017-native-cli-ast-normalization/1"
+        or record.get("status") != "complete"
+        or record.get("whole_file_admission") is not False
+        or record.get("normalized_output_path") != str(normalized_path.resolve())
+        or record.get("normalized_output_sha256") != normalized_hash
+        or record.get("normalized_reference_sha256") != normalized_hash
+        or record.get("normalized_reference_path") != str(normalized_path.resolve())
+        or record.get("source_path") != str(source_path)
+        or record.get("source_sha256") != source_hash
+    ):
+        _fail("normalization.record", "does not bind these source and normalized bytes")
+    normalizer_path = Path(
+        _string(record.get("normalizer_path"), "normalization.normalizer_path")
+    )
+    normalizer_hash = _string(
+        record.get("normalizer_sha256"), "normalization.normalizer_sha256"
+    )
+    if not normalizer_path.is_file() or _sha256(normalizer_path) != normalizer_hash:
+        _fail("normalization.normalizer", "frozen normalizer path or digest changed")
+    raw_path = Path(_string(record.get("raw_ast_path"), "normalization.raw_ast_path"))
+    raw_hash = _string(record.get("raw_ast_sha256"), "normalization.raw_ast_sha256")
+    if not raw_path.is_file() or _sha256(raw_path) != raw_hash:
+        _fail("normalization.raw_ast", "raw AST bytes are absent or changed")
+    raw_ast_value = json.loads(raw_path.read_text(encoding="utf-8"))
+    raw_ast = _object(raw_ast_value, "raw Clang AST")
+
+    summary_path = request.capture_summary_path
+    summary = _read_json_object(summary_path, "capture summary")
+    repository_capture = _object(
+        summary.get("llvm_source_repository"), "capture.summary.llvm_source_repository"
+    )
+    source_summary = _object(summary.get("source"), "capture.summary.source")
+    profile_summary = _object(summary.get("profile"), "capture.summary.profile")
+    if (
+        record.get("capture_input_binding_path") != str(summary_path.resolve())
+        or record.get("capture_input_binding_sha256") != _sha256(summary_path)
+        or record.get("capture_identity") != summary.get("identity")
+        or summary.get("status") != "complete"
+        or repository_capture.get("pre_post_guards_equal") is not True
+        or source_summary.get("path") != str(source_path)
+        or source_summary.get("sha256") != source_hash
+        or profile_summary.get("sha256") != record.get("profile_sha256")
+    ):
+        _fail(
+            "capture.summary",
+            "does not prove a completed matching source/profile capture",
+        )
+    attempt = _object(summary.get("attempt"), "capture.summary.attempt")
+    if (
+        attempt.get("prepared_inputs_sha256")
+        != record.get("capture_prepared_inputs_sha256")
+        or attempt.get("stdout_sha256") != raw_hash
+        or attempt.get("return_code") != 0
+    ):
+        _fail("capture.summary.attempt", "raw AST or prepared-input binding differs")
+    terminal_path = Path(
+        _string(
+            record.get("capture_terminal_path"), "normalization.capture_terminal_path"
+        )
+    )
+    if (
+        not terminal_path.is_file()
+        or _sha256(terminal_path) != record.get("capture_terminal_sha256")
+        or str(terminal_path.resolve()) != str(terminal_path)
+    ):
+        _fail("capture.terminal", "terminal record path or digest is invalid")
+    terminal = _read_json_object(terminal_path, "capture terminal")
+    toolchain = _object(summary.get("toolchain"), "capture.summary.toolchain")
+    if (
+        terminal.get("identity") != summary.get("identity")
+        or terminal.get("status") != "complete"
+        or terminal.get("return_code") != 0
+        or terminal.get("admission") is not False
+        or terminal.get("whole_file_grade") is not False
+        or terminal.get("stdout_sha256") != raw_hash
+        or terminal.get("source_sha256") != source_hash
+        or terminal.get("profile_sha256") != record.get("profile_sha256")
+        or terminal.get("compiler_sha256") != toolchain.get("compiler_sha256")
+    ):
+        _fail("capture.terminal", "is not the successful matching raw AST attempt")
+
+    prepared_path = request.prepared_inputs_path
+    prepared = _read_json_object(prepared_path, "capture prepared inputs")
+    if (
+        _sha256(prepared_path) != record.get("capture_prepared_inputs_sha256")
+        or prepared.get("identity") != summary.get("identity")
+        or prepared.get("profile_sha256") != record.get("profile_sha256")
+        or prepared.get("source_sha256") != source_hash
+        or prepared.get("working_directory") != record.get("working_directory")
+    ):
+        _fail("capture.prepared_inputs", "does not match normalized capture bindings")
+    expected_input_hashes = _object(
+        prepared.get("expected_input_hashes"), "prepared_inputs.expected_input_hashes"
+    )
+    cdb = _object(summary.get("compile_database"), "capture.summary.compile_database")
+    paths_and_hashes = {
+        "source": (source_path, source_hash),
+        "profile": (
+            Path(_string(profile_summary.get("path"), "profile.path")),
+            record.get("profile_sha256"),
+        ),
+        "compile_database": (
+            Path(_string(cdb.get("path"), "compile_database.path")),
+            cdb.get("sha256"),
+        ),
+        "compiler": (
+            Path(_string(toolchain.get("compiler_path"), "compiler.path")),
+            toolchain.get("compiler_sha256"),
+        ),
+        "helper": (
+            Path(_string(toolchain.get("helper_path"), "helper.path")),
+            toolchain.get("helper_sha256"),
+        ),
+        "build_receipt": (
+            Path(_string(prepared.get("build_receipt_path"), "build_receipt.path")),
+            prepared.get("build_receipt_sha256"),
+        ),
+    }
+    for label, (path, digest) in paths_and_hashes.items():
+        if not isinstance(digest, str) or not path.is_file() or _sha256(path) != digest:
+            _fail(f"capture.input.{label}", "bound input file is absent or has changed")
+        expected_key = "compile_database" if label == "compile_database" else label
+        if expected_input_hashes.get(expected_key) != digest:
+            _fail(f"capture.input.{label}", "prepared-input digest differs")
+    if (
+        cdb.get("path") != str(paths_and_hashes["compile_database"][0])
+        or cdb.get("sha256") != paths_and_hashes["compile_database"][1]
+        or prepared.get("compiler_path") != str(paths_and_hashes["compiler"][0])
+        or prepared.get("compiler_sha256") != paths_and_hashes["compiler"][1]
+        or prepared.get("helper_path") != str(paths_and_hashes["helper"][0])
+        or prepared.get("helper_sha256") != paths_and_hashes["helper"][1]
+    ):
+        _fail(
+            "capture.inputs",
+            "summary and prepared inputs identify different toolchain files",
+        )
+
+    before_path, after_path = request.guards_before_path, request.guards_after_path
+    before = _read_json_object(before_path, "pre-capture guards")
+    after = _read_json_object(after_path, "post-capture guards")
+    before_source = _object(before.get("source"), "capture.guards.source")
+    if before != after or before_source.get("sha256") != source_hash:
+        _fail("capture.guards", "pre/post inputs differ or source guard changed")
+    input_repository_root = Path(
+        _string(before_source.get("repository"), "capture.guards.source.repository")
+    ).resolve()
+    if (
+        source_path != input_repository_root
+        and input_repository_root not in source_path.parents
+    ):
+        _fail(
+            "capture.guards.source",
+            "original source is outside the guarded repository root",
+        )
+    _validate_source_key(source_path, request.source_key, input_repository_root)
+    if _sha256(before_path) != attempt.get("guards_before_sha256") or _sha256(
+        after_path
+    ) != attempt.get("guards_after_sha256"):
+        _fail("capture.guards", "guard snapshot hashes differ from capture terminal")
+    guard_profile = _object(before.get("profile"), "capture.guards.profile")
+    for dependency_value in cast(
+        "list[JSONValue]", guard_profile.get("dependencies", [])
+    ):
+        dependency = _object(dependency_value, "guard dependency")
+        dependency_path = Path(_string(dependency.get("path"), "guard dependency.path"))
+        expected_hash = _string(
+            dependency.get("expected_sha256"), "guard dependency.expected_sha256"
+        )
+        if (
+            dependency.get("actual_sha256") != expected_hash
+            or not dependency_path.is_file()
+            or _sha256(dependency_path) != expected_hash
+        ):
+            _fail("capture.guard.dependency", "dependency changed after capture")
+    from codira_clang_frontend import directory_membership_sha256
+
+    directories = guard_profile.get("include_directories")
+    if not isinstance(directories, list) or len(directories) != profile_summary.get(
+        "include_directory_count"
+    ):
+        _fail("capture.guard.include_directories", "directory inventory is incomplete")
+    guarded_directory_paths: set[Path] = set()
+    for directory_value in directories:
+        directory = _object(directory_value, "guard include directory")
+        directory_path = Path(
+            _string(directory.get("path"), "include_directory.path")
+        ).resolve()
+        guarded_directory_paths.add(directory_path)
+        membership = _string(
+            directory.get("expected_membership_sha256"),
+            "include_directory.expected_membership_sha256",
+        )
+        if (
+            directory.get("actual_membership_sha256") != membership
+            or directory_membership_sha256(directory_path) != membership
+        ):
+            _fail(
+                "capture.guard.include_directory",
+                "include directory membership changed",
+            )
+    from codira_clang_frontend import (
+        __version__ as frontend_version,
+        frontend_profile_fingerprint,
+    )
+
+    profile_bindings: dict[str, JSONValue] = {
+        "profile_path": str(paths_and_hashes["profile"][0]),
+        "helper_path": str(paths_and_hashes["helper"][0]),
+        "build_receipt_path": str(paths_and_hashes["build_receipt"][0]),
+        "frontend_version": frontend_version,
+    }
+    source_binding: dict[str, JSONValue] = {
+        "path": str(source_path),
+        "sha256": source_hash,
+        "language": "c",
+    }
+    frontend, profile = _load_bound_frontend_profile(
+        profile_bindings, source_binding, source_path, input_repository_root
+    )
+    profile_directory_paths = {
+        directory.path.resolve() for directory in profile.include_directories
+    }
+    if guarded_directory_paths != profile_directory_paths:
+        _fail(
+            "capture.guard.include_directories",
+            "guarded paths differ from the loaded profile",
+        )
+    guarded_dependencies = {
+        (
+            Path(_string(item.get("path"), "guard dependency.path")).resolve(),
+            item.get("expected_sha256"),
+        )
+        for item in cast("list[JSONValue]", guard_profile.get("dependencies", []))
+        if isinstance(item, dict)
+    }
+    profile_dependencies = {
+        (dependency.path.resolve(), dependency.sha256)
+        for dependency in profile.dependencies
+    }
+    if guarded_dependencies != profile_dependencies:
+        _fail(
+            "capture.guard.dependencies",
+            "guarded dependency set differs from loaded profile",
+        )
+    if (
+        Path(profile.working_directory).resolve()
+        != Path(
+            _string(record.get("working_directory"), "normalization.working_directory")
+        ).resolve()
+    ):
+        _fail("capture.profile", "loaded working directory differs from normalization")
+    _validate_compile_database_row(
+        paths_and_hashes["compile_database"][0], profile, source_path
+    )
+    expected_argv = [
+        Path(_string(toolchain.get("compiler_path"), "compiler.path")).as_posix()
+    ]
+    original_argv = list(profile.argv)
+    index = 1
+    while index < len(original_argv):
+        argument = original_argv[index]
+        if argument == "-o":
+            if index + 1 >= len(original_argv):
+                _fail("capture.profile.argv", "has an incomplete output argument")
+            index += 2
+            continue
+        if argument == "-c":
+            index += 1
+            continue
+        expected_argv.append(argument)
+        index += 1
+    expected_argv.extend(["-Xclang", "-ast-dump=json", "-fsyntax-only"])
+    invocation_path = Path(
+        _string(
+            attempt.get("invocation_path"), "capture.summary.attempt.invocation_path"
+        )
+    )
+    if not invocation_path.is_file() or _sha256(invocation_path) != attempt.get(
+        "invocation_sha256"
+    ):
+        _fail("capture.invocation", "invocation identity is absent or changed")
+    invocation = _read_json_object(invocation_path, "capture invocation")
+    invocation_argv = invocation.get("compiler_argv")
+    if (
+        invocation.get("identity") != summary.get("identity")
+        or invocation.get("working_directory") != str(profile.working_directory)
+        or invocation_argv != expected_argv
+        or prepared.get("compiler_argv") != expected_argv
+    ):
+        _fail("capture.invocation", "does not match exact adapted profile argv")
+
+    analyzer_package = importlib.import_module("codira_analyzer_c")
+    analyzer = analyzer_package.build_analyzer()
+    analyzer.configure(
+        {
+            "frontend": "clang",
+            "clang_captured_profiles": str(paths_and_hashes["profile"][0]),
+            "clang_helper_path": str(paths_and_hashes["helper"][0]),
+            "clang_build_receipt_path": str(paths_and_hashes["build_receipt"][0]),
+        }
+    )
+    capability_declaration = analyzer.analyzer_capability_declaration()
+    analyzer_module_path = Path(inspect.getsourcefile(analyzer_package) or "").resolve()
+    package_root = analyzer_module_path.parent
+    repository_root = request.repository_root.resolve()
+    try:
+        analyzer_module_path.relative_to(repository_root)
+        package_root.relative_to(repository_root)
+    except ValueError:
+        _fail(
+            "analyzer.implementation",
+            "loaded C analyzer implementation is outside the source worktree",
+        )
+    if not analyzer_module_path.is_file() or not package_root.is_dir():
+        _fail(
+            "analyzer.implementation",
+            "loaded C analyzer implementation is absent",
+        )
+    analyzer_implementation_hashes = {
+        str(path.resolve()): _sha256(path)
+        for path in sorted(package_root.rglob("*.py"))
+        if path.is_file()
+    }
+    if not analyzer_implementation_hashes:
+        _fail("analyzer.implementation", "package has no bound Python sources")
+    analyzer_capabilities: dict[str, JSONValue] = {
+        "analyzer_version": str(capability_declaration.analyzer_version),
+        "supports": list(capability_declaration.supports),
+        "does_not_support": list(capability_declaration.does_not_support),
+    }
+
+    rows_by_backend: dict[str, dict[str, JSONValue]] = {}
+    context_ids: dict[str, str] = {}
+    verified_database_bindings: dict[str, dict[str, JSONValue]] = {}
+    receipt_file_hashes: dict[Path, str] = {}
+    for backend in ("sqlite", "duckdb"):
+        snapshot_path = request.snapshot_paths[backend]
+        receipt_file_hashes[snapshot_path] = _sha256(snapshot_path)
+        snapshot = _read_json_object(snapshot_path, f"{backend} snapshot")
+        binding_path = request.database_binding_paths[backend]
+        receipt_file_hashes[binding_path] = _sha256(binding_path)
+        binding = _read_json_object(binding_path, f"{backend} database binding")
+        database_path = Path(
+            _string(binding.get("database_path"), f"{backend}.database_path")
+        )
+        actual_binding = _database_generation_binding(database_path, backend)
+        if actual_binding != binding or snapshot.get("database_binding") != binding:
+            _fail(
+                f"{backend}.snapshot.database_binding",
+                "does not match current database generation",
+            )
+        if snapshot.get("profile_document_sha256") != _sha256(
+            request.profile_document_path
+        ):
+            _fail(f"{backend}.snapshot.profile", "profile document hash differs")
+        case = _validate_snapshot_binding(
+            SnapshotBindingInput(
+                snapshot,
+                backend,
+                request.source_key,
+                source_hash,
+                binding,
+                _sha256(request.profile_document_path),
+            )
+        )
+        actual_context_identity = _read_indexed_context_identity(
+            backend,
+            database_path,
+            input_repository_root,
+            request.source_key,
+            source_hash,
+        )
+        if actual_context_identity != case.get("analysis_input_fingerprint"):
+            _fail(
+                f"{backend}.snapshot.context",
+                "snapshot differs from actual indexed database context",
+            )
+        context = _validate_indexed_context_identity(
+            backend,
+            actual_context_identity,
+            frontend_profile_fingerprint(frontend, profile),
+        )
+        context_ids[backend] = _string(
+            context.get("clang_frontend_fingerprint"),
+            f"{backend}.clang_frontend_fingerprint",
+        )
+        persisted = _read_actual_analysis_status(
+            database_path, backend, source_path, source_hash
+        )
+        receipt_file_hashes[request.status_paths[backend]] = _sha256(
+            request.status_paths[backend]
+        )
+        status_document = _read_json_object(
+            request.status_paths[backend], f"{backend} persisted status"
+        )
+        persisted_claim = {key: status_document.get(key) for key in persisted}
+        if (
+            _canonical(cast("JSONValue", persisted))
+            != _canonical(cast("JSONValue", persisted_claim))
+            or status_document.get("analysis_input_fingerprint")
+            != actual_context_identity
+        ):
+            _fail(
+                f"{backend}.persisted_status",
+                "exported receipt differs from actual database row",
+            )
+        target = _object(persisted.get("target_contract"), f"{backend}.target_contract")
+        toolchain_identity = _object(
+            target.get("toolchain_identity"), f"{backend}.toolchain_identity"
+        )
+        dependency_closure = _object(
+            target.get("dependency_closure"), f"{backend}.dependency_closure"
+        )
+        build_receipt = _read_json_object(
+            paths_and_hashes["build_receipt"][0], "Clang build receipt"
+        )
+        if (
+            persisted.get("analyzer_name") != "c"
+            or persisted.get("analyzer_version")
+            != analyzer_capabilities["analyzer_version"]
+            or persisted.get("coverage_state") != "complete"
+            or persisted.get("omitted_categories") != []
+            or persisted.get("grammar") != "clang-c-frontend"
+            or target.get("language") != "c"
+            or target.get("frontend") != "clang"
+            or target.get("requested_source_path") != str(source_path)
+            or target.get("requested_source_sha256") != source_hash
+            or target.get("profile_identity") != profile.identity
+            or dependency_closure.get("file_count") != len(profile.dependencies)
+            or dependency_closure.get("status") != "complete"
+            or toolchain_identity.get("compiler_version")
+            != toolchain.get("compiler_version")
+            or toolchain_identity.get("compiler_path")
+            != str(paths_and_hashes["compiler"][0])
+            or toolchain_identity.get("compiler_sha256")
+            != paths_and_hashes["compiler"][1]
+            or toolchain_identity.get("helper_sha256") != paths_and_hashes["helper"][1]
+            or toolchain_identity.get("helper_path")
+            != str(paths_and_hashes["helper"][0])
+            or toolchain_identity.get("build_receipt_sha256")
+            != paths_and_hashes["build_receipt"][1]
+            or toolchain_identity.get("resource_dir")
+            != build_receipt.get("resource_dir")
+            or toolchain_identity.get("resource_probe_sha256")
+            != build_receipt.get("resource_probe_sha256")
+        ):
+            _fail(
+                f"{backend}.persisted_status",
+                "does not bind this C/Clang profile and toolchain",
+            )
+        reliable = persisted.get("reliable_categories")
+        if not isinstance(reliable, list) or not {"function", "declaration"}.issubset(
+            reliable
+        ):
+            _fail(
+                f"{backend}.persisted_status",
+                "does not declare the selected persisted categories reliable",
+            )
+        rows_by_backend[backend] = case
+        verified_database_bindings[backend] = binding
+        if _database_generation_binding(database_path, backend) != binding:
+            _fail(
+                f"{backend}.snapshot.database_binding",
+                "database generation changed while evidence was read",
+            )
+    if len(set(context_ids.values())) != 1:
+        _fail(
+            "backend.profile_context",
+            "SQLite and DuckDB differ in selected frontend identity",
+        )
+    if request.source_key not in _object(
+        _read_json_object(request.snapshot_paths["sqlite"], "SQLite snapshot").get(
+            "cases"
+        ),
+        "SQLite cases",
+    ):
+        _fail("snapshot.source", "selected source case is absent")
+
+    report = grade_source_owned_ast_categories(
+        normalized,
+        cast("dict[str, object]", raw_ast),
+        source_bytes,
+        analyzer_capabilities,
+        rows_by_backend,
+        normalizer_path,
+        profile.working_directory,
+    )
+    report["evidence"] = cast(
+        "JSONValue",
+        {
+            "source_path": str(source_path),
+            "source_sha256": source_hash,
+            "capture_identity": summary.get("identity"),
+            "capture_summary_path": str(summary_path.resolve()),
+            "capture_summary_sha256": _sha256(summary_path),
+            "raw_ast_path": str(raw_path.resolve()),
+            "raw_ast_sha256": raw_hash,
+            "normalizer_path": str(normalizer_path.resolve()),
+            "normalizer_sha256": normalizer_hash,
+            "normalized_path": str(normalized_path.resolve()),
+            "normalized_sha256": normalized_hash,
+            "profile_sha256": record.get("profile_sha256"),
+            "profile_identity": profile.identity,
+            "analysis_context_identity": context_ids["sqlite"],
+            "analyzer_version": capability_declaration.analyzer_version,
+            "analyzer_implementation_path": str(analyzer_module_path),
+            "analyzer_implementation_files": analyzer_implementation_hashes,
+            "backend_database_bindings": verified_database_bindings,
+        },
+    )
+    final_identity_hashes = {
+        source_path: source_hash,
+        paths_and_hashes["profile"][0]: cast("str", paths_and_hashes["profile"][1]),
+        paths_and_hashes["compile_database"][0]: cast(
+            "str", paths_and_hashes["compile_database"][1]
+        ),
+        paths_and_hashes["compiler"][0]: cast("str", paths_and_hashes["compiler"][1]),
+        paths_and_hashes["helper"][0]: cast("str", paths_and_hashes["helper"][1]),
+        paths_and_hashes["build_receipt"][0]: cast(
+            "str", paths_and_hashes["build_receipt"][1]
+        ),
+        record_path: normalization_record_hash,
+        normalized_path: normalized_hash,
+        normalizer_path: normalizer_hash,
+        raw_path: raw_hash,
+        summary_path: cast("str", record.get("capture_input_binding_sha256")),
+        terminal_path: cast("str", record.get("capture_terminal_sha256")),
+        prepared_path: cast("str", record.get("capture_prepared_inputs_sha256")),
+        before_path: cast("str", attempt.get("guards_before_sha256")),
+        after_path: cast("str", attempt.get("guards_after_sha256")),
+        invocation_path: cast("str", attempt.get("invocation_sha256")),
+        request.profile_document_path: cast("str", record.get("profile_sha256")),
+    }
+    for path, expected_hash in final_identity_hashes.items():
+        if not path.is_file() or _sha256(path) != expected_hash:
+            _fail("capture.final_recheck", "a bound input changed during grading")
+    for dependency_value in cast(
+        "list[JSONValue]", guard_profile.get("dependencies", [])
+    ):
+        dependency = _object(dependency_value, "guard dependency")
+        dependency_path = Path(_string(dependency.get("path"), "guard dependency.path"))
+        if _sha256(dependency_path) != dependency.get("expected_sha256"):
+            _fail(
+                "capture.final_recheck", "a profile dependency changed during grading"
+            )
+    for directory_value in directories:
+        directory = _object(directory_value, "guard include directory")
+        directory_path = Path(_string(directory.get("path"), "include_directory.path"))
+        if directory_membership_sha256(directory_path) != directory.get(
+            "expected_membership_sha256"
+        ):
+            _fail(
+                "capture.final_recheck", "an include directory changed during grading"
+            )
+    for backend, binding in verified_database_bindings.items():
+        database_path = Path(_string(binding.get("database_path"), "database_path"))
+        if _database_generation_binding(database_path, backend) != binding:
+            _fail("capture.final_recheck", "a backend database changed during grading")
+    for path, expected_hash in receipt_file_hashes.items():
+        if not path.is_file() or _sha256(path) != expected_hash:
+            _fail("capture.final_recheck", "a backend receipt changed during grading")
+    current_implementation_hashes = {
+        str(path.resolve()): _sha256(path)
+        for path in sorted(package_root.rglob("*.py"))
+        if path.is_file()
+    }
+    if current_implementation_hashes != analyzer_implementation_hashes:
+        _fail(
+            "capture.final_recheck",
+            "the analyzer implementation changed during grading",
+        )
+    return report
+
+
+def _validate_source_key(
+    source_path: Path, source_key: str, repository_root: Path
+) -> None:
+    """Require a snapshot case key to identify the exact guarded source path.
+
+    Parameters
+    ----------
+    source_path : pathlib.Path
+        Absolute original source file path.
+    source_key : str
+        Relative key used to select snapshot rows.
+    repository_root : pathlib.Path
+        Root established by the capture guard.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    OracleFormatError
+        If the key is not the source path relative to the guarded root.
+    """
+    try:
+        expected = source_path.resolve().relative_to(repository_root.resolve())
+    except ValueError:
+        _fail("snapshot.source_key", "source is outside the guarded repository")
+    if expected.as_posix() != source_key:
+        _fail(
+            "snapshot.source_key",
+            "does not equal the original source path relative to the guarded root",
+        )
+
+
 def _database_json_value(value: object, context: str) -> JSONValue:
     """Parse one JSON-encoded analysis-status field read from a backend."""
     if isinstance(value, str):
@@ -2168,6 +3649,14 @@ def _database_generation_binding(
     if not database_path.is_file():
         _fail(f"{backend} database", "database file is absent")
     database = database_path.resolve()
+    sidecars = (
+        Path(f"{database}-wal"),
+        Path(f"{database}-shm"),
+        Path(f"{database}-journal"),
+        Path(f"{database}.wal"),
+    )
+    if any(path.exists() for path in sidecars):
+        _fail(f"{backend} database", "active database sidecars are unsupported")
     metadata_path = database.parent / "metadata.json"
     generation_path = database.parent / "index-generation.json"
     metadata = _read_json_object(metadata_path, f"{backend} metadata")

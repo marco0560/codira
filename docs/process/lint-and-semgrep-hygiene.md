@@ -326,6 +326,11 @@ host parser.
 - `scripts/clang_reference_facts.py:804` (C901, PLR0912): The nested AST visitor keeps lexical owner and callable stacks together with the corresponding source-range checks.
 - `scripts/clang_reference_facts.py:1372` (C901, PLR0912): Profile input validation checks each source, dependency, compiler, resource and receipt binding before capture or reuse.
 - `scripts/clang_reference_facts.py:1906` (C901, PLR0913): The reference runner preserves independently supplied immutable inputs and records every capture and post-capture validation boundary.
-- `scripts/clang_original_whole_file_grade.py:427` (C901): Contract validation checks evidence and control bindings together before grading.
-- `scripts/clang_original_whole_file_grade.py:1305` (C901, PLR0912): Normalized-site reconciliation rejects missing, duplicate, and unbound fact evidence.
-- `scripts/clang_original_whole_file_grade.py:1542` (C901, PLR0912): Source-site reconciliation validates physical coordinates and fact bindings together.
+- `scripts/clang_original_whole_file_grade.py:484` (C901): Contract validation checks evidence and control bindings together before grading.
+- `scripts/clang_original_whole_file_grade.py:1362` (C901, PLR0912): Normalized-site reconciliation rejects missing, duplicate, and unbound fact evidence.
+- `scripts/clang_original_whole_file_grade.py:1599` (C901, PLR0912): Source-site reconciliation validates physical coordinates and fact bindings together.
+- `scripts/clang_original_whole_file_grade.py:2010` (C901, PLR0913): The bounded AST expectation builder binds raw-source declarations and normalized facts through one exhaustive reconciliation.
+- `scripts/clang_original_whole_file_grade.py:2253` (C901): The raw AST declaration walk checks physical ownership, lexical parents, types and unsupported source constructs.
+- `scripts/clang_original_whole_file_grade.py:2328` (C901, PLR0912): The nested visitor validates source-owned nodes while preserving lexical record and function context.
+- `scripts/clang_original_whole_file_grade.py:2671` (PLR0913): Category-only reconciliation compares exact source-owned facts across both persisted backends.
+- `scripts/clang_original_whole_file_grade.py:2793` (C901, PLR0912, PLR0915): The evidence wrapper validates the complete capture, profile, toolchain, database and snapshot chain before grading.

@@ -3,17 +3,24 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import sqlite3
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
+import codira_analyzer_c
+import codira_clang_frontend
 import pytest
 
+import scripts.clang_original_whole_file_grade as grader
 from scripts.clang_original_whole_file_grade import (
     SOURCE_FACT_CATEGORIES,
     GradeRequest,
+    SourceOwnedAstGradeRequest,
     _canonical,
+    _database_generation_binding,
     _read_actual_analysis_status,
     _source_literal_includes,
     _validate_compile_database_row,
@@ -27,18 +34,19 @@ from scripts.clang_original_whole_file_grade import (
     _validate_receipt_database_binding,
     _validate_required_reference_coverage,
     _validate_source_fact_accounting,
+    _validate_source_key,
     grade_contract,
+    grade_source_owned_ast_categories,
+    grade_source_owned_ast_evidence,
 )
 from scripts.clang_parity_qualification import (
     FACT_CATEGORIES,
     OracleFormatError,
     _source_macro_invocation_span,
 )
-from scripts.clang_reference_facts import REQUIRED_CATEGORIES
+from scripts.clang_reference_facts import REQUIRED_CATEGORIES, normalize_ast
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from codira_clang_frontend.contracts import CompileProfile
 
     from scripts.clang_parity_qualification import JSONValue
@@ -1355,3 +1363,872 @@ def test_persisted_status_must_prove_clang_cpp_frontend(tmp_path: Path) -> None:
         _validate_persisted_clang_identity(
             persisted, bindings, source, "source-sha", "sqlite"
         )
+
+
+def _source_owned_ast_fixture() -> tuple[
+    bytes,
+    Path,
+    dict[str, JSONValue],
+    dict[str, object],
+    dict[str, JSONValue],
+    dict[str, dict[str, JSONValue]],
+    Path,
+    Path,
+]:
+    """Build a small source-bound record, field and function AST case.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    tuple
+        Source bytes and path, freshly normalized facts, raw AST, analyzer
+        capabilities, backend rows, normalizer copy and working directory.
+    """
+    source = b"struct R { int x; };\nint f(struct R *r) { int local; return 0; }\n"
+    source_path = Path("/fixture.c")
+    working_directory = Path.cwd()
+    record_offset = source.index(b"R")
+    field_offset = source.index(b"x")
+    function_offset = source.index(b"f(")
+    variable_offset = source.index(b"local")
+    raw_ast: dict[str, object] = {
+        "kind": "TranslationUnitDecl",
+        "inner": [
+            {
+                "kind": "RecordDecl",
+                "name": "R",
+                "tagUsed": "struct",
+                "completeDefinition": True,
+                "loc": {
+                    "file": str(source_path),
+                    "line": 1,
+                    "col": record_offset + 1,
+                    "offset": record_offset,
+                    "tokLen": 1,
+                },
+                "inner": [
+                    {
+                        "kind": "FieldDecl",
+                        "name": "x",
+                        "type": {"qualType": "int"},
+                        "loc": {
+                            "file": str(source_path),
+                            "line": 1,
+                            "col": field_offset + 1,
+                            "offset": field_offset,
+                            "tokLen": 1,
+                        },
+                    }
+                ],
+            },
+            {
+                "kind": "FunctionDecl",
+                "name": "f",
+                "type": {"qualType": "int (struct R *)"},
+                "loc": {
+                    "file": str(source_path),
+                    "line": 2,
+                    "col": function_offset - source.rfind(b"\n", 0, function_offset),
+                    "offset": function_offset,
+                    "tokLen": 1,
+                },
+                "inner": [
+                    {
+                        "kind": "CompoundStmt",
+                        "inner": [
+                            {
+                                "kind": "VarDecl",
+                                "name": "local",
+                                "type": {"qualType": "int"},
+                                "loc": {
+                                    "file": str(source_path),
+                                    "line": 2,
+                                    "col": variable_offset
+                                    - source.rfind(b"\n", 0, variable_offset),
+                                    "offset": variable_offset,
+                                    "tokLen": 5,
+                                },
+                            }
+                        ],
+                    }
+                ],
+            },
+        ],
+    }
+    normalized = cast(
+        "dict[str, JSONValue]",
+        normalize_ast(raw_ast, source_path, source, working_directory),
+    )
+    capabilities: dict[str, JSONValue] = {
+        "analyzer_version": "30",
+        "supports": ["callable", "type", "variable"],
+        "does_not_support": ["namespace"],
+    }
+    category_rows: dict[str, JSONValue] = {
+        "declarations": [{"kind": "struct", "line": 1, "name": "R"}],
+        "fields": [{"line": 1, "name": "x", "owner": "R", "type": "int"}],
+        "callables": [
+            {
+                "definition_line": 2,
+                "kind": "function",
+                "name": "f",
+                "parameter_types": ["struct R *"],
+                "return_type": "int",
+            }
+        ],
+    }
+    return (
+        source,
+        source_path,
+        normalized,
+        raw_ast,
+        capabilities,
+        {"sqlite": dict(category_rows), "duckdb": dict(category_rows)},
+        Path("scripts/clang_reference_facts.py").resolve(),
+        working_directory,
+    )
+
+
+def _source_owned_wrapper_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[SourceOwnedAstGradeRequest, dict[str, Path]]:
+    """Build a bound miniature capture and patch only external analyzers.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary evidence workspace.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture for deterministic profile and database readers.
+
+    Returns
+    -------
+    tuple
+        Complete wrapper request and named mutable evidence paths.
+    """
+
+    def write_json(path: Path, value: object) -> str:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    repo = tmp_path / "source-repository"
+    source_path = repo / "src" / "unit.c"
+    source_path.parent.mkdir(parents=True)
+    source, _fixture_path, _facts, raw_ast, _caps, rows, _normalizer, _cwd = (
+        _source_owned_ast_fixture()
+    )
+    source_path.write_bytes(source)
+
+    def rewrite_ast(value: object) -> None:
+        if isinstance(value, dict):
+            location = value.get("loc")
+            if isinstance(location, dict) and "file" in location:
+                location["file"] = str(source_path)
+            for child in value.values():
+                rewrite_ast(child)
+        elif isinstance(value, list):
+            for child in value:
+                rewrite_ast(child)
+
+    rewrite_ast(raw_ast)
+    normalized = cast(
+        "dict[str, JSONValue]",
+        normalize_ast(raw_ast, source_path, source, repo),
+    )
+    evidence = tmp_path / "evidence"
+    raw_path = evidence / "raw-ast.json"
+    raw_hash = write_json(raw_path, raw_ast)
+    normalized_path = evidence / "normalized.json"
+    normalized_hash = write_json(normalized_path, normalized)
+    normalizer_path = Path("scripts/clang_reference_facts.py").resolve()
+    normalizer_hash = hashlib.sha256(normalizer_path.read_bytes()).hexdigest()
+
+    profile_path = evidence / "selected-profile.json"
+    profile_hash = write_json(profile_path, {"profile": "fixture"})
+    compile_database_path = evidence / "compile_commands.json"
+    compile_database_hash = write_json(compile_database_path, [])
+    compiler_path = evidence / "clang"
+    compiler_path.write_bytes(b"compiler fixture")
+    compiler_hash = hashlib.sha256(compiler_path.read_bytes()).hexdigest()
+    helper_path = evidence / "helper.py"
+    helper_path.write_bytes(b"helper fixture")
+    helper_hash = hashlib.sha256(helper_path.read_bytes()).hexdigest()
+    build_receipt_path = evidence / "build-receipt.json"
+    build_receipt = {"resource_dir": "/resource", "resource_probe_sha256": "probe"}
+    build_receipt_hash = write_json(build_receipt_path, build_receipt)
+    context_identity = json.dumps(
+        {"clang_frontend_fingerprint": "fixture-frontend"}, sort_keys=True
+    )
+    profile = SimpleNamespace(
+        working_directory=str(repo),
+        argv=["profile-clang", "-c", str(source_path)],
+        include_directories=(),
+        dependencies=(),
+        identity="fixture-profile-identity",
+    )
+    monkeypatch.setattr(
+        grader,
+        "_load_bound_frontend_profile",
+        lambda *_args: ("fixture-frontend", profile),
+    )
+    monkeypatch.setattr(grader, "_validate_compile_database_row", lambda *_args: None)
+    monkeypatch.setattr(
+        codira_clang_frontend,
+        "frontend_profile_fingerprint",
+        lambda *_args: "fixture-frontend",
+    )
+    monkeypatch.setattr(
+        codira_clang_frontend, "directory_membership_sha256", lambda _path: "unused"
+    )
+
+    class FixtureAnalyzer:
+        """Provide the persisted C analyzer capability declaration."""
+
+        def configure(self, _configuration: dict[str, str]) -> None:
+            """Accept the validated captured profile configuration."""
+
+        def analyzer_capability_declaration(self) -> SimpleNamespace:
+            """Return the analyzer identity stored in the fixture databases."""
+            return SimpleNamespace(
+                analyzer_version="30",
+                supports=("callable", "type", "variable"),
+                does_not_support=("namespace",),
+            )
+
+    monkeypatch.setattr(codira_analyzer_c, "build_analyzer", lambda: FixtureAnalyzer())
+    monkeypatch.setattr(
+        inspect,
+        "getsourcefile",
+        lambda _package: str(Path(codira_analyzer_c.__file__).resolve()),
+    )
+
+    guard_profile: dict[str, JSONValue] = {
+        "dependencies": [],
+        "include_directories": [],
+    }
+    guard_value = {
+        "source": {
+            "repository": str(repo),
+            "sha256": hashlib.sha256(source).hexdigest(),
+        },
+        "profile": guard_profile,
+    }
+    before_path = evidence / "guards-before.json"
+    before_hash = write_json(before_path, guard_value)
+    after_path = evidence / "guards-after.json"
+    after_hash = write_json(after_path, guard_value)
+    prepared_path = evidence / "prepared-inputs.json"
+    prepared_value = {
+        "identity": "fixture-capture",
+        "profile_sha256": profile_hash,
+        "source_sha256": hashlib.sha256(source).hexdigest(),
+        "working_directory": str(repo),
+        "expected_input_hashes": {
+            "source": hashlib.sha256(source).hexdigest(),
+            "profile": profile_hash,
+            "compile_database": compile_database_hash,
+            "compiler": compiler_hash,
+            "helper": helper_hash,
+            "build_receipt": build_receipt_hash,
+        },
+        "compiler_path": str(compiler_path),
+        "compiler_sha256": compiler_hash,
+        "helper_path": str(helper_path),
+        "helper_sha256": helper_hash,
+        "build_receipt_path": str(build_receipt_path),
+        "build_receipt_sha256": build_receipt_hash,
+        "compiler_argv": [
+            str(compiler_path),
+            str(source_path),
+            "-Xclang",
+            "-ast-dump=json",
+            "-fsyntax-only",
+        ],
+    }
+    prepared_hash = write_json(prepared_path, prepared_value)
+    invocation_path = evidence / "invocation.json"
+    invocation_value = {
+        "identity": "fixture-capture",
+        "working_directory": str(repo),
+        "compiler_argv": prepared_value["compiler_argv"],
+    }
+    invocation_hash = write_json(invocation_path, invocation_value)
+    terminal_path = evidence / "terminal.json"
+    terminal_value = {
+        "identity": "fixture-capture",
+        "status": "complete",
+        "return_code": 0,
+        "admission": False,
+        "whole_file_grade": False,
+        "stdout_sha256": raw_hash,
+        "source_sha256": hashlib.sha256(source).hexdigest(),
+        "profile_sha256": profile_hash,
+        "compiler_sha256": compiler_hash,
+    }
+    terminal_hash = write_json(terminal_path, terminal_value)
+    summary_path = evidence / "capture-summary.json"
+    summary_value = {
+        "identity": "fixture-capture",
+        "status": "complete",
+        "llvm_source_repository": {"pre_post_guards_equal": True},
+        "source": {
+            "path": str(source_path),
+            "sha256": hashlib.sha256(source).hexdigest(),
+        },
+        "profile": {
+            "path": str(profile_path),
+            "sha256": profile_hash,
+            "include_directory_count": 0,
+        },
+        "compile_database": {
+            "path": str(compile_database_path),
+            "sha256": compile_database_hash,
+        },
+        "toolchain": {
+            "compiler_path": str(compiler_path),
+            "compiler_sha256": compiler_hash,
+            "compiler_version": "fixture-clang",
+            "helper_path": str(helper_path),
+            "helper_sha256": helper_hash,
+        },
+        "attempt": {
+            "prepared_inputs_sha256": prepared_hash,
+            "stdout_sha256": raw_hash,
+            "return_code": 0,
+            "guards_before_sha256": before_hash,
+            "guards_after_sha256": after_hash,
+            "invocation_path": str(invocation_path),
+            "invocation_sha256": invocation_hash,
+        },
+    }
+    summary_hash = write_json(summary_path, summary_value)
+
+    snapshot_paths: dict[str, Path] = {}
+    binding_paths: dict[str, Path] = {}
+    status_paths: dict[str, Path] = {}
+    status_by_database: dict[str, dict[str, JSONValue]] = {}
+    context_by_database: dict[str, str] = {}
+    key = "src/unit.c"
+    source_hash = hashlib.sha256(source).hexdigest()
+    target_contract = {
+        "language": "c",
+        "frontend": "clang",
+        "requested_source_path": str(source_path),
+        "requested_source_sha256": source_hash,
+        "profile_identity": profile.identity,
+        "dependency_closure": {"file_count": 0, "status": "complete"},
+        "toolchain_identity": {
+            "compiler_version": "fixture-clang",
+            "compiler_path": str(compiler_path),
+            "compiler_sha256": compiler_hash,
+            "helper_path": str(helper_path),
+            "helper_sha256": helper_hash,
+            "build_receipt_sha256": build_receipt_hash,
+            "resource_dir": build_receipt["resource_dir"],
+            "resource_probe_sha256": build_receipt["resource_probe_sha256"],
+        },
+    }
+    persisted_status: dict[str, JSONValue] = {
+        "source_sha256": source_hash,
+        "analyzer_name": "c",
+        "analyzer_version": "30",
+        "grammar": "clang-c-frontend",
+        "target_contract": cast("JSONValue", target_contract),
+        "reliable_categories": ["function", "declaration"],
+        "omitted_categories": [],
+        "coverage_state": "complete",
+    }
+    for backend in ("sqlite", "duckdb"):
+        backend_root = evidence / backend
+        database_path = backend_root / (
+            "index.db" if backend == "sqlite" else "index.duckdb"
+        )
+        database_path.parent.mkdir(parents=True)
+        database_path.write_bytes(f"{backend} database".encode())
+        write_json(
+            backend_root / "metadata.json",
+            {"backend_name": backend, "schema_version": "29"},
+        )
+        write_json(
+            backend_root / "index-generation.json",
+            {
+                "backend_name": backend,
+                "analysis_fingerprint": f"{backend}-analysis",
+                "generation": 1,
+                "analyzer_inventory": [],
+                "git_commit": "fixture-commit",
+            },
+        )
+        binding = _database_generation_binding(database_path, backend)
+        binding_path = evidence / f"{backend}-binding.json"
+        write_json(binding_path, binding)
+        binding_paths[backend] = binding_path
+        snapshot = {
+            "snapshot_version": 1,
+            "backend": backend,
+            "database_binding": binding,
+            "profile_document_sha256": profile_hash,
+            "cases": {
+                key: {
+                    "source_sha256": source_hash,
+                    "analysis_input_fingerprint": context_identity,
+                    "declarations": rows[backend]["declarations"],
+                    "fields": rows[backend]["fields"],
+                    "callables": rows[backend]["callables"],
+                }
+            },
+        }
+        snapshot_path = evidence / f"{backend}-snapshot.json"
+        write_json(snapshot_path, snapshot)
+        snapshot_paths[backend] = snapshot_path
+        status_path = evidence / f"{backend}-status.json"
+        write_json(
+            status_path,
+            {**persisted_status, "analysis_input_fingerprint": context_identity},
+        )
+        status_paths[backend] = status_path
+        status_by_database[str(database_path.resolve())] = persisted_status
+        context_by_database[str(database_path.resolve())] = context_identity
+
+    monkeypatch.setattr(
+        grader,
+        "_read_indexed_context_identity",
+        lambda _backend, database, *_args: context_by_database[str(database.resolve())],
+    )
+    monkeypatch.setattr(
+        grader,
+        "_read_actual_analysis_status",
+        lambda database, *_args: status_by_database[str(database.resolve())],
+    )
+    request = SourceOwnedAstGradeRequest(
+        source_path=source_path,
+        source_key=key,
+        normalized_path=normalized_path,
+        normalization_record_path=evidence / "normalization-record.json",
+        capture_summary_path=summary_path,
+        prepared_inputs_path=prepared_path,
+        guards_before_path=before_path,
+        guards_after_path=after_path,
+        snapshot_paths=snapshot_paths,
+        database_binding_paths=binding_paths,
+        status_paths=status_paths,
+        profile_document_path=profile_path,
+        repository_root=Path.cwd(),
+    )
+    record = {
+        "schema": "codira.clang-cfp017-native-cli-ast-normalization/1",
+        "status": "complete",
+        "whole_file_admission": False,
+        "normalized_output_path": str(normalized_path.resolve()),
+        "normalized_output_sha256": normalized_hash,
+        "normalized_reference_path": str(normalized_path.resolve()),
+        "normalized_reference_sha256": normalized_hash,
+        "source_path": str(source_path.resolve()),
+        "source_sha256": source_hash,
+        "normalizer_path": str(normalizer_path),
+        "normalizer_sha256": normalizer_hash,
+        "raw_ast_path": str(raw_path),
+        "raw_ast_sha256": raw_hash,
+        "capture_input_binding_path": str(summary_path.resolve()),
+        "capture_input_binding_sha256": summary_hash,
+        "capture_identity": "fixture-capture",
+        "capture_terminal_path": str(terminal_path.resolve()),
+        "capture_terminal_sha256": terminal_hash,
+        "capture_prepared_inputs_sha256": prepared_hash,
+        "profile_sha256": profile_hash,
+        "working_directory": str(repo),
+    }
+    write_json(request.normalization_record_path, record)
+    paths = {
+        "source": source_path,
+        "normalization": normalized_path,
+        "profile": profile_path,
+        "guard": after_path,
+        "status": status_paths["sqlite"],
+        "snapshot": snapshot_paths["sqlite"],
+        "database": evidence / "sqlite" / "index.db",
+        "capture": terminal_path,
+        "record": request.normalization_record_path,
+    }
+    return request, paths
+
+
+def test_source_owned_ast_categories_reconcile_exact_facts() -> None:
+    """Grade only exact source-owned records, fields and functions.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+    source, source_path, normalized, raw_ast, capabilities, rows, normalizer, cwd = (
+        _source_owned_ast_fixture()
+    )
+    assert normalized["source_path"] == str(source_path)
+    report = grade_source_owned_ast_categories(
+        normalized, raw_ast, source, capabilities, rows, normalizer, cwd
+    )
+    assert report["whole_file_admission"] is False
+    assert report["scope_complete"] is False
+    categories = cast("dict[str, JSONValue]", report["categories"])
+    assert set(categories) == {"declarations", "fields", "callables"}
+    assert all(
+        cast("dict[str, JSONValue]", item)["state"] == "graded"
+        for item in categories.values()
+    )
+
+
+def test_source_owned_evidence_wrapper_accepts_bound_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exercise a complete positive pass through the evidence wrapper.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary evidence workspace.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture for the deterministic profile and database readers.
+
+    Returns
+    -------
+    None
+    """
+    request, _paths = _source_owned_wrapper_fixture(tmp_path, monkeypatch)
+
+    report = grade_source_owned_ast_evidence(request)
+
+    assert report["scope_complete"] is False
+    assert report["whole_file_admission"] is False
+    categories = cast("dict[str, JSONValue]", report["categories"])
+    assert all(
+        cast("dict[str, JSONValue]", categories[name])["state"] == "graded"
+        for name in ("declarations", "fields", "callables")
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "source",
+        "normalization",
+        "profile",
+        "guard",
+        "status",
+        "snapshot",
+        "database",
+        "capture",
+    ],
+)
+def test_source_owned_evidence_wrapper_holds_mutated_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    """Reject stale retained inputs and hold semantically wrong snapshots.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary evidence workspace.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture for deterministic profile and database readers.
+    mutation : str
+        Evidence identity changed after fixture construction.
+
+    Returns
+    -------
+    None
+    """
+    request, paths = _source_owned_wrapper_fixture(tmp_path, monkeypatch)
+    target = paths[mutation]
+    if mutation == "snapshot":
+        snapshot = json.loads(target.read_text(encoding="utf-8"))
+        snapshot["cases"][request.source_key]["fields"] = []
+        target.write_text(json.dumps(snapshot), encoding="utf-8")
+        report = grade_source_owned_ast_evidence(request)
+        categories = cast("dict[str, JSONValue]", report["categories"])
+        assert cast("dict[str, JSONValue]", categories["fields"])["state"] == "held"
+        assert report["whole_file_admission"] is False
+        return
+    if mutation == "source":
+        target.write_bytes(target.read_bytes() + b"\n")
+    elif mutation == "normalization":
+        target.write_bytes(target.read_bytes() + b" ")
+    elif mutation == "profile":
+        target.write_text('{"profile":"changed"}', encoding="utf-8")
+    elif mutation == "guard":
+        target.write_text("{}", encoding="utf-8")
+    elif mutation == "status":
+        status = json.loads(target.read_text(encoding="utf-8"))
+        status["coverage_state"] = "incomplete"
+        target.write_text(json.dumps(status), encoding="utf-8")
+    elif mutation == "database":
+        target.write_bytes(target.read_bytes() + b" changed")
+    elif mutation == "capture":
+        terminal = json.loads(target.read_text(encoding="utf-8"))
+        terminal["return_code"] = 1
+        target.write_text(json.dumps(terminal), encoding="utf-8")
+
+    with pytest.raises(OracleFormatError):
+        grade_source_owned_ast_evidence(request)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra", "duplicate", "divergent"])
+def test_source_owned_ast_categories_hold_snapshot_drift(mutation: str) -> None:
+    """Hold missing, extra, duplicate and cross-backend AST fact rows.
+
+    Parameters
+    ----------
+    mutation : str
+        Snapshot mutation applied to one backend.
+
+    Returns
+    -------
+    None
+    """
+    source, source_path, normalized, raw_ast, capabilities, rows, normalizer, cwd = (
+        _source_owned_ast_fixture()
+    )
+    if mutation == "missing":
+        rows["sqlite"]["fields"] = []
+    elif mutation == "extra":
+        cast("list[JSONValue]", rows["sqlite"]["declarations"]).append(
+            {"kind": "struct", "line": 1, "name": "extra"}
+        )
+        rows["duckdb"]["declarations"] = rows["sqlite"]["declarations"]
+    elif mutation == "duplicate":
+        callables = cast("list[JSONValue]", rows["sqlite"]["callables"])
+        callables.append(callables[0])
+        rows["duckdb"]["callables"] = callables
+    else:
+        rows["duckdb"]["fields"] = []
+    report = grade_source_owned_ast_categories(
+        normalized, raw_ast, source, capabilities, rows, normalizer, cwd
+    )
+    categories = cast("dict[str, JSONValue]", report["categories"])
+    expected = (
+        "fields"
+        if mutation in {"missing", "divergent"}
+        else ("callables" if mutation == "duplicate" else "declarations")
+    )
+    assert cast("dict[str, JSONValue]", categories[expected])["state"] == "held"
+    assert report["whole_file_admission"] is False
+
+
+def test_source_owned_ast_categories_reject_fabricated_coordinates_and_scope() -> None:
+    """Reject invented coordinates and non-local excluded variables.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+    source, source_path, normalized, raw_ast, capabilities, rows, normalizer, cwd = (
+        _source_owned_ast_fixture()
+    )
+    facts = cast("dict[str, JSONValue]", normalized["facts"])
+    declarations = cast("list[JSONValue]", facts["declarations"])
+    cast("dict[str, JSONValue]", declarations[0])["column"] = 99
+    with pytest.raises(OracleFormatError, match="does not equal a fresh replay"):
+        grade_source_owned_ast_categories(
+            normalized, raw_ast, source, capabilities, rows, normalizer, cwd
+        )
+
+    source, source_path, normalized, raw_ast, capabilities, rows, normalizer, cwd = (
+        _source_owned_ast_fixture()
+    )
+    ast_children = cast("list[object]", raw_ast["inner"])
+    function = cast("dict[str, object]", ast_children[1])
+    compound = cast("dict[str, object]", cast("list[object]", function["inner"])[0])
+    compound["inner"] = []
+    ast_children.append(
+        {
+            "kind": "VarDecl",
+            "name": "local",
+            "type": {"qualType": "int"},
+            "loc": {
+                "file": str(source_path),
+                "line": 2,
+                "col": source.index(b"local")
+                - source.rfind(b"\n", 0, source.index(b"local")),
+                "offset": source.index(b"local"),
+                "tokLen": 5,
+            },
+        }
+    )
+    normalized = cast(
+        "dict[str, JSONValue]", normalize_ast(raw_ast, source_path, source, cwd)
+    )
+    with pytest.raises(OracleFormatError, match="file-scope variable"):
+        grade_source_owned_ast_categories(
+            normalized, raw_ast, source, capabilities, rows, normalizer, cwd
+        )
+
+
+def test_source_owned_ast_categories_reject_omitted_normalized_inventory() -> None:
+    """Reject deletion from normalized expectations and matching snapshots.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+    source, _source_path, normalized, raw_ast, capabilities, rows, normalizer, cwd = (
+        _source_owned_ast_fixture()
+    )
+    facts = cast("dict[str, JSONValue]", normalized["facts"])
+    declarations = cast("list[JSONValue]", facts["declarations"])
+    facts["declarations"] = [
+        row
+        for row in declarations
+        if cast("dict[str, JSONValue]", row).get("kind") != "FunctionDecl"
+    ]
+    facts["callables"] = []
+    rows["sqlite"]["callables"] = []
+    rows["duckdb"]["callables"] = []
+    with pytest.raises(OracleFormatError, match="fresh replay"):
+        grade_source_owned_ast_categories(
+            normalized, raw_ast, source, capabilities, rows, normalizer, cwd
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation", ["field_type", "field_owner", "record_tag", "function_signature"]
+)
+def test_source_owned_ast_categories_reconcile_raw_type_owner_and_tag(
+    mutation: str,
+) -> None:
+    """Use raw AST types, lexical owners and tag kinds as expectations.
+
+    Parameters
+    ----------
+    mutation : str
+        Raw AST ownership, type or tag mutation.
+
+    Returns
+    -------
+    None
+    """
+    source, source_path, _normalized, raw_ast, capabilities, rows, normalizer, cwd = (
+        _source_owned_ast_fixture()
+    )
+    children = cast("list[object]", raw_ast["inner"])
+    record = cast("dict[str, object]", children[0])
+    record_children = cast("list[object]", record["inner"])
+    field = cast("dict[str, object]", record_children[0])
+    function = cast("dict[str, object]", children[1])
+    if mutation == "field_type":
+        cast("dict[str, object]", field["type"])["qualType"] = "long"
+    elif mutation == "field_owner":
+        record["inner"] = []
+        children.append(field)
+    elif mutation == "record_tag":
+        record["tagUsed"] = "union"
+    else:
+        cast("dict[str, object]", function["type"])["qualType"] = "char (struct R *)"
+    normalized = cast(
+        "dict[str, JSONValue]", normalize_ast(raw_ast, source_path, source, cwd)
+    )
+    if mutation == "field_owner":
+        with pytest.raises(
+            OracleFormatError, match="owner and type must be source-proven"
+        ):
+            grade_source_owned_ast_categories(
+                normalized, raw_ast, source, capabilities, rows, normalizer, cwd
+            )
+        return
+    report = grade_source_owned_ast_categories(
+        normalized, raw_ast, source, capabilities, rows, normalizer, cwd
+    )
+    category = (
+        "fields"
+        if mutation == "field_type"
+        else ("declarations" if mutation == "record_tag" else "callables")
+    )
+    categories = cast("dict[str, JSONValue]", report["categories"])
+    assert cast("dict[str, JSONValue]", categories[category])["state"] == "held"
+    assert report["whole_file_admission"] is False
+
+
+def test_source_owned_ast_categories_reject_identifier_prefix_anchor() -> None:
+    """Reject a declaration spelling that is only a token prefix.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+    source, source_path, _normalized, raw_ast, capabilities, rows, normalizer, cwd = (
+        _source_owned_ast_fixture()
+    )
+    changed_source = source.replace(b"struct R", b"struct RX", 1)
+    normalized = cast(
+        "dict[str, JSONValue]",
+        normalize_ast(raw_ast, source_path, changed_source, cwd),
+    )
+    with pytest.raises(OracleFormatError, match="ungraded_declarations"):
+        grade_source_owned_ast_categories(
+            normalized, raw_ast, changed_source, capabilities, rows, normalizer, cwd
+        )
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm", "-journal", ".wal"])
+def test_database_generation_binding_rejects_active_sidecar(
+    tmp_path: Path, suffix: str
+) -> None:
+    """Reject a database whose live sidecar is outside the immutable hash.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary test directory.
+    suffix : str
+        Database journal or sidecar suffix.
+
+    Returns
+    -------
+    None
+    """
+    database = tmp_path / "index.db"
+    database.write_bytes(b"database")
+    Path(f"{database}{suffix}").write_bytes(b"active database sidecar")
+
+    with pytest.raises(OracleFormatError, match="active database sidecars"):
+        _database_generation_binding(database, "sqlite")
+
+
+def test_source_key_must_identify_guarded_source_path(tmp_path: Path) -> None:
+    """Reject another path with matching bytes as the selected snapshot case.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary test directory.
+
+    Returns
+    -------
+    None
+    """
+    root = tmp_path / "source-root"
+    source = root / "src" / "unit.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("int x;\n", encoding="utf-8")
+
+    _validate_source_key(source, "src/unit.c", root)
+    with pytest.raises(OracleFormatError, match="does not equal"):
+        _validate_source_key(source, "other/unit.c", root)
