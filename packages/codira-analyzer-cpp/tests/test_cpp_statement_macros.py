@@ -17,6 +17,28 @@ from codira.models import AnalysisResult
 from codira_analyzer_cpp import CppAnalyzer
 
 
+def _assert_partial_source_entry(result: AnalysisResult) -> None:
+    """Require a retained source entry with uncertain calls unresolved.
+
+    Parameters
+    ----------
+    result : codira.models.AnalysisResult
+        Source-first analysis after an unsupported generated expansion.
+
+    Returns
+    -------
+    None
+    """
+    assert result.index_symbols
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    assert any(function.name == "entry" for function in result.functions)
+    assert all(
+        call.target_identity is not None or call.resolution_mode == "exact"
+        for call in result.iter_call_sites()
+    )
+
+
 def _analyze(
     tmp_path: Path,
     source: bytes,
@@ -263,7 +285,9 @@ def test_configured_statement_macro_keeps_written_calls_not_replacement_calls(
     )
     definitions: dict[str, str | bool] = {"NDEBUG": ndebug}
     result = _analyze(tmp_path, source, definitions)
-    assert result.index_symbols and result.status is None
+    assert result.index_symbols
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
     function = next(item for item in result.functions if item.name == "entry")
     assert [call.target for call in function.calls] == [
         "TRACE",
@@ -308,7 +332,10 @@ def test_statement_macro_holds_transformed_call_arguments(
         f"#define CHECK(x) {replacement}\nvoid entry() {{ CHECK(fake()); }}\n"
     ).encode()
     result = _analyze(tmp_path, source)
-    assert not result.index_symbols and result.status is not None
+    _assert_partial_source_entry(result)
+    entry = next(item for item in result.functions if item.name == "entry")
+    assert [call.target for call in entry.calls] == ["CHECK", "fake"]
+    assert result.status is not None
     assert any(
         "erases or transforms call-shaped argument spelling" in diagnostic.message
         for diagnostic in result.status.diagnostics
@@ -404,7 +431,7 @@ def test_statement_macro_holds_non_operator_or_modified_type_wrapper(
         "int fake(); void entry() { CHECK(decltype(fake())); }\n"
     ).encode()
     result = _analyze(tmp_path, source, features={"__is_identifier(__decltype)": "0"})
-    assert not result.index_symbols and result.status is not None
+    _assert_partial_source_entry(result)
 
 
 def test_statement_macro_holds_type_wrapper_without_native_operator_proof(
@@ -428,7 +455,7 @@ def test_statement_macro_holds_type_wrapper_without_native_operator_proof(
         b"int fake(); void entry() { CHECK(decltype(fake())); }\n"
     )
     result = _analyze(tmp_path, source)
-    assert not result.index_symbols and result.status is not None
+    _assert_partial_source_entry(result)
 
 
 def test_statement_macro_holds_mixed_lost_and_preserved_calls(
@@ -451,7 +478,8 @@ def test_statement_macro_holds_mixed_lost_and_preserved_calls(
         b"#define CHECK(X, Y) do { consume(#X); consume(Y); } while(false)\n"
         b"void entry() { CHECK(lost(), kept()); }\n",
     )
-    assert not result.index_symbols and result.status is not None
+    _assert_partial_source_entry(result)
+    assert result.status is not None
     assert any(
         "erases or transforms call-shaped argument spelling" in diagnostic.message
         for diagnostic in result.status.diagnostics
@@ -489,7 +517,8 @@ def test_unsupported_statement_expansion_is_explicitly_partial(
         f"#define CHECK(X) {replacement}\nvoid entry() {{ CHECK(okay()); }}\n"
     ).encode()
     result = _analyze(tmp_path, source)
-    assert not result.index_symbols and result.status is not None
+    _assert_partial_source_entry(result)
+    assert result.status is not None
     assert any(message in d.message for d in result.status.diagnostics)
 
 
@@ -584,7 +613,8 @@ def test_partial_argument_erasure_remains_partial(tmp_path: Path) -> None:
         b"#define CHECK(X,Y) static_assert(X)\n"
         b"void entry() { CHECK(first(), second()); }\n",
     )
-    assert not result.index_symbols and result.status is not None
+    _assert_partial_source_entry(result)
+    assert result.status is not None
     assert any("erases or transforms" in d.message for d in result.status.diagnostics)
 
 
@@ -605,7 +635,8 @@ def test_erased_ambiguous_type_arguments_remain_partial(tmp_path: Path) -> None:
         b"#define CHECK(...) static_assert(true)\n"
         b"void entry() { CHECK(int, target()); }\n",
     )
-    assert not result.index_symbols and result.status is not None
+    _assert_partial_source_entry(result)
+    assert result.status is not None
     assert any(
         "complete lexical syntax" in d.message for d in result.status.diagnostics
     )
@@ -634,7 +665,7 @@ def test_conditional_selection_requires_reaching_definition(
         b"void entry() { CHECK(true); }\n"
     )
     result = _analyze(tmp_path, source, {"FLAG": True} if known else {})
-    assert result.index_symbols is known
+    assert result.index_symbols
     if not known:
         assert result.status is not None
         assert any("uncertain reaching" in d.message for d in result.status.diagnostics)

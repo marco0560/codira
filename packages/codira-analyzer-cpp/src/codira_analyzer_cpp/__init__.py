@@ -10,10 +10,13 @@ Responsibilities
 
 Design principles
 -----------------
-Tree-sitter remains the default. An explicitly selected shared Clang frontend
-can supply source-written declarations and calls plus source-invoked variable
-and constant declarations with compiler-observed provenance when its exact
-compile profile and dependency closure are complete.
+Tree-sitter is the source-first default and needs no build files or compile
+profiles. It retains written declarations from every conditional branch with
+their original source positions. Calls without an exact compiler-proven target
+remain unresolved. An explicitly selected shared Clang frontend can supply
+source-written declarations and calls plus source-invoked variable and constant
+declarations with compiler-observed provenance when its exact compile profile
+and dependency closure are complete.
 
 Architectural role
 ------------------
@@ -2797,6 +2800,7 @@ class _PendingFunction:
     class_name: str | None
     is_definition: bool
     binding_key: tuple[str, ...]
+    class_branch_identity: tuple[int, ...] | None = None
 
 
 @dataclass
@@ -2933,6 +2937,38 @@ class _ClassBuilder:
             has_docstring=self.has_docstring,
             methods=methods,
         )
+
+
+def _conditional_branch_identity(node: Node) -> tuple[int, ...]:
+    """Return source anchors for the conditional branches containing a node.
+
+    Parameters
+    ----------
+    node : SyntaxNode
+        Class specifier whose branch context is being identified.
+
+    Returns
+    -------
+    tuple[int, ...]
+        Ordered byte offsets of enclosing preprocessor alternatives.
+    """
+    branch_types = {"preproc_if", "preproc_ifdef", "preproc_elif", "preproc_else"}
+    branches: list[int] = []
+    parent = node.parent
+    while parent is not None:
+        if parent.type in branch_types:
+            entered_later_alternative = parent.type in {
+                "preproc_if",
+                "preproc_ifdef",
+            } and any(
+                child.type in {"preproc_elif", "preproc_else"}
+                and child.start_byte <= node.start_byte
+                for child in parent.named_children
+            )
+            if not entered_later_alternative:
+                branches.append(parent.start_byte)
+        parent = parent.parent
+    return tuple(reversed(branches))
 
 
 def _named_descendants(node: Node) -> list[Node]:
@@ -5490,7 +5526,8 @@ class _CppAnalysisBuilder:
         self.initializer_value_bindings = (
             {} if initializer_value_bindings is None else initializer_value_bindings
         )
-        self.class_builders: dict[str, _ClassBuilder] = {}
+        self.class_builders: dict[tuple[str, tuple[int, ...]], _ClassBuilder] = {}
+        self.ambiguous_class_owners: set[str] = set()
         self.functions_by_key: dict[tuple[str, tuple[str, ...]], _PendingFunction] = {}
         self.declarations_by_id: dict[str, DeclarationArtifact] = {}
         self.type_definition_ids: set[str] = set()
@@ -5507,6 +5544,7 @@ class _CppAnalysisBuilder:
         end_lineno: int | None,
         docstring: str | None,
         is_definition: bool = False,
+        branch_identity: tuple[int, ...] | None = None,
     ) -> _ClassBuilder:
         """
         Return the mutable builder for one class, creating it when needed.
@@ -5523,14 +5561,35 @@ class _CppAnalysisBuilder:
             Candidate docstring attached to the class.
         is_definition : bool, optional
             Whether the candidate range contains a complete record body.
+        branch_identity : tuple[int, ...] or None, optional
+            Source identity of enclosing preprocessor alternatives.
 
         Returns
         -------
         _ClassBuilder
             Mutable class accumulator.
         """
+        key = (qualified_name, branch_identity or ())
+        if end_lineno is None and branch_identity is None:
+            candidates = [
+                builder
+                for (name, _), builder in self.class_builders.items()
+                if name == qualified_name
+            ]
+            containing = [
+                builder
+                for builder in candidates
+                if builder.end_lineno is not None
+                and builder.lineno <= lineno <= builder.end_lineno
+            ]
+            if len(containing) == 1:
+                return containing[0]
+            if not containing and len(candidates) == 1:
+                return candidates[0]
+            if not containing and len(candidates) > 1:
+                key = (qualified_name, (lineno,))
         stable_id = _class_stable_id(self.owner_id, qualified_name)
-        builder = self.class_builders.get(qualified_name)
+        builder = self.class_builders.get(key)
         if builder is None:
             builder = _ClassBuilder(
                 qualified_name=qualified_name,
@@ -5541,7 +5600,7 @@ class _CppAnalysisBuilder:
                 has_docstring=int(docstring is not None),
                 has_definition=is_definition,
             )
-            self.class_builders[qualified_name] = builder
+            self.class_builders[key] = builder
             return builder
         builder.absorb_metadata(
             lineno=lineno,
@@ -5572,11 +5631,38 @@ class _CppAnalysisBuilder:
                 self.functions_by_key[key] = pending
             return
 
+        if pending.class_branch_identity is None:
+            candidates = [
+                builder
+                for (name, _), builder in self.class_builders.items()
+                if name == pending.class_name
+            ]
+            containing = [
+                builder
+                for builder in candidates
+                if builder.end_lineno is not None
+                and builder.lineno <= pending.artifact.lineno <= builder.end_lineno
+            ]
+            if len(candidates) > 1 and not containing:
+                self.ambiguous_class_owners.add(pending.class_name)
+                artifact = replace(
+                    pending.artifact,
+                    stable_id=_function_stable_id(self.owner_id, pending.artifact.name),
+                    is_method=0,
+                    owner_name=None,
+                    owner_stable_id=None,
+                )
+                self._record_function(
+                    replace(pending, artifact=artifact, class_name=None)
+                )
+                return
+
         builder = self._ensure_class_builder(
             qualified_name=pending.class_name,
             lineno=pending.artifact.lineno,
             end_lineno=None,
             docstring=None,
+            branch_identity=pending.class_branch_identity,
         )
         builder.record_method(pending)
 
@@ -5860,6 +5946,7 @@ class _CppAnalysisBuilder:
                 end_lineno=node.end_point.row + 1,
                 docstring=docstring,
                 is_definition=field_list is not None,
+                branch_identity=_conditional_branch_identity(node),
             )
             if node.type == "class_specifier"
             else None
@@ -5956,6 +6043,7 @@ class _CppAnalysisBuilder:
                     pending = replace(
                         pending,
                         class_name=qualified_name,
+                        class_branch_identity=_conditional_branch_identity(node),
                         artifact=replace(
                             pending.artifact,
                             name=pending.artifact.name.split("::")[-1],
@@ -5974,6 +6062,7 @@ class _CppAnalysisBuilder:
                             end_lineno=node.end_point.row + 1,
                             docstring=docstring,
                             is_definition=True,
+                            branch_identity=_conditional_branch_identity(node),
                         )
                     builder.record_method(pending)
                 continue
@@ -5994,6 +6083,7 @@ class _CppAnalysisBuilder:
             pending = replace(
                 pending,
                 class_name=qualified_name,
+                class_branch_identity=_conditional_branch_identity(node),
                 artifact=replace(
                     pending.artifact,
                     name=pending.artifact.name.split("::")[-1],
@@ -6012,6 +6102,7 @@ class _CppAnalysisBuilder:
                     end_lineno=node.end_point.row + 1,
                     docstring=docstring,
                     is_definition=True,
+                    branch_identity=_conditional_branch_identity(node),
                 )
             builder.record_method(pending)
 
@@ -6353,13 +6444,53 @@ class _CppAnalysisBuilder:
         """
         imports = _extract_imports(self.root, self.source)
         self._visit_children(self.root.children, namespace=())
-        classes = tuple(
-            builder.build()
-            for builder in sorted(
+        class_builders = tuple(
+            sorted(
                 self.class_builders.values(),
                 key=lambda item: (item.lineno, item.qualified_name),
             )
         )
+        class_counts: dict[str, int] = {}
+        for builder in class_builders:
+            class_counts[builder.qualified_name] = (
+                class_counts.get(builder.qualified_name, 0) + 1
+            )
+        classes_list: list[ClassArtifact] = []
+        for builder in class_builders:
+            artifact = builder.build()
+            if class_counts[builder.qualified_name] > 1:
+                suffix = f":source:{builder.lineno}"
+                class_id = f"{artifact.stable_id}{suffix}"
+                artifact = replace(
+                    artifact,
+                    stable_id=class_id,
+                    methods=tuple(
+                        replace(
+                            method,
+                            stable_id=f"{method.stable_id}{suffix}",
+                            owner_stable_id=class_id,
+                        )
+                        for method in artifact.methods
+                    ),
+                )
+            artifact = replace(
+                artifact,
+                methods=tuple(
+                    replace(
+                        method,
+                        semantic_identity=(
+                            method.semantic_identity
+                            or SemanticIdentity(
+                                namespace="codira.cpp.source.v1",
+                                value=method.stable_id,
+                            )
+                        ),
+                    )
+                    for method in artifact.methods
+                ),
+            )
+            classes_list.append(artifact)
+        classes = tuple(classes_list)
         functions = tuple(
             pending.artifact
             for pending in sorted(
@@ -6441,6 +6572,605 @@ def _is_cpp_header(path: Path) -> bool:
     return root.has_error and has_named_template_parameters(source, root)
 
 
+def _contains_conditional_branches(source: bytes) -> bool:
+    """Check whether the original parse tree contains preprocessor alternatives.
+
+    Parameters
+    ----------
+    source : bytes
+        Unmodified C++ translation unit or header bytes.
+
+    Returns
+    -------
+    bool
+        Whether source contains a conditional branch requiring source-first
+        reconciliation.
+    """
+    root = _new_parser().parse(source).root_node
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.type in {"preproc_if", "preproc_ifdef", "preproc_elif", "preproc_else"}:
+            return True
+        pending.extend(node.named_children)
+    return False
+
+
+def _constrain_unproven_source_calls(result: AnalysisResult) -> AnalysisResult:
+    """Prevent inferred targets for calls without exact source evidence.
+
+    Parameters
+    ----------
+    result : codira.models.AnalysisResult
+        Tree-sitter result containing source-written callable occurrences.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        Result with calls that lack exact target identities constrained against
+        name-based resolution.
+    """
+
+    return replace(
+        result,
+        functions=tuple(
+            _constrain_function_calls(function) for function in result.functions
+        ),
+        classes=tuple(
+            replace(
+                class_artifact,
+                methods=tuple(
+                    _constrain_function_calls(method)
+                    for method in class_artifact.methods
+                ),
+            )
+            for class_artifact in result.classes
+        ),
+    )
+
+
+def _constrain_function_calls(function: FunctionArtifact) -> FunctionArtifact:
+    """Keep calls without exact target evidence out of inferred relations.
+
+    Parameters
+    ----------
+    function : codira.models.FunctionArtifact
+        Source callable containing static call-site records.
+
+    Returns
+    -------
+    codira.models.FunctionArtifact
+        Callable whose unproven calls cannot resolve through name matching.
+    """
+    return replace(
+        function,
+        calls=tuple(
+            replace(
+                call,
+                external_target_kind=(
+                    "C++:<macro>"
+                    if call.external_target_kind == "C++:<macro>"
+                    else None
+                ),
+                external_target_name=(
+                    call.external_target_name
+                    if call.external_target_kind == "C++:<macro>"
+                    else call.target
+                ),
+                resolution_mode="exact",
+            )
+            if call.target_identity is None
+            else call
+            for call in function.calls
+        ),
+    )
+
+
+def _remove_macro_named_callables(
+    result: AnalysisResult, source: bytes
+) -> AnalysisResult:
+    """Exclude macro invocations misread as source callable declarations.
+
+    Parameters
+    ----------
+    result : codira.models.AnalysisResult
+        Tree-sitter artifacts for the original, unexpanded source.
+    source : bytes
+        Original translation-unit bytes.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        Source artifacts without callable nodes whose names are function-like
+        macros declared in this file.
+    """
+    macro_names = {
+        match.group(1).decode("ascii")
+        for match in re.finditer(
+            rb"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)[ \t]*\(",
+            source,
+            flags=re.MULTILINE,
+        )
+    }
+    if not macro_names:
+        macro_names = set()
+
+    def keep(function: FunctionArtifact) -> bool:
+        name = function.name.rsplit("::", 1)[-1]
+        if name in macro_names:
+            return False
+        if function.is_method:
+            return True
+        return re.match(rf"^\s*{re.escape(name)}\s*\(", function.signature) is None
+
+    functions = tuple(item for item in result.functions if keep(item))
+    classes = tuple(
+        replace(
+            item,
+            methods=tuple(method for method in item.methods if keep(method)),
+        )
+        for item in result.classes
+    )
+    if len(functions) == len(result.functions) and all(
+        len(item.methods) == len(previous.methods)
+        for item, previous in zip(classes, result.classes)
+    ):
+        return result
+    status = result.status or AnalysisStatus(
+        grammar="tree-sitter-cpp",
+        target_contract={"language": "cpp"},
+        reliable_categories=("module", "class", "function"),
+        omitted_categories=(),
+    )
+    return replace(
+        result,
+        functions=functions,
+        classes=classes,
+        index_symbols=bool(functions or classes),
+        status=replace(
+            status,
+            diagnostics=tuple(
+                dict.fromkeys(
+                    (
+                        *status.diagnostics,
+                        AnalysisDiagnostic(
+                            category="macro_context",
+                            message=(
+                                "source-defined callable macros were not expanded"
+                            ),
+                        ),
+                    )
+                )
+            ),
+            omitted_categories=tuple(
+                dict.fromkeys((*status.omitted_categories, "function"))
+            ),
+            coverage_state=AnalysisCoverageState.PARTIAL,
+        ),
+    )
+
+
+def _retain_clean_partial_symbols(
+    result: AnalysisResult, root: Node, source: bytes
+) -> AnalysisResult:
+    """Retain callable and type facts outside Tree-Sitter error ranges.
+
+    Parameters
+    ----------
+    result : codira.models.AnalysisResult
+        Recovered C++ artifacts from one translation unit.
+    root : SyntaxNode
+        Parse tree for the same source buffer.
+    source : bytes
+        Original source bytes used for physical identifier coordinates.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        Complete results unchanged, or conservative clean entities retained
+        with partial coverage after syntax recovery.
+    """
+    if not root.has_error or result.status is None:
+        return result
+    error_lines: set[int] = set()
+    error_positions: list[tuple[int, int, int, int]] = []
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.type == "ERROR" or node.is_missing:
+            first = node.start_point.row + 1
+            last = max(first, node.end_point.row + 1)
+            error_lines.update(range(first, last + 1))
+            error_positions.append(
+                (
+                    first,
+                    node.start_point.column,
+                    last,
+                    node.end_point.column,
+                )
+            )
+        pending.extend(node.named_children)
+    if not error_lines:
+        return replace(result, index_symbols=False)
+
+    def clean_span(first: int, last: int | None) -> bool:
+        end = first if last is None else last
+        return not any(line in error_lines for line in range(first, end + 1))
+
+    def clean_function(function: FunctionArtifact) -> FunctionArtifact | None:
+        if clean_span(function.lineno, function.end_lineno):
+            return function
+        if function.lineno in error_lines:
+            lines = source.splitlines()
+            source_line = (
+                lines[function.lineno - 1] if 0 < function.lineno <= len(lines) else b""
+            )
+            name = function.name.rsplit("::", 1)[-1].encode()
+            name_start = source_line.find(name)
+            error_starts = [
+                start_column
+                for first, start_column, _, _ in error_positions
+                if first == function.lineno
+            ]
+            if name_start < 0 or not error_starts:
+                return None
+            error_column = min(error_starts)
+            source_lines = source.splitlines(keepends=True)
+            error_byte = (
+                sum(len(line) for line in source_lines[: function.lineno - 1])
+                + error_column
+            )
+            declaration_prefix = source[
+                source.rfind(b"\n", 0, error_byte) + 1 : error_byte
+            ]
+            name_end = name_start + len(name)
+            if name_start >= error_column or not any(
+                token in declaration_prefix[name_end:] for token in (b"{", b";")
+            ):
+                return None
+        return replace(
+            function,
+            calls=tuple(
+                call for call in function.calls if call.lineno not in error_lines
+            ),
+        )
+
+    functions = tuple(
+        function
+        for item in result.functions
+        if (function := clean_function(item)) is not None
+    )
+    classes = tuple(
+        replace(
+            class_artifact,
+            methods=tuple(
+                method
+                for item in class_artifact.methods
+                if (method := clean_function(item)) is not None
+            ),
+        )
+        for class_artifact in result.classes
+        if class_artifact.lineno not in error_lines
+    )
+    reliable = tuple(
+        category
+        for category, present in (
+            ("module", True),
+            ("class", bool(classes)),
+            ("function", bool(functions) or any(item.methods for item in classes)),
+        )
+        if present
+    )
+    all_categories = (
+        "module",
+        "class",
+        "function",
+        "declaration",
+        "import",
+        "documentation",
+    )
+    status = replace(
+        result.status,
+        reliable_categories=reliable,
+        omitted_categories=tuple(
+            category for category in all_categories if category not in reliable
+        ),
+    )
+    return replace(
+        result,
+        classes=classes,
+        functions=functions,
+        declarations=(),
+        imports=(),
+        documentation=(),
+        index_symbols=bool(functions or classes),
+        status=status,
+    )
+
+
+def _merge_source_first_result(
+    source_first: AnalysisResult,
+    configured: AnalysisResult,
+    source: bytes,
+    *,
+    prefer_configured: bool = False,
+) -> AnalysisResult:
+    """Keep source-written branches when adding explicit macro-context facts.
+
+    Parameters
+    ----------
+    source_first : codira.models.AnalysisResult
+        Tree-Sitter analysis of the unchanged translation unit.
+    configured : codira.models.AnalysisResult
+        Macro-context analysis using explicitly supplied definitions.
+    source : bytes
+        Original translation unit used to verify configured call spelling.
+    prefer_configured : bool, optional
+        Preserve compiler-mapped metadata and entities when the configured
+        result comes from the optional Clang frontend.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        Source-first artifacts enriched with distinct configured calls and
+        generated entities that carry explicit provenance.
+    """
+
+    def source_spells_call(call: CallSite) -> bool:
+        lines = source.splitlines()
+        if not call.target or not 0 < call.lineno <= len(lines):
+            return False
+        line = lines[call.lineno - 1]
+        target = call.target.encode("utf-8")
+        start = call.col_offset
+        return 0 <= start < len(line) and line[start : start + len(target)] == target
+
+    def call_key(call: CallSite) -> tuple[object, ...]:
+        return (
+            call.kind,
+            call.target,
+            call.lineno,
+            call.col_offset,
+            call.base,
+        )
+
+    def merge_calls(
+        source_calls: tuple[CallSite, ...], configured_calls: tuple[CallSite, ...]
+    ) -> tuple[CallSite, ...]:
+        calls = {call_key(call): call for call in source_calls}
+        for call in configured_calls:
+            if call.target_identity is None and not source_spells_call(call):
+                continue
+            if call.target_identity is None:
+                call = replace(
+                    call,
+                    external_target_kind=None,
+                    external_target_name=call.target,
+                    resolution_mode="exact",
+                )
+            key = call_key(call)
+            current = calls.get(key)
+            if current is None or call.target_identity is not None:
+                calls[key] = call
+        return tuple(
+            sorted(calls.values(), key=lambda item: (item.lineno, item.col_offset))
+        )
+
+    def callable_key(function: FunctionArtifact) -> tuple[str, int, str, int]:
+        return function.name, function.lineno, function.signature, function.is_method
+
+    def merge_callables(
+        source_callables: tuple[FunctionArtifact, ...],
+        configured_callables: tuple[FunctionArtifact, ...],
+    ) -> tuple[FunctionArtifact, ...]:
+        merged = {callable_key(item): item for item in source_callables}
+        consumed: set[tuple[str, int, str, int]] = set()
+        for item in configured_callables:
+            key = callable_key(item)
+            current = merged.get(key)
+            if current is None:
+                source_matches = [
+                    (candidate_key, candidate)
+                    for candidate_key, candidate in merged.items()
+                    if candidate_key not in consumed
+                    and candidate.is_method == item.is_method
+                    and candidate.lineno == item.lineno
+                    and candidate.end_lineno == item.end_lineno
+                ]
+                if len(source_matches) == 1:
+                    candidate_key, current = source_matches[0]
+                    del merged[candidate_key]
+            if current is None:
+                if (
+                    prefer_configured
+                    or item.generated is not None
+                    or item.semantic_identity is not None
+                ):
+                    merged[key] = _constrain_function_calls(item)
+                continue
+            base = item if prefer_configured or current.name != item.name else current
+            merged[key] = replace(
+                base,
+                stable_id=current.stable_id,
+                calls=merge_calls(current.calls, item.calls),
+                generated=item.generated or current.generated,
+                semantic_identity=item.semantic_identity or current.semantic_identity,
+            )
+            consumed.add(callable_key(item))
+        return tuple(
+            sorted(merged.values(), key=lambda item: (item.lineno, item.stable_id))
+        )
+
+    configured_classes = {(item.name, item.lineno): item for item in configured.classes}
+    classes: list[ClassArtifact] = []
+    for source_class in source_first.classes:
+        configured_class = configured_classes.pop(
+            (source_class.name, source_class.lineno), None
+        )
+        if configured_class is None:
+            matches = [
+                (key, item)
+                for key, item in configured_classes.items()
+                if item.lineno == source_class.lineno
+                and item.end_lineno == source_class.end_lineno
+            ]
+            if len(matches) == 1:
+                key, configured_class = matches[0]
+                del configured_classes[key]
+        base_class = configured_class or source_class
+        methods = merge_callables(
+            source_class.methods,
+            () if configured_class is None else configured_class.methods,
+        )
+        classes.append(
+            replace(
+                base_class,
+                stable_id=source_class.stable_id,
+                methods=tuple(
+                    replace(
+                        method,
+                        owner_name=method.owner_name or source_class.name,
+                        owner_stable_id=source_class.stable_id,
+                    )
+                    for method in methods
+                ),
+            )
+        )
+    for configured_class in configured_classes.values():
+        proven_methods = tuple(
+            method
+            for method in configured_class.methods
+            if prefer_configured
+            or method.generated is not None
+            or method.semantic_identity is not None
+        )
+        if proven_methods:
+            classes.append(replace(configured_class, methods=proven_methods))
+
+    declarations: dict[tuple[str, str, int, str], DeclarationArtifact] = {
+        (item.kind, item.name, item.lineno, item.signature): item
+        for item in source_first.declarations
+    }
+    for item in configured.declarations:
+        declaration_key: tuple[str, str, int, str] = (
+            item.kind,
+            item.name,
+            item.lineno,
+            item.signature,
+        )
+        if declaration_key in declarations:
+            if prefer_configured:
+                declarations[declaration_key] = item
+            continue
+        same_source: list[tuple[str, str, int, str]] = [
+            candidate_key
+            for candidate_key, candidate in declarations.items()
+            if candidate.kind == item.kind and candidate.lineno == item.lineno
+        ]
+        if len(same_source) == 1:
+            del declarations[same_source[0]]
+            declarations[declaration_key] = item
+        elif prefer_configured or item.generated is not None:
+            declarations[declaration_key] = item
+
+    functions = merge_callables(source_first.functions, configured.functions)
+    statuses = tuple(
+        status
+        for status in (source_first.status, configured.status)
+        if status is not None
+    )
+    status = statuses[0] if statuses else None
+    if (
+        source_first.status is not None
+        and source_first.status.diagnostics
+        and all(
+            item.category == "macro_context"
+            and item.message == "source-defined callable macros were not expanded"
+            for item in source_first.status.diagnostics
+        )
+        and configured.status is None
+        and any(item.generated is not None for item in configured.functions)
+    ):
+        status = None
+    if len(statuses) > 1 and status is not None:
+        diagnostics = tuple(
+            dict.fromkeys(
+                diagnostic for item in statuses for diagnostic in item.diagnostics
+            )
+        )
+        reliable_categories = tuple(
+            dict.fromkeys(
+                category for item in statuses for category in item.reliable_categories
+            )
+        )
+        status = replace(
+            status,
+            diagnostics=diagnostics,
+            reliable_categories=reliable_categories,
+            omitted_categories=tuple(
+                category
+                for category in dict.fromkeys(
+                    category
+                    for item in statuses
+                    for category in item.omitted_categories
+                )
+                if category not in reliable_categories
+            ),
+            coverage_state=(
+                AnalysisCoverageState.PARTIAL
+                if any(
+                    item.coverage_state is AnalysisCoverageState.PARTIAL
+                    for item in statuses
+                )
+                else AnalysisCoverageState.COMPLETE
+            ),
+        )
+    imports = {
+        (item.name, item.lineno, item.kind, item.alias): item
+        for item in source_first.imports
+    }
+    imports.update(
+        {
+            (item.name, item.lineno, item.kind, item.alias): item
+            for item in configured.imports
+        }
+    )
+    documentation = {
+        (item.lineno, item.end_lineno, item.text, item.kind): item
+        for item in source_first.documentation
+    }
+    documentation.update(
+        {
+            (item.lineno, item.end_lineno, item.text, item.kind): item
+            for item in configured.documentation
+        }
+    )
+    return replace(
+        configured if prefer_configured else source_first,
+        classes=tuple(sorted(classes, key=lambda item: (item.lineno, item.stable_id))),
+        functions=functions,
+        declarations=tuple(
+            sorted(
+                declarations.values(), key=lambda item: (item.lineno, item.stable_id)
+            )
+        ),
+        imports=tuple(
+            sorted(imports.values(), key=lambda item: (item.lineno, item.name))
+        ),
+        documentation=tuple(
+            sorted(
+                documentation.values(), key=lambda item: (item.lineno, item.stable_id)
+            )
+        ),
+        index_symbols=source_first.index_symbols
+        or (
+            configured.index_symbols
+            and (configured.status is None or prefer_configured)
+        ),
+        status=status,
+    )
+
+
 @dataclass
 class _ExternalOwner:
     """Collect source-proven class declarations without emitting their symbols.
@@ -6460,6 +7190,62 @@ class _ExternalOwner:
 
     stable_ids: set[str] = field(default_factory=set)
     visibility: dict[str, set[int]] = field(default_factory=dict)
+    method_identities: dict[str, set[tuple[str, str]]] = field(default_factory=dict)
+    macro_names: set[str] = field(default_factory=set)
+    lookup_is_closed: bool = True
+
+
+def _external_class_members_are_accounted(
+    class_node: Node, class_artifact: ClassArtifact, source: bytes
+) -> bool:
+    """Check that every written class member is a parsed method or access label.
+
+    Parameters
+    ----------
+    class_node : tree_sitter.Node
+        Source class occurrence corresponding to the artifact.
+    class_artifact : codira.models.ClassArtifact
+        Parsed methods available for exact lookup evidence.
+    source : bytes
+        Original header text used to read declaration names.
+
+    Returns
+    -------
+    bool
+        Whether the class has no unaccounted member syntax that could alter
+        unqualified method lookup.
+    """
+    field_list = next(
+        (
+            child
+            for child in class_node.named_children
+            if child.type == "field_declaration_list"
+        ),
+        None,
+    )
+    if field_list is None:
+        return False
+    for member in field_list.named_children:
+        if member.type == "access_specifier":
+            continue
+        if member.type != "field_declaration":
+            return False
+        function_declarator = member.child_by_field_name("declarator")
+        if (
+            function_declarator is None
+            or function_declarator.type != "function_declarator"
+        ):
+            return False
+        declarator = function_declarator.child_by_field_name("declarator")
+        if declarator is None or declarator.type != "field_identifier":
+            return False
+        method_name = _node_text(declarator, source)
+        if not any(
+            method.name == method_name and method.lineno == member.start_point.row + 1
+            for method in class_artifact.methods
+        ):
+            return False
+    return True
 
 
 def _external_owner_alternatives(result: AnalysisResult) -> set[str]:
@@ -6526,10 +7312,35 @@ def _external_method_owners(
     """
     owners: dict[str, _ExternalOwner] = {}
     alternatives = _external_owner_alternatives(source_result)
+    source_macro_names = {
+        match.group(1).decode("ascii")
+        for match in re.finditer(
+            rb"(?m)^\s*#\s*define\s+([A-Za-z_]\w*)\b", context.source
+        )
+    }
+    source_lookup_is_closed = not context.unresolved and not any(
+        node.type in {"using_declaration", "using_directive"}
+        for node in _named_descendants(_parse_cpp_source(context.source))
+    )
     for header in context.headers:
         tree = _parse_cpp_source(header.source)
         if tree.has_error:
             continue
+        header_macro_names = {
+            match.group(1).decode("ascii")
+            for match in re.finditer(
+                rb"(?m)^\s*#\s*define\s+([A-Za-z_]\w*)\b", header.source
+            )
+        }
+        header_lookup_is_closed = not any(
+            node.type
+            in {
+                "base_class_clause",
+                "using_declaration",
+                "using_directive",
+            }
+            for node in _named_descendants(tree)
+        )
         header_result = _CppAnalysisBuilder(
             source=header.source,
             root=tree,
@@ -6543,10 +7354,40 @@ def _external_method_owners(
         )
         alternatives.update(_external_owner_alternatives(header_result))
         for cls in header_result.classes:
+            class_node = next(
+                (
+                    node
+                    for node in _named_descendants(tree)
+                    if node.type
+                    in {"class_specifier", "struct_specifier", "union_specifier"}
+                    and node.start_point.row + 1 == cls.lineno
+                    and (name_node := node.child_by_field_name("name")) is not None
+                    and _node_text(name_node, header.source) == cls.name.split("::")[-1]
+                ),
+                None,
+            )
             owner = owners.setdefault(cls.name, _ExternalOwner())
             owner.stable_ids.add(cls.stable_id)
+            owner.macro_names.update(source_macro_names)
+            owner.macro_names.update(header_macro_names)
+            owner.lookup_is_closed = (
+                owner.lookup_is_closed
+                and header_lookup_is_closed
+                and source_lookup_is_closed
+                and class_node is not None
+                and _external_class_members_are_accounted(
+                    class_node, cls, header.source
+                )
+            )
             for method in cls.methods:
                 owner.visibility.setdefault(method.name, set()).add(method.is_public)
+                if method.semantic_identity is not None:
+                    owner.method_identities.setdefault(method.name, set()).add(
+                        (
+                            method.semantic_identity.namespace,
+                            method.semantic_identity.value,
+                        )
+                    )
     conflicting_names = {
         _qualified_name(_split_qualified_name(name)[:end])
         for name in alternatives
@@ -6632,8 +7473,81 @@ def _external_member_calls(
                     if child.type == "identifier"
                 )
     source_lines = source.splitlines()
+    source_has_open_lookup = any(
+        node.type in {"using_declaration", "using_directive"}
+        for node in _named_descendants(source_tree)
+    )
+
+    def exact_method_identity(target: str) -> SemanticIdentity | None:
+        """Return a unique source identity for a proven external member name.
+
+        Parameters
+        ----------
+        target : str
+            Written member target from the call expression.
+
+        Returns
+        -------
+        codira.models.SemanticIdentity or None
+            Exact header method identity only when the name has one occurrence.
+        """
+        identities = owner.method_identities.get(target, set())
+        if (
+            len(identities) != 1
+            or not owner.lookup_is_closed
+            or source_has_open_lookup
+            or target in owner.macro_names
+        ):
+            return None
+        namespace, value = next(iter(identities))
+        return SemanticIdentity(namespace=namespace, value=value)
+
+    def has_no_arguments(call: CallSite) -> bool:
+        """Check that the matched written call has no ADL argument candidates.
+
+        Parameters
+        ----------
+        call : codira.models.CallSite
+            Source call with physical token coordinates.
+
+        Returns
+        -------
+        bool
+            Whether one matching call expression has an empty argument list.
+        """
+        for node in nodes:
+            if node.type != "call_expression":
+                continue
+            callee = node.child_by_field_name("function")
+            arguments = node.child_by_field_name("arguments")
+            if (
+                callee is None
+                or arguments is None
+                or callee.start_point.row + 1 != call.lineno
+                or callee.start_point.column != call.col_offset
+            ):
+                continue
+            return not any(
+                child.type != "comment" for child in arguments.named_children
+            )
+        return False
+
     return tuple(
-        replace(call, kind="attribute", base=owner_name)
+        replace(
+            call,
+            kind="attribute",
+            base=owner_name,
+            target_identity=(
+                exact_method_identity(call.target) if has_no_arguments(call) else None
+            )
+            or call.target_identity,
+            resolution_mode=(
+                "exact"
+                if has_no_arguments(call)
+                and exact_method_identity(call.target) is not None
+                else call.resolution_mode
+            ),
+        )
         if call.target in owner.visibility
         and not any(
             (scope.start_point.row, scope.start_point.column)
@@ -6762,7 +7676,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "51"
+    version = "52"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -7661,7 +8575,17 @@ class CppAnalyzer:
             Normalized analysis result for the file.
         """
         if self._frontend == "clang" and path.suffix in _CPP_HEADER_SUFFIXES:
-            return self._analyze_clang_header(path, root)
+            clang_header = self._analyze_clang_header(path, root)
+            source_context = read_include_context(
+                path, root, include_paths=self._include_search_paths
+            )
+            source_first = self._analyze_captured_file(path, root, source_context)
+            return _merge_source_first_result(
+                source_first,
+                clang_header,
+                source_context.source,
+                prefer_configured=True,
+            )
         clang_fallback_reason: str | None = None
         clang_result: FrontendResult | None = None
         if self._frontend == "clang":
@@ -7686,6 +8610,18 @@ class CppAnalyzer:
                     context_identity=context_identity,
                 )
                 if mapped is not None:
+                    source_context = read_include_context(
+                        path, root, include_paths=self._include_search_paths
+                    )
+                    source_first = self._analyze_captured_file(
+                        path, root, source_context
+                    )
+                    mapped = _merge_source_first_result(
+                        source_first,
+                        mapped,
+                        source_context.source,
+                        prefer_configured=True,
+                    )
                     return self._apply_clang_output_options(mapped)
                 clang_fallback_reason = "clang_entities_outside_supported_cpp_dto_scope"
         context = read_include_context(
@@ -7696,32 +8632,33 @@ class CppAnalyzer:
 
             try:
                 generated = analyze_generated_file(self, path, root, context)
+                combined = generated
+                if _contains_conditional_branches(context.source):
+                    source_first = self._analyze_captured_file(path, root, context)
+                    combined = _merge_source_first_result(
+                        source_first, generated, context.source
+                    )
+                else:
+                    combined = _constrain_unproven_source_calls(generated)
                 if clang_fallback_reason is not None:
                     return _clang_fallback_result(
-                        generated,
+                        combined,
                         clang_fallback_reason,
                         language="cpp",
                         frontend_result=clang_result,
                     )
-                return generated
+                return combined
             except ValueError as error:
                 result = self._analyze_captured_file(path, root, context)
-                status = result.status
                 diagnostic = AnalysisDiagnostic(
                     category="macro_context", message=str(error)
                 )
-                failed = replace(
-                    result,
-                    index_symbols=False,
-                    status=AnalysisStatus(
+                status = result.status
+                if status is None:
+                    status = AnalysisStatus(
                         grammar="tree-sitter-cpp",
                         target_contract={"language": "cpp"},
-                        diagnostics=(
-                            *(status.diagnostics if status is not None else ()),
-                            diagnostic,
-                        ),
-                        reliable_categories=(),
-                        omitted_categories=(
+                        reliable_categories=(
                             "module",
                             "class",
                             "function",
@@ -7729,6 +8666,23 @@ class CppAnalyzer:
                             "import",
                             "documentation",
                         ),
+                        omitted_categories=(),
+                    )
+                failed = replace(
+                    result,
+                    status=AnalysisStatus(
+                        grammar=status.grammar,
+                        target_contract=status.target_contract,
+                        diagnostics=(
+                            *status.diagnostics,
+                            *(
+                                ()
+                                if diagnostic in status.diagnostics
+                                else (diagnostic,)
+                            ),
+                        ),
+                        reliable_categories=status.reliable_categories,
+                        omitted_categories=status.omitted_categories,
                         coverage_state=AnalysisCoverageState.PARTIAL,
                     ),
                 )
@@ -7875,23 +8829,105 @@ class CppAnalyzer:
                     if declaration.kind != "macro"
                 ),
             )
-        return replace(
-            result,
-            documentation=(
-                _documentation_artifacts(
-                    path=path,
-                    analysis=result,
-                    module_doxygen=module_doxygen,
-                    doxygen_by_lineno=builder.doxygen_by_lineno,
-                )
-                if self._emit_doxygen_documentation
-                else ()
-            ),
-            index_symbols=not root_node.has_error,
-            status=tree_sitter_recovery_status(
-                language="cpp", has_error=root_node.has_error
-            ),
+        result = _constrain_unproven_source_calls(
+            replace(
+                result,
+                documentation=(
+                    _documentation_artifacts(
+                        path=path,
+                        analysis=result,
+                        module_doxygen=module_doxygen,
+                        doxygen_by_lineno=builder.doxygen_by_lineno,
+                    )
+                    if self._emit_doxygen_documentation
+                    else ()
+                ),
+                index_symbols=not root_node.has_error,
+                status=tree_sitter_recovery_status(
+                    language="cpp", has_error=root_node.has_error
+                ),
+            )
         )
+        if builder.ambiguous_class_owners:
+            status = result.status or AnalysisStatus(
+                grammar="tree-sitter-cpp",
+                target_contract={"language": "cpp"},
+                reliable_categories=("module", "class", "function"),
+                omitted_categories=(),
+            )
+            diagnostics = tuple(
+                dict.fromkeys(
+                    (
+                        *status.diagnostics,
+                        *(
+                            AnalysisDiagnostic(
+                                category="ambiguous_class_owner",
+                                message=(
+                                    f"Out-of-class method owner {owner!r} matches "
+                                    "multiple conditional class occurrences; retained "
+                                    "without a class owner."
+                                ),
+                            )
+                            for owner in sorted(builder.ambiguous_class_owners)
+                        ),
+                    )
+                )
+            )
+            result = replace(
+                result,
+                status=replace(
+                    status,
+                    diagnostics=diagnostics,
+                    omitted_categories=tuple(
+                        dict.fromkeys(
+                            (*status.omitted_categories, "class_method_ownership")
+                        )
+                    ),
+                    coverage_state=AnalysisCoverageState.PARTIAL,
+                ),
+            )
+        result = _remove_macro_named_callables(result, source)
+        result = _retain_clean_partial_symbols(result, root_node, source)
+        if context.unresolved:
+            status = result.status or AnalysisStatus(
+                grammar="tree-sitter-cpp",
+                target_contract={"language": "cpp"},
+                reliable_categories=(
+                    "module",
+                    "class",
+                    "function",
+                    "declaration",
+                    "import",
+                    "documentation",
+                ),
+                omitted_categories=(),
+            )
+            result = replace(
+                result,
+                status=replace(
+                    status,
+                    diagnostics=tuple(
+                        dict.fromkeys(
+                            (
+                                *status.diagnostics,
+                                AnalysisDiagnostic(
+                                    category="include_context",
+                                    message=(
+                                        "One or more include dependencies could not "
+                                        "be captured; their declarations and macros "
+                                        "may affect name lookup."
+                                    ),
+                                ),
+                            )
+                        )
+                    ),
+                    omitted_categories=tuple(
+                        dict.fromkeys((*status.omitted_categories, "include_context"))
+                    ),
+                    coverage_state=AnalysisCoverageState.PARTIAL,
+                ),
+            )
+        return result
 
 
 def build_analyzer() -> LanguageAnalyzer:

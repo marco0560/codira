@@ -358,7 +358,11 @@ def test_header_specifiers_preserve_constructors_and_source_artifacts(
     path = tmp_path / "point.cpp"
     path.write_text(source)
     analyzer = CppAnalyzer()
-    assert not analyzer.analyze_file(path, tmp_path).index_symbols
+    source_only = analyzer.analyze_file(path, tmp_path)
+    assert source_only.index_symbols
+    assert source_only.status is not None
+    assert source_only.status.coverage_state.value == "partial"
+    assert [item.name for item in source_only.functions] == ["caller"]
     analyzer.configure({"include_search_paths": ["support"]})
     result = analyzer.analyze_file(path, tmp_path)
     assert result.index_symbols

@@ -1849,6 +1849,128 @@ def _analysis_from_clang_result(
     )
 
 
+def _merge_source_and_clang_analysis(
+    source_analysis: AnalysisResult,
+    clang_analysis: AnalysisResult,
+) -> AnalysisResult:
+    """Merge compiler facts into source-first analysis without losing source rows.
+
+    Parameters
+    ----------
+    source_analysis : codira.models.AnalysisResult
+        Tree-sitter result preserving every source branch it can parse.
+    clang_analysis : codira.models.AnalysisResult
+        Complete source-mapped Clang result used as a supplementary frontend.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        Source artifacts unioned with Clang-only source-mapped artifacts.
+        Matching source calls gain exact identities from Clang.
+    """
+    functions: dict[tuple[str, int, str], FunctionArtifact] = {
+        (item.name, item.lineno, item.signature): item
+        for item in source_analysis.functions
+    }
+    clang_functions: dict[tuple[str, int, str], FunctionArtifact] = {
+        (item.name, item.lineno, item.signature): item
+        for item in clang_analysis.functions
+    }
+    for key, clang_function in clang_functions.items():
+        source_function = functions.get(key)
+        if source_function is None:
+            functions[key] = clang_function
+            continue
+        clang_calls = {
+            (call.target, call.lineno, call.col_offset): call
+            for call in clang_function.calls
+            if call.target_identity is not None
+        }
+        calls = tuple(
+            replace(
+                call,
+                target_identity=clang_calls[
+                    (call.target, call.lineno, call.col_offset)
+                ].target_identity,
+                resolution_mode="exact",
+            )
+            if (call.target, call.lineno, call.col_offset) in clang_calls
+            else call
+            for call in source_function.calls
+        )
+        functions[key] = replace(
+            source_function,
+            calls=calls,
+            docstring=source_function.docstring or clang_function.docstring,
+            has_docstring=int(
+                source_function.docstring is not None
+                or clang_function.docstring is not None
+            ),
+            semantic_identity=(
+                source_function.semantic_identity or clang_function.semantic_identity
+            ),
+        )
+    source_declarations: dict[
+        tuple[DeclarationKind, str, int, str], DeclarationArtifact
+    ] = {
+        (item.kind, item.name, item.lineno, item.signature): item
+        for item in source_analysis.declarations
+    }
+    for item in clang_analysis.declarations:
+        declaration_key = (item.kind, item.name, item.lineno, item.signature)
+        previous = source_declarations.get(declaration_key)
+        if previous is None:
+            source_declarations[declaration_key] = item
+        elif previous.docstring is None and item.docstring is not None:
+            source_declarations[declaration_key] = replace(
+                previous, docstring=item.docstring
+            )
+    imports = {
+        (item.name, item.alias, item.lineno, item.kind): item
+        for item in (*source_analysis.imports, *clang_analysis.imports)
+    }
+    documentation = {
+        item.stable_id: item
+        for item in (*source_analysis.documentation, *clang_analysis.documentation)
+    }
+    return replace(
+        source_analysis,
+        module=replace(
+            source_analysis.module,
+            docstring=source_analysis.module.docstring
+            or clang_analysis.module.docstring,
+            has_docstring=int(
+                source_analysis.module.docstring is not None
+                or clang_analysis.module.docstring is not None
+            ),
+        ),
+        functions=tuple(
+            sorted(
+                functions.values(),
+                key=lambda item: (item.lineno, item.name, item.signature),
+            )
+        ),
+        declarations=tuple(
+            sorted(
+                source_declarations.values(),
+                key=lambda item: (item.lineno, item.name, item.kind),
+            )
+        ),
+        imports=tuple(
+            sorted(
+                imports.values(), key=lambda item: (item.lineno, item.name, item.kind)
+            )
+        ),
+        documentation=tuple(
+            sorted(
+                documentation.values(), key=lambda item: (item.lineno, item.stable_id)
+            )
+        ),
+        index_symbols=source_analysis.index_symbols or clang_analysis.index_symbols,
+        status=source_analysis.status or clang_analysis.status,
+    )
+
+
 def _clang_fallback_result(
     result: AnalysisResult,
     reason: str,
@@ -2571,7 +2693,7 @@ def _is_supported_function_definition(node: Node) -> bool:
     return _find_parameter_list(declarator) is not None
 
 
-def _c_external_target_kind(target: str) -> str:
+def _c_external_target_kind(target: str) -> str | None:
     """
     Classify one C call target for unresolved graph rendering.
 
@@ -2582,14 +2704,15 @@ def _c_external_target_kind(target: str) -> str:
 
     Returns
     -------
-    str
-        Analyzer-owned external target classifier.
+    str | None
+        A known macro or system-header classifier, or ``None`` when the
+        source spelling does not prove an external target.
     """
-    if target in _C_MACROS or target.isupper():
+    if target in _C_MACROS:
         return "C:<macro>"
     if target in _C_SYSTEM_FUNCTIONS:
         return "C:<system-header>"
-    return "C:<external>"
+    return None
 
 
 def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
@@ -2623,6 +2746,10 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
             col_offset=function_node.start_point.column,
             external_target_kind=_c_external_target_kind(target),
             external_target_name=target,
+            # Tree-sitter records the written token, not a proven callee. Do
+            # not let downstream graph construction guess among same-name
+            # declarations from mutually exclusive source branches.
+            resolution_mode="exact",
         )
 
     if function_node.type == "field_expression":
@@ -2637,8 +2764,9 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
             lineno=field.start_point.row + 1,
             col_offset=field.start_point.column,
             base=_node_text(receiver, source),
-            external_target_kind="C:<external>",
+            external_target_kind=None,
             external_target_name=target,
+            resolution_mode="exact",
         )
 
     return CallSite(
@@ -2736,6 +2864,8 @@ def _top_level_nodes(root: Node) -> Iterator[Node]:
             "preproc_else",
             "preproc_elif",
             "preproc_elifdef",
+            "linkage_specification",
+            "declaration_list",
         }:
             condition = node.child_by_field_name("condition")
             name = node.child_by_field_name("name")
@@ -2905,6 +3035,356 @@ def _disambiguate_function_stable_ids(
         used_ids.add(stable_id)
         disambiguated.append(function)
     return tuple(disambiguated)
+
+
+def _has_conditional_ancestor(node: Node) -> bool:
+    """Check whether one source occurrence is inside a preprocessor branch.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Source occurrence whose branch context is checked.
+
+    Returns
+    -------
+    bool
+        Whether an enclosing node represents a conditional alternative.
+    """
+    branch_types = {
+        "preproc_if",
+        "preproc_ifdef",
+        "preproc_elif",
+        "preproc_elifdef",
+        "preproc_else",
+    }
+    parent = node.parent
+    while parent is not None:
+        if parent.type in branch_types:
+            return True
+        parent = parent.parent
+    return False
+
+
+def _macro_names_in_sources(sources: tuple[bytes, ...]) -> set[str]:
+    """Collect every source-written macro name from captured C inputs.
+
+    Parameters
+    ----------
+    sources : tuple[bytes, ...]
+        Original source and captured include bytes.
+
+    Returns
+    -------
+    set[str]
+        Names defined as macros in any observed source alternative.
+    """
+    parser = _new_parser()
+    names: set[str] = set()
+    for source in sources:
+        root = _parse_c_source(source, parser, ())
+        for node in _top_level_nodes(root):
+            if node.type not in {"preproc_def", "preproc_function_def"}:
+                continue
+            name = _declaration_name(node, source)
+            if name is not None:
+                names.add(name)
+    return names
+
+
+def _file_scope_function_declarations(
+    root: Node, source: bytes
+) -> dict[str, list[tuple[Node, bool, bool]]]:
+    """Collect file-scope callable and conflicting declarations by name.
+
+    Parameters
+    ----------
+    root : tree_sitter.Node
+        Parsed translation unit including every written conditional branch.
+    source : bytes
+        Original source buffer.
+
+    Returns
+    -------
+    dict[str, list[tuple[tree_sitter.Node, bool, bool]]]
+        Occurrences paired with function-declarator and static-storage facts.
+    """
+    occurrences: dict[str, list[tuple[Node, bool, bool]]] = {}
+    for node in _top_level_nodes(root):
+        if node.type not in {"function_definition", "declaration"}:
+            continue
+        for declarator in node.children_by_field_name("declarator"):
+            name = _unwrap_declarator_name(declarator, source)
+            if name is None:
+                continue
+            is_function = node.type == "function_definition"
+            if node.type == "declaration":
+                current: Node | None = declarator
+                while current is not None:
+                    if current.type == "function_declarator":
+                        is_function = True
+                    elif current.type in {"pointer_declarator", "array_declarator"}:
+                        is_function = False
+                    current = current.child_by_field_name("declarator")
+            is_static = any(
+                child.type == "storage_class_specifier"
+                and _node_text(child, source) == "static"
+                for child in node.children
+            )
+            occurrences.setdefault(name, []).append((node, is_function, is_static))
+    return occurrences
+
+
+def _body_declares_name(body: Node, target: str, source: bytes) -> bool:
+    """Conservatively detect a local declaration that can shadow a function.
+
+    Parameters
+    ----------
+    body : tree_sitter.Node
+        Function body containing the candidate call.
+    target : str
+        File-scope function name considered for binding.
+    source : bytes
+        Original source buffer.
+
+    Returns
+    -------
+    bool
+        Whether a nested declaration names the target in any body scope.
+    """
+    for node in _named_descendants(body):
+        if node.type == "function_definition":
+            declarator = node.child_by_field_name("declarator")
+            if (
+                declarator is not None
+                and _unwrap_declarator_name(declarator, source) == target
+            ):
+                return True
+        if node.type not in {"declaration", "type_definition"}:
+            continue
+        for declarator in node.children_by_field_name("declarator"):
+            if _unwrap_declarator_name(declarator, source) == target:
+                return True
+            if any(
+                child.type == "identifier" and _node_text(child, source) == target
+                for child in _named_descendants(declarator)
+            ):
+                return True
+    return False
+
+
+def _contains_macro_reference(node: Node, macros: set[str], source: bytes) -> bool:
+    """Check whether a syntax subtree contains a captured macro name.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Syntax subtree being inspected.
+    macros : set[str]
+        Macro names defined by captured source or headers.
+    source : bytes
+        Source bytes corresponding to the syntax node.
+
+    Returns
+    -------
+    bool
+        Whether an identifier token can be affected by macro expansion.
+    """
+    return any(
+        child.type in {"identifier", "type_identifier"}
+        and _node_text(child, source) in macros
+        for child in (node, *_named_descendants(node))
+    )
+
+
+def _top_level_macro_use_is_unmodeled(
+    root: Node, source: bytes, macros: set[str]
+) -> bool:
+    """Detect macro uses that could add file-scope declarations.
+
+    Parameters
+    ----------
+    root : tree_sitter.Node
+        Parsed translation unit, including conditional alternatives.
+    source : bytes
+        Original translation-unit bytes.
+    macros : set[str]
+        Macro names defined in captured translation-unit inputs.
+
+    Returns
+    -------
+    bool
+        Whether an unexpanded macro occurs outside a function body.
+    """
+    for node in _top_level_nodes(root):
+        if node.type.startswith("preproc_"):
+            continue
+        if node.type == "function_definition":
+            body = node.child_by_field_name("body")
+            if any(
+                _contains_macro_reference(child, macros, source)
+                for child in node.named_children
+                if child != body
+            ):
+                return True
+            continue
+        if _contains_macro_reference(node, macros, source):
+            return True
+    return False
+
+
+def _bind_proven_static_calls(
+    result: AnalysisResult,
+    source: bytes,
+    included_sources: tuple[tuple[bytes, int], ...],
+    *,
+    include_snapshot_complete: bool,
+) -> AnalysisResult:
+    """Bind only calls with a unique, unshadowed static source definition.
+
+    Parameters
+    ----------
+    result : codira.models.AnalysisResult
+        Source-first C artifacts for one translation unit.
+    source : bytes
+        Original translation-unit bytes.
+    included_sources : tuple[tuple[bytes, int], ...]
+        Captured header bytes and their source availability offsets.
+    include_snapshot_complete : bool
+        Whether every literal include resolved to captured source.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        Calls bound by exact source identity where C name lookup is established.
+    """
+    if not include_snapshot_complete:
+        return result
+    parser = _new_parser()
+    root = _parse_c_source(source, parser, included_sources)
+    if root.has_error or result.status is not None:
+        return result
+    macros = _macro_names_in_sources(
+        (source, *(header_source for header_source, _ in included_sources))
+    )
+    captured_sources = (
+        source,
+        *(header_source for header_source, _ in included_sources),
+    )
+    if any(
+        _top_level_macro_use_is_unmodeled(
+            _parse_c_source(input_source, parser, ()), input_source, macros
+        )
+        for input_source in captured_sources
+    ):
+        return result
+    declarations = _file_scope_function_declarations(root, source)
+    static_definitions: dict[str, Node] = {}
+    for name, occurrences in declarations.items():
+        definitions = [
+            node
+            for node, is_function, is_static in occurrences
+            if is_function
+            and is_static
+            and node.type == "function_definition"
+            and node.child_by_field_name("body") is not None
+        ]
+        if len(definitions) != 1 or any(
+            not is_function or not is_static
+            for _node, is_function, is_static in occurrences
+        ):
+            continue
+        candidate_definition = definitions[0]
+        if _has_conditional_ancestor(candidate_definition) or name in macros:
+            continue
+        static_definitions[name] = candidate_definition
+    if not static_definitions:
+        return result
+
+    identities: dict[str, SemanticIdentity] = {}
+    functions = list(result.functions)
+    for index, function in enumerate(functions):
+        definition = static_definitions.get(function.name)
+        if (
+            definition is None
+            or function.is_public != 0
+            or function.end_lineno is None
+            or function.lineno != definition.start_point.row + 1
+            or function.generated is not None
+        ):
+            continue
+        identity = function.semantic_identity or SemanticIdentity(
+            namespace="codira.c.source.v1", value=function.stable_id
+        )
+        functions[index] = replace(function, semantic_identity=identity)
+        identities[function.name] = identity
+    if not identities:
+        return result
+
+    function_nodes = [
+        node for node in _top_level_nodes(root) if node.type == "function_definition"
+    ]
+    updated: list[FunctionArtifact] = []
+    for function in functions:
+        if function.end_lineno is None:
+            updated.append(function)
+            continue
+        matching_nodes = [
+            node
+            for node in function_nodes
+            if (
+                (declarator := node.child_by_field_name("declarator")) is not None
+                and _unwrap_declarator_name(declarator, source) == function.name
+            )
+            and node.start_point.row + 1 == function.lineno
+            and node.end_point.row + 1 == function.end_lineno
+        ]
+        if len(matching_nodes) != 1:
+            updated.append(function)
+            continue
+        function_node = matching_nodes[0]
+        body = function_node.child_by_field_name("body")
+        if body is None or _has_conditional_ancestor(function_node):
+            updated.append(function)
+            continue
+        if _contains_macro_reference(body, macros, source):
+            updated.append(function)
+            continue
+        shadowed = set(function.parameters)
+        calls = []
+        for call in function.calls:
+            target_identity = None
+            target = identities.get(call.target)
+            if (
+                target is not None
+                and call.kind == "name"
+                and call.target not in shadowed
+                and not _body_declares_name(body, call.target, source)
+            ):
+                call_nodes = [
+                    node
+                    for node in _named_descendants(body)
+                    if node.type == "call_expression"
+                    and (callee := node.child_by_field_name("function")) is not None
+                    and callee.type == "identifier"
+                    and _node_text(callee, source) == call.target
+                    and callee.start_point.row + 1 == call.lineno
+                    and callee.start_point.column == call.col_offset
+                ]
+                if len(call_nodes) == 1 and not _has_conditional_ancestor(
+                    call_nodes[0]
+                ):
+                    target_identity = target
+            calls.append(
+                replace(
+                    call,
+                    target_identity=target_identity or call.target_identity,
+                    resolution_mode=(
+                        "exact" if target_identity is not None else call.resolution_mode
+                    ),
+                )
+            )
+        updated.append(replace(function, calls=tuple(calls)))
+    return replace(result, functions=tuple(updated))
 
 
 def _declaration_name(node: Node, source: bytes) -> str | None:
@@ -3201,12 +3681,12 @@ def _record_declaration(
 def _disambiguate_type_aliases(
     declarations: tuple[DeclarationArtifact, ...],
 ) -> tuple[DeclarationArtifact, ...]:
-    """Give distinct written typedef alternatives unique normalized identities.
+    """Give repeated declaration alternatives unique normalized identities.
 
     Parameters
     ----------
     declarations : tuple[codira.models.DeclarationArtifact, ...]
-        Source-ordered declarations, including conditional typedef variants.
+        Source-ordered declarations, including conditional alternatives.
 
     Returns
     -------
@@ -3216,15 +3696,27 @@ def _disambiguate_type_aliases(
     counts: dict[str, int] = {}
     for item in declarations:
         counts[item.stable_id] = counts.get(item.stable_id, 0) + 1
-    return tuple(
-        replace(
-            item,
-            stable_id=f"{item.stable_id}:{hashlib.sha256(item.signature.encode()).hexdigest()[:12]}:{item.lineno}",
+    disambiguated: list[DeclarationArtifact] = []
+    for item in declarations:
+        if counts[item.stable_id] == 1:
+            disambiguated.append(item)
+            continue
+        suffix = (
+            f"{hashlib.sha256(item.signature.encode()).hexdigest()[:12]}:{item.lineno}"
         )
-        if counts[item.stable_id] > 1
-        else item
-        for item in declarations
-    )
+        stable_id = f"{item.stable_id}:{suffix}"
+        enum_members = tuple(
+            replace(
+                member,
+                stable_id=f"{member.stable_id}:{suffix}",
+                parent_stable_id=stable_id,
+            )
+            for member in item.enum_members
+        )
+        disambiguated.append(
+            replace(item, stable_id=stable_id, enum_members=enum_members)
+        )
+    return tuple(disambiguated)
 
 
 def _record_nested_type_declarations(
@@ -3671,7 +4163,7 @@ def _merge_c_views(analyses: list[AnalysisResult], owner_id: str) -> AnalysisRes
     Parameters
     ----------
     analyses : list[codira.models.AnalysisResult]
-        Fully clean views of one source file in deterministic covering order.
+        Source and recovery views of one file in deterministic covering order.
     owner_id : str
         Original source-owned identity prefix.
 
@@ -3774,6 +4266,7 @@ def _merge_c_views(analyses: list[AnalysisResult], owner_id: str) -> AnalysisRes
         documentation=tuple(
             sorted(documents.values(), key=lambda item: (item.lineno, item.stable_id))
         ),
+        index_symbols=any(analysis.index_symbols for analysis in analyses),
     )
 
 
@@ -4129,7 +4622,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "31"
+    version = "32"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 
@@ -4902,11 +5395,18 @@ class CAnalyzer:
         codira.models.AnalysisResult
             Normalized analysis result for the file.
         """
-        if self._frontend == "clang" and path.suffix == ".h":
-            return self._analyze_clang_header(path, root)
         clang_fallback_reason: str | None = None
         clang_result: FrontendResult | None = None
-        if self._frontend == "clang":
+        clang_analysis: AnalysisResult | None = None
+        if self._frontend == "clang" and path.suffix == ".h":
+            header_analysis = self._analyze_clang_header(path, root)
+            if header_analysis.index_symbols and (
+                header_analysis.status is None
+                or header_analysis.status.coverage_state
+                == AnalysisCoverageState.COMPLETE
+            ):
+                clang_analysis = header_analysis
+        elif self._frontend == "clang":
             clang_result, clang_fallback_reason = self._try_clang_frontend(path, root)
             if clang_result is not None and not clang_fallback_reason:
                 context_identity = None
@@ -4928,8 +5428,12 @@ class CAnalyzer:
                     context_identity=context_identity,
                 )
                 if mapped is not None:
-                    return self._apply_clang_output_options(mapped)
-                clang_fallback_reason = "clang_entities_outside_supported_c_dto_scope"
+                    clang_analysis = self._apply_clang_output_options(mapped)
+                    clang_fallback_reason = None
+                else:
+                    clang_fallback_reason = (
+                        "clang_entities_outside_supported_c_dto_scope"
+                    )
         context = read_include_context(
             path,
             root,
@@ -4998,26 +5502,115 @@ class CAnalyzer:
             base = _parse_c_source(analysis_source, parser, included_sources)
         macros = parameter_macros(source, included_sources)
         analyses: list[AnalysisResult] = []
-        for view in c_parse_views(
-            analysis_source, parser, base=base, included_sources=included_sources
-        ):
-            if view.root.has_error:
-                analyses = [
-                    self._analyze_view(
-                        path,
-                        root,
-                        CParseView(analysis_source, base),
-                        _parse_c_source(source, parser, included_sources),
-                        macros,
-                    )
-                ]
-                break
-            analyses.append(self._analyze_view(path, root, view, base, macros))
+        views = tuple(
+            c_parse_views(
+                analysis_source, parser, base=base, included_sources=included_sources
+            )
+        )
+        branch_views = tuple(
+            view for view in views if view.branch_condition is not None
+        )
+        unresolved_conditions = tuple(
+            sorted(
+                {
+                    view.branch_condition or "conditional branch"
+                    for view in branch_views
+                    if view.root.has_error
+                }
+            )
+        )
+        incomplete_source_coverage = any(view.coverage_incomplete for view in views)
+        analyzable_views = (
+            tuple(view for view in branch_views if not view.root.has_error)
+            if unresolved_conditions
+            else tuple(view for view in views if not view.root.has_error)
+        )
+        source_subtree_recovery = incomplete_source_coverage and not branch_views
+        if source_subtree_recovery:
+            analyses.append(
+                self._analyze_view(
+                    path,
+                    root,
+                    CParseView(analysis_source, base, coverage_incomplete=True),
+                    _parse_c_source(source, parser, included_sources),
+                    macros,
+                )
+            )
+        if analyzable_views:
+            analyses.extend(
+                self._analyze_view(path, root, view, base, macros)
+                for view in analyzable_views
+            )
+        elif not analyses:
+            analyses.append(
+                self._analyze_view(
+                    path,
+                    root,
+                    CParseView(analysis_source, base),
+                    _parse_c_source(source, parser, included_sources),
+                    macros,
+                )
+            )
         result = (
             analyses[0]
             if len(analyses) == 1
             else _merge_c_views(analyses, _symbol_owner_id(path, root))
         )
+        if unresolved_conditions or incomplete_source_coverage:
+            coverage_category = (
+                "conditional_branch_unsupported"
+                if branch_views
+                else "source_subtree_salvage"
+            )
+            reliable_source_category = (
+                "parseable_conditional_branches"
+                if branch_views
+                else "parseable_source_subtrees"
+            )
+            omitted_source_category = (
+                "unsupported_conditional_branches"
+                if branch_views
+                else "unparsed_source_subtrees"
+            )
+            status = result.status or AnalysisStatus(
+                grammar="tree-sitter-c",
+                target_contract={"language": "c"},
+            )
+            result = replace(
+                result,
+                status=replace(
+                    status,
+                    diagnostics=(
+                        *status.diagnostics,
+                        AnalysisDiagnostic(
+                            category=coverage_category,
+                            message=(
+                                "Some written conditional alternatives are not "
+                                "representable by the C grammar: "
+                                + ", ".join(unresolved_conditions)
+                                if unresolved_conditions
+                                else (
+                                    "Not all independent conditional combinations "
+                                    "were enumerated by bounded source views."
+                                    if branch_views
+                                    else "Only independently parseable source "
+                                    "subtrees and recovered source names were "
+                                    "retained."
+                                )
+                            ),
+                        ),
+                    ),
+                    reliable_categories=(
+                        *status.reliable_categories,
+                        reliable_source_category,
+                    ),
+                    omitted_categories=(
+                        *status.omitted_categories,
+                        omitted_source_category,
+                    ),
+                    coverage_state=AnalysisCoverageState.PARTIAL,
+                ),
+            )
         if expansions:
             generated = tuple(
                 function
@@ -5042,7 +5635,6 @@ class CAnalyzer:
             )
             result = replace(
                 result,
-                index_symbols=False,
                 status=replace(
                     status,
                     diagnostics=(
@@ -5055,18 +5647,41 @@ class CAnalyzer:
                             ),
                         ),
                     ),
-                    reliable_categories=(),
-                    omitted_categories=(
-                        "module",
-                        "class",
-                        "function",
-                        "declaration",
-                        "import",
-                        "documentation",
+                    reliable_categories=tuple(
+                        dict.fromkeys(
+                            (
+                                *status.reliable_categories,
+                                *(
+                                    (
+                                        "module",
+                                        "function",
+                                        "declaration",
+                                        "import",
+                                        "documentation",
+                                    )
+                                    if result.index_symbols
+                                    and not status.reliable_categories
+                                    else ()
+                                ),
+                            )
+                        )
+                    ),
+                    omitted_categories=tuple(
+                        dict.fromkeys(
+                            (*status.omitted_categories, "declaration_macro_expansions")
+                        )
                     ),
                     coverage_state=AnalysisCoverageState.PARTIAL,
                 ),
             )
+        result = _bind_proven_static_calls(
+            result,
+            source,
+            included_sources,
+            include_snapshot_complete=not context.unresolved,
+        )
+        if clang_analysis is not None:
+            result = _merge_source_and_clang_analysis(result, clang_analysis)
         if clang_fallback_reason is not None:
             result = _clang_fallback_result(
                 result,

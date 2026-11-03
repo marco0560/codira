@@ -57,6 +57,373 @@ def test_shared_body_retains_signatures_coordinates_and_calls(tmp_path: Path) ->
     assert result.module.docstring is None and path.read_bytes() == source
 
 
+def test_unknown_macro_branches_keep_same_name_symbols_and_unresolved_calls(
+    tmp_path: Path,
+) -> None:
+    """Index each written alternative without resolving name-only calls.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable source-only repository without build metadata.
+
+    Returns
+    -------
+    None
+        Branch occurrences keep source lines and unique IDs; calls remain lexical.
+    """
+    source = b"""#if !defined(NATIVE_ABI)
+int convert(int value) { return value; }
+int dispatch(int value) { return convert(value); }
+#elif defined(LEGACY_ABI)
+long convert(long value) { return value; }
+int dispatch(long value) { return (int) convert(value); }
+#else
+double convert(double value) { return value; }
+int dispatch(double value) { return (int) convert(value); }
+#endif
+"""
+    path = tmp_path / "branches.c"
+    path.write_bytes(source)
+
+    result = CAnalyzer().analyze_file(path, tmp_path)
+
+    assert result.index_symbols
+    variants = [function for function in result.functions if function.name == "convert"]
+    assert [(item.lineno, item.signature) for item in variants] == [
+        (2, "int convert(int value)"),
+        (5, "long convert(long value)"),
+        (8, "double convert(double value)"),
+    ]
+    assert len({item.stable_id for item in variants}) == 3
+    dispatches = [
+        function for function in result.functions if function.name == "dispatch"
+    ]
+    assert [item.lineno for item in dispatches] == [3, 6, 9]
+    calls = [call for function in dispatches for call in function.calls]
+    assert [
+        (
+            call.target,
+            call.target_identity,
+            call.resolution_mode,
+            call.external_target_kind,
+            call.external_target_name,
+        )
+        for call in calls
+    ] == [
+        ("convert", None, "exact", None, "convert"),
+        ("convert", None, "exact", None, "convert"),
+        ("convert", None, "exact", None, "convert"),
+    ]
+    assert b"#if !defined(NATIVE_ABI)" in path.read_bytes()
+    assert not (tmp_path / "compile_commands.json").exists()
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "static int helper(int value) { return value; }\n"
+        "int api(int (*helper)(int)) { return helper(1); }\n",
+        "static int helper(int value) { return value; }\n"
+        "int api(int value) { int (*helper)(int) = 0; return helper(value); }\n",
+        "static int helper(int value) { return value; }\n"
+        "#define DECLARE_LOCAL_HELPER int (*helper)(int) = 0\n"
+        "int api(int value) { DECLARE_LOCAL_HELPER; return helper(value); }\n",
+        "static int helper(int value) { return value; }\n"
+        "#define helper(value) (value)\n"
+        "int api(int value) { return helper(value); }\n",
+        "#if ABI_A\n"
+        "static int helper(int value) { return value; }\n"
+        "#else\n"
+        "static long helper(long value) { return value; }\n"
+        "#endif\n"
+        "int api(int value) { return helper(value); }\n",
+    ],
+    ids=[
+        "parameter-shadow",
+        "local-function-pointer",
+        "macro-generated-shadow",
+        "macro-shadow",
+        "branches",
+    ],
+)
+def test_static_call_identity_stays_unresolved_when_binding_is_ambiguous(
+    tmp_path: Path, source: str
+) -> None:
+    """Keep static calls exact-unresolved when lexical binding is not proven.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source-only repository.
+    source : str
+        C source containing a shadow, macro, or conditional target ambiguity.
+
+    Returns
+    -------
+    None
+        The written call name remains available without a guessed identity.
+    """
+    path = tmp_path / "ambiguous.c"
+    path.write_text(source)
+
+    result = CAnalyzer().analyze_file(path, tmp_path)
+
+    api = next(function for function in result.functions if function.name == "api")
+    call = next(call for call in api.calls if call.target == "helper")
+    assert call.target_identity is None
+    assert call.resolution_mode == "exact"
+
+
+def test_static_call_identity_stays_unresolved_with_missing_include(
+    tmp_path: Path,
+) -> None:
+    """Do not bind source calls when an unresolved include may define macros.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source repository without the referenced system header.
+
+    Returns
+    -------
+    None
+        The written call remains exact-unresolved without complete macro input.
+    """
+    path = tmp_path / "missing_include.c"
+    path.write_text(
+        "#include <missing_codira_test_header.h>\n"
+        "static int helper(int value) { return value; }\n"
+        "int api(int value) { return helper(value); }\n"
+    )
+
+    result = CAnalyzer().analyze_file(path, tmp_path)
+    api = next(function for function in result.functions if function.name == "api")
+    call = next(call for call in api.calls if call.target == "helper")
+
+    assert call.target_identity is None
+    assert call.resolution_mode == "exact"
+
+
+def test_static_call_identity_respects_captured_header_macros(
+    tmp_path: Path,
+) -> None:
+    """Keep calls unresolved when a captured header defines their written name.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source repository with a local macro header.
+
+    Returns
+    -------
+    None
+        The macro call remains source-visible without a function identity.
+    """
+    (tmp_path / "macros.h").write_text("#define helper(value) (value)\n")
+    path = tmp_path / "captured_macro.c"
+    path.write_text(
+        "static int helper(int value) { return value; }\n"
+        '#include "macros.h"\n'
+        "int api(int value) { return helper(value); }\n"
+    )
+
+    result = CAnalyzer().analyze_file(path, tmp_path)
+    api = next(function for function in result.functions if function.name == "api")
+    call = next(call for call in api.calls if call.target == "helper")
+
+    assert call.target_identity is None
+    assert call.resolution_mode == "exact"
+
+
+def test_same_name_type_alternatives_keep_unique_source_occurrences(
+    tmp_path: Path,
+) -> None:
+    """Retain duplicate type names and enum members from both written arms.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source-only repository.
+
+    Returns
+    -------
+    None
+        Type and enumerator occurrences retain distinct physical identities;
+        uppercase ordinary calls have no guessed macro or external label.
+    """
+    source = b"""#if PLATFORM_A
+struct Widget { int a; };
+union Storage { int left; };
+enum Mode { MODE_A, MODE_SHARED };
+#else
+struct Widget { long b; };
+union Storage { long right; };
+enum Mode { MODE_B, MODE_SHARED };
+#endif
+void API(void) {}
+void caller(void) { API(); }
+"""
+    path = tmp_path / "types.c"
+    path.write_bytes(source)
+
+    result = CAnalyzer().analyze_file(path, tmp_path)
+
+    assert result.index_symbols and result.status is None
+    for kind, name, lines in (
+        ("struct", "Widget", (2, 6)),
+        ("union", "Storage", (3, 7)),
+        ("enum", "Mode", (4, 8)),
+    ):
+        variants = [
+            item
+            for item in result.declarations
+            if item.kind == kind and item.name == name
+        ]
+        assert [item.lineno for item in variants] == list(lines)
+        assert len({item.stable_id for item in variants}) == 2
+
+    enum_variants = [
+        item
+        for item in result.declarations
+        if item.kind == "enum" and item.name == "Mode"
+    ]
+    members = [member for item in enum_variants for member in item.enum_members]
+    assert [(member.name, member.lineno) for member in members] == [
+        ("MODE_A", 4),
+        ("MODE_SHARED", 4),
+        ("MODE_B", 8),
+        ("MODE_SHARED", 8),
+    ]
+    assert len({member.stable_id for member in members}) == 4
+    assert {
+        (member.parent_stable_id, item.stable_id)
+        for item in enum_variants
+        for member in item.enum_members
+    } == {(item.stable_id, item.stable_id) for item in enum_variants}
+
+    call = next(
+        call
+        for function in result.functions
+        if function.name == "caller"
+        for call in function.calls
+    )
+    assert call.target == "API"
+    assert call.target_identity is None and call.resolution_mode == "exact"
+    assert call.external_target_kind is None
+    assert call.external_target_name == "API"
+
+
+def test_independent_unsupported_branches_preserve_c_arms_with_partial_coverage(
+    tmp_path: Path,
+) -> None:
+    """Retain parseable declarations without claiming exhaustive combinations.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable header repository without a captured compiler profile.
+
+    Returns
+    -------
+    None
+        Both C alternatives remain queryable and combination coverage is partial.
+    """
+    source = b"""#ifdef __cplusplus
+namespace modern { int first(void); }
+#else
+int first(void);
+#endif
+#ifdef __cplusplus
+namespace legacy { int second(void); }
+#else
+int second(void);
+#endif
+"""
+    path = tmp_path / "independent.h"
+    path.write_bytes(source)
+
+    result = CAnalyzer().analyze_file(path, tmp_path)
+
+    assert result.index_symbols
+    assert [(item.name, item.lineno) for item in result.functions] == [
+        ("first", 4),
+        ("second", 9),
+    ]
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    assert any(
+        "combinations were enumerated" in diagnostic.message
+        for diagnostic in result.status.diagnostics
+    )
+
+
+def test_partial_translation_unit_keeps_independently_clean_function(
+    tmp_path: Path,
+) -> None:
+    """Index a clean file-scope subtree beside an unrelated syntax error.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable repository containing one valid definition and one malformed.
+
+    Returns
+    -------
+    None
+        The valid function remains indexable while file coverage stays partial.
+    """
+    source = b"int valid(void) { return 1; }\nint broken( {\n"
+    path = tmp_path / "partial.c"
+    path.write_bytes(source)
+
+    result = CAnalyzer().analyze_file(path, tmp_path)
+
+    assert result.index_symbols
+    assert [(item.name, item.lineno) for item in result.functions] == [("valid", 1)]
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    assert "unparsed_source_subtrees" in result.status.omitted_categories
+
+
+def test_partial_translation_unit_keeps_independently_clean_type_declarations(
+    tmp_path: Path,
+) -> None:
+    """Index complete file-scope types beside an unrelated malformed function.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source-only repository.
+
+    Returns
+    -------
+    None
+        Complete struct and enum artifacts survive with their enum members;
+        the malformed callable is not emitted and source coverage stays partial.
+    """
+    source = (
+        b"struct Stable { int value; };\nenum Mode { MODE_A, MODE_B };\nint broken( {\n"
+    )
+    path = tmp_path / "partial-types.c"
+    path.write_bytes(source)
+
+    result = CAnalyzer().analyze_file(path, tmp_path)
+
+    assert result.index_symbols
+    assert [(item.kind, item.name, item.lineno) for item in result.declarations] == [
+        ("struct", "Stable", 1),
+        ("enum", "Mode", 2),
+    ]
+    assert [item.name for item in result.functions] == []
+    mode = next(item for item in result.declarations if item.name == "Mode")
+    assert [item.name for item in mode.enum_members] == ["MODE_A", "MODE_B"]
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    assert "parseable_source_subtrees" in result.status.reliable_categories
+    assert "unparsed_source_subtrees" in result.status.omitted_categories
+
+
 def test_multiple_headers_have_linear_covering_views(tmp_path: Path) -> None:
     """Cover all independent choices without Cartesian growth.
 
@@ -139,7 +506,10 @@ def test_invalid_views_and_incomplete_fragments_stay_partial(
     """
     path = tmp_path / "bad.c"
     path.write_bytes(source)
-    assert not CAnalyzer().analyze_file(path, tmp_path).index_symbols
+    result = CAnalyzer().analyze_file(path, tmp_path)
+    if result.index_symbols:
+        assert result.status is not None
+        assert result.status.coverage_state.value == "partial"
 
 
 def test_documentation_owners_follow_final_variant_ids(tmp_path: Path) -> None:

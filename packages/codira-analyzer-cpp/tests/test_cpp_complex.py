@@ -183,7 +183,14 @@ def test_malformed_complex_syntax_keeps_diagnostics(
     """
     path = tmp_path / "bad.cpp"
     path.write_text(source)
-    assert not CppAnalyzer().analyze_file(path, tmp_path).index_symbols
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    if source == "double f(void) { return __real__; }":
+        assert result.index_symbols and result.status is not None
+        assert [(item.name, item.signature) for item in result.functions] == [
+            ("f", "double f(void)")
+        ]
+    else:
+        assert not result.index_symbols
 
 
 def test_complex_views_keep_crlf_and_utf8_call_positions(tmp_path: Path) -> None:

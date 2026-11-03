@@ -330,7 +330,7 @@ def _collect_annotation_definitions(
 
 
 def _c_language_source(source: bytes, root: Node) -> bytes:
-    """Blank positive C++-only branches in a C translation unit.
+    """Project C++ linkage wrappers without selecting a language branch.
 
     Parameters
     ----------
@@ -342,56 +342,71 @@ def _c_language_source(source: bytes, root: Node) -> bytes:
     Returns
     -------
     bytes
-        Same-length C source with line endings and guard directives retained.
-        Source definitions or undefinitions of __cplusplus prevent inference.
+        Same-length source with only ``extern "C" {`` wrapper tokens blanked.
+        Declarations inside positive ``__cplusplus`` branches remain visible.
     """
-    opaque: list[tuple[int, int]] = []
-    for node in _nodes(root):
-        if node.type in {"preproc_def", "preproc_function_def"}:
-            name = node.child_by_field_name("name")
-            if (
-                name is not None
-                and source[name.start_byte : name.end_byte] == b"__cplusplus"
-            ):
-                return source
-        if node.type == "preproc_call" and re.match(
-            rb"#\s*undef\s+__cplusplus\b", source[node.start_byte : node.end_byte]
-        ):
-            return source
-        if node.type in _OPAQUE_NODES:
-            opaque.append((node.start_byte, node.end_byte))
+    opaque = [
+        (node.start_byte, node.end_byte)
+        for node in _nodes(root)
+        if node.type in _OPAQUE_NODES and node.type != "string_literal"
+    ]
+    directives = tuple(
+        re.finditer(
+            rb"(?m)^[ \t]*#[ \t]*(ifdef|ifndef|if|elif|else|endif)\b([^\r\n]*)",
+            source,
+        )
+    )
     projected = bytearray(source)
-    stack: list[tuple[int, bool, bool]] = []
-    masks: list[tuple[int, int]] = []
-    for match in re.finditer(
-        rb"(?m)^[ \t]*#[ \t]*(ifdef|ifndef|if|elif|else|endif)\b([^\r\n]*)", source
-    ):
-        offset = source.index(b"#", match.start(), match.end())
-        if any(start < offset < end for start, end in opaque):
-            continue
+    for index, match in enumerate(directives):
         directive, condition = match[1], match[2].strip()
-        if directive in {b"ifdef", b"ifndef", b"if"}:
-            positive = (directive == b"ifdef" and condition == b"__cplusplus") or (
-                directive == b"if"
-                and re.fullmatch(
-                    rb"defined\s*(?:\(\s*__cplusplus\s*\)|\s+__cplusplus)", condition
-                )
-                is not None
+        positive = (directive == b"ifdef" and condition == b"__cplusplus") or (
+            directive == b"if"
+            and re.fullmatch(
+                rb"defined\s*(?:\(\s*__cplusplus\s*\)|\s+__cplusplus)",
+                condition,
             )
-            stack.append((match.end(), positive, False))
-        elif directive in {b"else", b"elif"} and stack:
-            start, positive, done = stack[-1]
-            if positive and not done:
-                masks.append((start, match.start()))
-                stack[-1] = (start, positive, True)
-        elif directive == b"endif" and stack:
-            start, positive, done = stack.pop()
-            if positive and not done:
-                masks.append((start, match.start()))
-    for start, end in masks:
-        for index in range(start, end):
-            if projected[index] not in (10, 13):
-                projected[index] = 32
+            is not None
+        )
+        if not positive or any(start < match.start() < end for start, end in opaque):
+            continue
+        depth = 1
+        boundary = len(directives)
+        for following in range(index + 1, len(directives)):
+            kind = directives[following][1]
+            if kind in {b"if", b"ifdef", b"ifndef"}:
+                depth += 1
+            elif kind == b"endif":
+                depth -= 1
+                if depth == 0:
+                    boundary = following
+                    break
+            elif depth == 1 and kind in {b"else", b"elif"}:
+                boundary = following
+                break
+        end = (
+            directives[boundary].start() if boundary < len(directives) else len(source)
+        )
+        branch = source[match.end() : end]
+        wrapper = re.search(rb"\bextern\s+\"C\"\s*\{", branch)
+        if wrapper is not None:
+            wrapper_start = match.end() + wrapper.start()
+            wrapper_end = match.end() + wrapper.end()
+            for offset in range(wrapper_start, wrapper_end):
+                if projected[offset] not in (10, 13):
+                    projected[offset] = 32
+            close_source = branch[wrapper.end() :]
+            close_offset = wrapper.end()
+        else:
+            close_source = branch
+            close_offset = 0
+        close = tuple(re.finditer(rb"(?m)^[ \t]*\}[ \t]*(?:\r?\n|$)", close_source))
+        if close:
+            selected = close[-1]
+            close_start = match.end() + close_offset + selected.start()
+            close_end = match.end() + close_offset + selected.end()
+            for offset in range(close_start, close_end):
+                if projected[offset] not in (10, 13):
+                    projected[offset] = 32
     return bytes(projected)
 
 

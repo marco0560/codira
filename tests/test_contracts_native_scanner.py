@@ -1100,8 +1100,9 @@ def test_c_analyzer_extracts_calls_returns_and_module_comment(tmp_path: Path) ->
             lineno=4,
             col_offset=16,
             base="obj",
-            external_target_kind="C:<external>",
+            external_target_kind=None,
             external_target_name="normalize",
+            resolution_mode="exact",
         ),
     )
     assert result.functions[1].returns_value == 1

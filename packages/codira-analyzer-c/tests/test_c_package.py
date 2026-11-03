@@ -61,7 +61,7 @@ def test_c_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.22"
+    assert project["project"]["version"] == "2.0.23"
     assert "codira>=2.0.0,<3.0.0" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "c": "codira_analyzer_c:build_analyzer"
@@ -85,7 +85,7 @@ def test_c_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CAnalyzer)
     assert analyzer.name == "c"
-    assert analyzer.version == "31"
+    assert analyzer.version == "32"
 
 
 def test_c_clang_frontend_is_opt_in_and_missing_profile_is_visible(
@@ -285,6 +285,83 @@ def test_c_clang_doxygen_option_keeps_semantic_docstrings(
     assert analysis.documentation == ()
     assert analysis.functions[0].docstring == "Run docs"
     assert analysis.module.docstring == "File docs"
+
+
+def test_c_clang_frontend_preserves_source_only_conditional_variants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep inactive source variants when the optional frontend is selected.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Source-only repository without a compile database.
+    monkeypatch : pytest.MonkeyPatch
+        Supplies one active-branch Clang row without invoking the frontend.
+
+    Returns
+    -------
+    None
+        Clang output supplements the same source occurrence and leaves the
+        other preprocessor alternative intact.
+    """
+    source = tmp_path / "variants.c"
+    source.write_text(
+        "#if ACTIVE\n"
+        "int run(int value) { return value; }\n"
+        "#else\n"
+        "int run(void) { return 0; }\n"
+        "#endif\n",
+        encoding="utf-8",
+    )
+    active = FunctionArtifact(
+        name="run",
+        stable_id="clang:run",
+        lineno=2,
+        end_lineno=2,
+        signature="int run(int value)",
+        docstring=None,
+        has_docstring=0,
+        is_method=0,
+        is_public=1,
+        parameters=("value",),
+        returns_value=1,
+        yields_value=0,
+        raises=0,
+        has_asserts=0,
+        decorators=(),
+        calls=(),
+        callable_refs=(),
+    )
+    clang_analysis = AnalysisResult(
+        source_path=source,
+        module=ModuleArtifact("variants", "clang:module", None, 0),
+        classes=(),
+        functions=(active,),
+        declarations=(),
+        imports=(),
+        documentation=(),
+    )
+    analyzer = CAnalyzer()
+    analyzer.configure({"frontend": "clang"})
+    monkeypatch.setattr(
+        analyzer,
+        "_try_clang_frontend",
+        lambda _path, _root: (SimpleNamespace(callables=(), declarations=()), ""),
+    )
+    monkeypatch.setattr(
+        c_analyzer_module,
+        "_analysis_from_clang_result",
+        lambda _path, _root, _result, *, context_identity=None: clang_analysis,
+    )
+
+    result = analyzer.analyze_file(source, tmp_path)
+
+    assert [(item.lineno, item.signature) for item in result.functions] == [
+        (2, "int run(int value)"),
+        (4, "int run(void)"),
+    ]
+    assert not (tmp_path / "compile_commands.json").exists()
 
 
 def test_c_clang_projection_emits_fields_only_for_file_scope_records(
@@ -952,7 +1029,7 @@ def test_c_clang_header_owner_selection_config_is_strict() -> None:
 def test_c_clang_header_without_captured_owner_is_not_claimed_and_is_held(
     tmp_path: Path,
 ) -> None:
-    """Keep an unowned header explicit and prevent speculative C extraction.
+    """Analyze written header declarations without a captured Clang owner.
 
     Parameters
     ----------
@@ -962,7 +1039,7 @@ def test_c_clang_header_without_captured_owner_is_not_claimed_and_is_held(
     Returns
     -------
     None
-        The test verifies unresolved Clang headers are not indexed as C facts.
+        The source declaration remains available without compiler context.
     """
     header = tmp_path / "include" / "api.h"
     header.parent.mkdir()
@@ -973,8 +1050,7 @@ def test_c_clang_header_without_captured_owner_is_not_claimed_and_is_held(
     result = analyzer.analyze_file(header, tmp_path)
 
     assert analyzer.allows_path(header, tmp_path) is False
-    assert result.index_symbols is False
-    assert result.functions == ()
+    assert result.index_symbols is True
+    assert [(item.name, item.lineno) for item in result.functions] == [("declared", 1)]
     assert result.declarations == ()
-    assert result.status is not None
-    assert result.status.coverage_state.value == "partial"
+    assert result.status is None

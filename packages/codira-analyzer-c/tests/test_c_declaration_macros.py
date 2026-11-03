@@ -757,9 +757,10 @@ def test_public_analysis_marks_macro_token_budget_rejection_partial(
     assert result.declarations == baseline.declarations
     assert result.imports == baseline.imports
     assert baseline.index_symbols
-    assert not result.index_symbols
+    assert result.index_symbols
     assert result.status is not None
     assert result.status.coverage_state.value == "partial"
+    assert "declaration_macro_expansions" in result.status.omitted_categories
     baseline_diagnostics = (
         baseline.status.diagnostics if baseline.status is not None else ()
     )
@@ -871,9 +872,11 @@ def test_unmodeled_object_rejects_the_complete_generated_site(
 
     result = analyzer.analyze_file(path, tmp_path)
 
-    assert not result.index_symbols
+    assert result.index_symbols
+    assert not any(item.name == "generated_entry" for item in result.functions)
     assert result.status is not None
     assert result.status.coverage_state.value == "partial"
+    assert "declaration_macro_expansions" in result.status.omitted_categories
     assert not any(item.generated is not None for item in result.functions)
     assert any(
         item.category == "declaration_macro_expansion"

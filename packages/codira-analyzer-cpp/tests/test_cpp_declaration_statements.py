@@ -131,7 +131,9 @@ def test_known_empty_redefinition_erases_only_its_statement(tmp_path: Path) -> N
         b"void entry() { FORWARD(Type value); after(); }\n"
     )
     result = _analyze(tmp_path, source, {"OMIT_DECLARATION": True})
-    assert result.index_symbols and result.status is None
+    assert result.index_symbols
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
     function = next(item for item in result.functions if item.name == "entry")
     assert [call.target for call in function.calls] == ["FORWARD", "after"]
 
@@ -163,7 +165,9 @@ def test_empty_replacement_keeps_macro_hint_and_lexical_expression_calls(
         b"int returned() { return FORWARD(target()); }\n"
     )
     result = _analyze(tmp_path, source, {"OMIT_DECLARATION": True})
-    assert result.index_symbols and result.status is None
+    assert result.index_symbols
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
     entry = next(item for item in result.functions if item.name == "entry")
     returned = next(item for item in result.functions if item.name == "returned")
     assert [call.target for call in entry.calls] == [
@@ -366,4 +370,4 @@ def test_empty_declaration_wrapper_holds_calling_initializer(tmp_path: Path) -> 
     result = _analyze(tmp_path, source, {"OMIT_DECLARATION": True})
     assert result.status is not None
     function = next(item for item in result.functions if item.name == "entry")
-    assert "make" in [call.target for call in function.calls]
+    assert function.calls == ()

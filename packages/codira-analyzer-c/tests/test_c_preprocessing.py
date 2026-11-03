@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from codira_analyzer_c import CAnalyzer, _new_parser
-from codira_analyzer_c.c_preprocessing import _parse_c_source
+from codira_analyzer_c.c_preprocessing import _c_language_source, _parse_c_source
 
 from codira.indexer import index_repo
 from codira.registry import active_index_backend
@@ -86,37 +86,49 @@ def test_c_guard_recovery_preserves_api_spans_and_callback_types(
     "guard",
     [b"ifdef __cplusplus", b"if defined(__cplusplus)", b"if defined __cplusplus"],
 )
-def test_c_language_guards_keep_else_branch_and_nested_directives(guard: bytes) -> None:
-    """Exclude only the positive C++ branch while retaining valid C alternatives.
+def test_c_language_guards_keep_c_alternative_and_report_unsupported_branch(
+    tmp_path: Path, guard: bytes
+) -> None:
+    """Keep a parseable C alternative when C++-only branch syntax is unsupported.
 
     Parameters
     ----------
+    tmp_path : pathlib.Path
+        Isolated source directory.
     guard : bytes
         Exact C++-language condition.
 
     Returns
     -------
     None
-        C declarations survive nested directives at their original byte offsets.
+        The C API survives at its written line and unsupported syntax is partial.
     """
     source = (
         b"#"
         + guard
         + b"\n#if OTHER\nnamespace cpp_only {\n#endif\n#else\nint c_api(void);\n#endif\n"
     )
-    tree = _parse_c_source(source, _new_parser())
-    assert not tree.has_error
-    assert tree.text is not None and len(tree.text) == len(source)
-    assert b"int c_api(void);" in tree.text
-    assert b"namespace" not in tree.text
-    assert tree.text.count(b"\n") == source.count(b"\n")
+    parsed = _parse_c_source(source, _new_parser())
+    assert parsed.has_error
+    assert _c_language_source(source, _new_parser().parse(source).root_node) == source
+    path = tmp_path / "api.h"
+    path.write_bytes(source)
+    result = CAnalyzer().analyze_file(path, tmp_path)
+    assert result.index_symbols
+    assert [(function.name, function.lineno) for function in result.functions] == [
+        ("c_api", 6)
+    ]
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    assert "cplusplus" in result.status.diagnostics[-1].message
+    assert path.read_bytes() == source
 
 
 @pytest.mark.parametrize("directive", [b"#define __cplusplus 1", b"#undef __cplusplus"])
-def test_source_controlled_cplusplus_macro_prevents_language_assumption(
+def test_source_controlled_cplusplus_macro_keeps_source_conditions(
     directive: bytes,
 ) -> None:
-    """Retain diagnostics when the source changes the language guard itself.
+    """Keep written language guards when source defines or undefines the macro.
 
     Parameters
     ----------
@@ -126,13 +138,16 @@ def test_source_controlled_cplusplus_macro_prevents_language_assumption(
     Returns
     -------
     None
-        No C-language branch inference overrides an explicit source directive.
+        Parser projection changes only linkage syntax, not conditional content.
     """
     source = (
         directive
         + b'\n#ifdef __cplusplus\nextern "C" {\n#endif\nint api(void);\n#ifdef __cplusplus\n}\n#endif\n'
     )
-    assert _parse_c_source(source, _new_parser()).has_error
+    projected = _c_language_source(source, _new_parser().parse(source).root_node)
+    assert b"#ifdef __cplusplus" in projected
+    assert directive in projected
+    assert b"int api(void);" in projected
 
 
 @pytest.mark.parametrize(

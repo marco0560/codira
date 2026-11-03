@@ -458,9 +458,9 @@ def test_refs_cli_tree_prints_bounded_incoming_references(
     ]
 
 
-def test_c_call_edges_are_indexed_for_same_module_functions(tmp_path: Path) -> None:
+def test_c_source_calls_bind_unique_static_helpers(tmp_path: Path) -> None:
     """
-    Ensure lightweight C call extraction reaches the stored call-edge graph.
+    Resolve a source-only call to its unique file-scope static definition.
 
     Parameters
     ----------
@@ -470,7 +470,7 @@ def test_c_call_edges_are_indexed_for_same_module_functions(tmp_path: Path) -> N
     Returns
     -------
     None
-        The test asserts same-module C call-edge resolution.
+        The exact target identity links the call and helper definition.
     """
     module = tmp_path / "native" / "sample.c"
     module.parent.mkdir()
@@ -494,10 +494,10 @@ def test_c_call_edges_are_indexed_for_same_module_functions(tmp_path: Path) -> N
         (
             "native.sample",
             "public_api",
-            None,
+            "c:function:native/sample.c:public_api",
             "native.sample",
             "helper",
-            None,
+            "c:function:native/sample.c:helper",
             None,
             None,
             1,
@@ -514,10 +514,10 @@ def test_c_call_edges_are_indexed_for_same_module_functions(tmp_path: Path) -> N
         (
             "native.sample",
             "public_api",
-            None,
+            "c:function:native/sample.c:public_api",
             "native.sample",
             "helper",
-            None,
+            "c:function:native/sample.c:helper",
             None,
             None,
             1,

@@ -503,7 +503,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-c"
-version = "2.0.22"
+version = "2.0.23"
 source = { editable = "packages/codira-analyzer-c" }
 dependencies = [
     { name = "codira" },
@@ -526,7 +526,7 @@ provides-extras = ["clang", "test"]
 
 [[package]]
 name = "codira-analyzer-cpp"
-version = "2.0.52"
+version = "2.0.53"
 source = { editable = "packages/codira-analyzer-cpp" }
 dependencies = [
     { name = "codira" },

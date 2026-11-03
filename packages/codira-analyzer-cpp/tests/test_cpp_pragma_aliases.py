@@ -80,14 +80,20 @@ def test_pragma_aliases(tmp_path: Path, definitions: str, clean: bool) -> None:
     path = tmp_path / "unit.cpp"
     path.write_text(source)
     result = CppAnalyzer().analyze_file(path, tmp_path)
-    assert result.index_symbols is clean
     if clean:
+        assert result.index_symbols
+        assert result.status is None
         function = next(f for f in result.functions if f.name == "run")
         assert function.signature == "API int run(int x)"
         assert function.parameters == ("x",)
         assert [(c.target, c.lineno, c.col_offset) for c in function.calls] == [
             ("helper", 3, source.encode().splitlines()[2].index(b"helper"))
         ]
+    else:
+        assert result.index_symbols
+        assert result.status is not None
+        assert result.status.coverage_state.value == "partial"
+        assert [function.name for function in result.functions] == ["helper"]
 
 
 def test_stringifier_availability(tmp_path: Path) -> None:

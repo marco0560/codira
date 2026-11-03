@@ -46,6 +46,10 @@ class CParseView:
         Same-coordinate source with inactive headers and selected directives blanked.
     root : tree_sitter.Node
         Parsed root; annotation identifiers may additionally be blank in the tree.
+    branch_condition : str | None, optional
+        Written conditional directive selected for this recovery view.
+    coverage_incomplete : bool, optional
+        Whether this view is part of incomplete source coverage.
 
     Returns
     -------
@@ -55,6 +59,8 @@ class CParseView:
 
     source: bytes
     root: Node
+    branch_condition: str | None = None
+    coverage_incomplete: bool = False
 
 
 @dataclass
@@ -413,19 +419,21 @@ def c_parse_views(
     """
     if base is None:
         base = _parse_c_source(source, parser, included_sources)
-    if base.text is not None and base.text != source:
-        # _parse_c_source only returns a changed partial tree after proving
-        # that its equal-width parser projection removed empty macro slots
-        # while retaining every unrelated diagnostic. Keep that tree beside
-        # the original bytes instead of reparsing away the licensed view.
+    unsupported_cxx = _has_unsupported_cxx_function(base, source)
+    projected_partial = base.text is not None and base.text != source
+    has_conditional_nodes = any(
+        node.type in {"preproc_if", "preproc_ifdef"} for node in _nodes(base)
+    )
+    if not base.has_error and not unsupported_cxx and not has_conditional_nodes:
         return iter((CParseView(source, base),))
-    if not base.has_error:
+    working = base.text if projected_partial else _c_language_source(source, base)
+    if working is None:
         return iter((CParseView(source, base),))
-    working = _c_language_source(source, base)
-    root = parser.parse(working).root_node
+    root = base if projected_partial else parser.parse(working).root_node
     groups = _conditionals(working, root, parser)
     if groups is None:
-        return iter((CParseView(source, base),))
+        subtree_views = _clean_subtree_views(source, root, parser, included_sources)
+        return iter(subtree_views or (CParseView(source, base),))
     headers = _header_groups(working, root, groups, parser, included_sources)
     choices = [tuple(0 for _ in headers)]
     choices.extend(
@@ -433,10 +441,434 @@ def c_parse_views(
         for selected, group in enumerate(headers)
         for branch in range(1, len(group.branches))
     )
-    return (
+    header_views = tuple(
         _project_view(working, headers, choice, parser, included_sources)
         for choice in choices
     )
+    if not unsupported_cxx and not any(view.root.has_error for view in header_views):
+        if not headers and groups:
+            branch_views = _conditional_branch_views(
+                working,
+                _groups_outside_function_bodies(root, groups),
+                parser,
+                included_sources,
+            )
+            if branch_views:
+                return iter(branch_views)
+        if projected_partial:
+            return iter((CParseView(source, base),))
+        return iter(header_views)
+    branch_views = _conditional_branch_views(
+        working,
+        _groups_outside_function_bodies(root, groups),
+        parser,
+        included_sources,
+    )
+    if branch_views:
+        return iter(branch_views)
+    subtree_views = _clean_subtree_views(source, root, parser, included_sources)
+    if subtree_views:
+        return iter(subtree_views)
+    return iter(header_views)
+
+
+def _groups_outside_function_bodies(
+    root: Node, groups: list[_Conditional]
+) -> list[_Conditional]:
+    """Keep statement alternatives out of declaration-branch recovery.
+
+    Parameters
+    ----------
+    root : tree_sitter.Node
+        Translation-unit parse tree.
+    groups : list[_Conditional]
+        Balanced conditional groups with source byte ranges.
+
+    Returns
+    -------
+    list[_Conditional]
+        Groups not nested inside a function body.
+    """
+    bodies = [
+        body
+        for node in _nodes(root)
+        if node.type == "function_definition"
+        and (body := node.child_by_field_name("body")) is not None
+    ]
+    return [
+        group
+        for group in groups
+        if not any(body.start_byte <= group.start < body.end_byte for body in bodies)
+    ]
+
+
+def _has_unsupported_cxx_function(root: Node, source: bytes) -> bool:
+    """Detect namespace syntax that the C grammar recovers as a function.
+
+    Parameters
+    ----------
+    root : tree_sitter.Node
+        Parsed tree for the source file.
+    source : bytes
+        Original source bytes for exact token inspection.
+
+    Returns
+    -------
+    bool
+        Whether a function-shaped node begins with C++ ``namespace`` syntax.
+    """
+    return any(
+        node.type == "function_definition"
+        and (type_node := node.child_by_field_name("type")) is not None
+        and source[type_node.start_byte : type_node.end_byte] == b"namespace"
+        for node in _nodes(root)
+    )
+
+
+def _clean_subtree_views(
+    source: bytes,
+    root: Node,
+    parser: Parser,
+    included_sources: tuple[tuple[bytes, int], ...],
+) -> tuple[CParseView, ...]:
+    """Retain independent file-scope nodes outside parser error subtrees.
+
+    Parameters
+    ----------
+    source : bytes
+        Original source bytes and coordinate system.
+    root : tree_sitter.Node
+        Partial translation unit with recoverable siblings.
+    parser : tree_sitter.Parser
+        C parser used to validate isolated node projections.
+    included_sources : tuple[tuple[bytes, int], ...]
+        Captured headers and their original availability boundaries.
+
+    Returns
+    -------
+    tuple[CParseView, ...]
+        Source-coordinate views for independently clean declarations and
+        definitions. Every returned view signals incomplete file coverage.
+    """
+    # Once preprocessing directives participate, a seemingly clean sibling can
+    # depend on macro state that this isolated view cannot establish.
+    if (
+        re.search(rb"(?m)^\s*#", source)
+        or b"_Pragma(" in source
+        or b"__pragma(" in source
+    ):
+        return ()
+    declarations = {
+        "declaration",
+        "function_definition",
+        "type_definition",
+        "struct_specifier",
+        "union_specifier",
+        "enum_specifier",
+        "preproc_def",
+        "preproc_function_def",
+        "preproc_call",
+    }
+    wrappers = {
+        "preproc_if",
+        "preproc_ifdef",
+        "preproc_else",
+        "preproc_elif",
+        "preproc_elifdef",
+        "linkage_specification",
+        "declaration_list",
+    }
+    candidates: list[Node] = []
+    pending = list(reversed(root.children))
+    while pending:
+        node = pending.pop()
+        if node.type in declarations:
+            if not node.has_error:
+                candidates.append(node)
+            continue
+        if node.type in wrappers:
+            excluded = {
+                node.child_by_field_name("condition"),
+                node.child_by_field_name("name"),
+            }
+            pending.extend(
+                child
+                for child in reversed(node.named_children)
+                if child not in excluded
+            )
+    type_declaration_nodes = {
+        "type_definition",
+        "struct_specifier",
+        "union_specifier",
+        "enum_specifier",
+    }
+    has_clean_type_declaration = any(
+        node.type in type_declaration_nodes
+        or any(child.type in type_declaration_nodes for child in _nodes(node))
+        for node in candidates
+    )
+    if not has_clean_type_declaration and not any(
+        node.type == "function_definition" for node in candidates
+    ):
+        return ()
+    views: list[CParseView] = []
+    for node in candidates:
+        end_byte = node.end_byte
+        if node.type in {"struct_specifier", "union_specifier", "enum_specifier"}:
+            following_semicolon = next(
+                (
+                    child
+                    for child in (() if node.parent is None else node.parent.children)
+                    if child.start_byte == node.end_byte and child.type == ";"
+                ),
+                None,
+            )
+            if following_semicolon is not None:
+                end_byte = following_semicolon.end_byte
+        projected = _blank(
+            source,
+            [(0, node.start_byte), (end_byte, len(source))],
+        )
+        tree = _parse_c_source(projected, parser, included_sources)
+        if not tree.has_error:
+            views.append(CParseView(projected, tree, coverage_incomplete=True))
+    return tuple(views)
+
+
+def _conditional_branch_views(
+    source: bytes,
+    groups: list[_Conditional],
+    parser: Parser,
+    included_sources: tuple[tuple[bytes, int], ...],
+) -> tuple[CParseView, ...]:
+    """Parse each written branch of top-level groups in isolation.
+
+    Parameters
+    ----------
+    source : bytes
+        Original-coordinate source buffer.
+    groups : list[_Conditional]
+        Balanced source conditionals.
+    parser : tree_sitter.Parser
+        C parser for each branch projection.
+    included_sources : tuple[tuple[bytes, int], ...]
+        Captured headers and their original availability boundaries.
+
+    Returns
+    -------
+    tuple[CParseView, ...]
+        Linear covering views for top-level written alternatives, including
+        views that remain partial because their syntax is outside C grammar.
+    """
+    parents = [
+        group
+        for group in groups
+        if group.end > group.start and not _is_include_guard(source, group)
+    ]
+    top_level = [
+        group
+        for group in parents
+        if not any(
+            outer.start < group.start and group.end < outer.end for outer in parents
+        )
+    ]
+    if not top_level:
+        return ()
+    groups_with_declarations = [
+        group
+        for group in top_level
+        if any(
+            _branch_has_declaration(source[start:end], parser)
+            for start, end in group.branches
+        )
+    ]
+    if not groups_with_declarations:
+        return ()
+    top_level = groups_with_declarations
+    alternatives = [
+        tuple(range(len(group.branches) + int(not group.has_else)))
+        for group in top_level
+    ]
+    valid_alternatives: list[tuple[int, ...]] = []
+    for group, branches in zip(top_level, alternatives, strict=True):
+        valid: list[int] = []
+        for branch in branches:
+            if branch >= len(group.branches):
+                valid.append(branch)
+                continue
+            start, end = group.branches[branch]
+            fragment = source[start:end]
+            if (
+                not _unsupported_cxx_syntax(fragment)
+                and _branch_has_declaration(fragment, parser)
+                and not _parse_c_source(
+                    fragment, parser, _slice_inputs(included_sources, start, end)
+                ).has_error
+            ):
+                valid.append(branch)
+        valid_alternatives.append(tuple(valid))
+    defaults = tuple(
+        valid[0] if valid else (branches[-1] if branches else 0)
+        for valid, branches in zip(valid_alternatives, alternatives, strict=True)
+    )
+    selections = [defaults]
+    selections.extend(
+        tuple(
+            branch if index == selected else defaults[index]
+            for index in range(len(top_level))
+        )
+        for selected, branches in enumerate(alternatives)
+        for branch in branches
+        if branch != defaults[selected]
+    )
+    combination_count = 1
+    for branches in alternatives:
+        combination_count *= len(branches)
+    coverage_incomplete = combination_count > len(selections) or any(
+        len(valid) < len(branches)
+        for valid, branches in zip(valid_alternatives, alternatives, strict=True)
+    )
+    views: list[CParseView] = []
+    for selection in selections:
+        complete_alternatives = True
+        for group_index, (group, selected) in enumerate(
+            zip(top_level, selection, strict=True)
+        ):
+            if selected not in valid_alternatives[group_index]:
+                complete_alternatives = False
+                start, end = group.branches[selected]
+                condition = _branch_condition(source, group, selected)
+                views.append(
+                    CParseView(
+                        source,
+                        parser.parse(source[start:end]).root_node,
+                        condition,
+                        True,
+                    )
+                )
+                break
+        if not complete_alternatives:
+            continue
+        projected = source
+        for group, selected in zip(top_level, selection, strict=True):
+            spans = list(group.directives)
+            spans.extend(
+                span for index, span in enumerate(group.branches) if index != selected
+            )
+            projected = _blank(projected, spans)
+        tree = _parse_c_source(projected, parser, included_sources)
+        selected_conditions = [
+            _branch_condition(source, group, selected)
+            for group, selected in zip(top_level, selection, strict=True)
+        ]
+        views.append(
+            CParseView(
+                projected,
+                tree,
+                "; ".join(selected_conditions) or None,
+                coverage_incomplete,
+            )
+        )
+    return tuple(views)
+
+
+def _branch_has_declaration(fragment: bytes, parser: Parser) -> bool:
+    """Require source declarations before projecting one conditional group.
+
+    Parameters
+    ----------
+    fragment : bytes
+        One written alternative.
+    parser : tree_sitter.Parser
+        C parser used to distinguish declarations from preprocessing-only text.
+
+    Returns
+    -------
+    bool
+        Whether the fragment contains a function, declaration, or type node.
+    """
+    root = parser.parse(fragment).root_node
+    return any(
+        node.type
+        in {
+            "declaration",
+            "function_definition",
+            "type_definition",
+            "struct_specifier",
+            "union_specifier",
+            "enum_specifier",
+        }
+        for node in _nodes(root)
+    )
+
+
+def _unsupported_cxx_syntax(fragment: bytes) -> bool:
+    """Recognize common C++ declarations that C parsing would misclassify.
+
+    Parameters
+    ----------
+    fragment : bytes
+        One source alternative.
+
+    Returns
+    -------
+    bool
+        Whether the text contains a C++ namespace or template introducer.
+    """
+    return re.search(rb"\bnamespace\b|\btemplate\s*<", fragment) is not None
+
+
+def _branch_condition(source: bytes, group: _Conditional, branch: int) -> str:
+    """Render the source directive associated with one conditional alternative.
+
+    Parameters
+    ----------
+    source : bytes
+        Original conditional source.
+    group : _Conditional
+        Conditional group containing the alternative.
+    branch : int
+        Alternative index, including the implicit no-branch choice.
+
+    Returns
+    -------
+    str
+        Written directive text or the explicit label for an implicit branch.
+    """
+    if branch >= len(group.branches):
+        return "implicit no-branch alternative"
+    directive = group.directives[min(branch, len(group.directives) - 2)]
+    return source[directive[0] : directive[1]].decode("utf-8", errors="replace").strip()
+
+
+def _is_include_guard(source: bytes, group: _Conditional) -> bool:
+    """Recognize the conventional file-wide ``#ifndef`` include guard.
+
+    Parameters
+    ----------
+    source : bytes
+        Original source buffer.
+    group : _Conditional
+        Balanced conditional under inspection.
+
+    Returns
+    -------
+    bool
+        Whether the first alternative defines the same identifier used by an
+        opening ``#ifndef`` directive.
+    """
+    opening = source[group.directives[0][0] : group.directives[0][1]]
+    match = re.match(rb"\s*#\s*ifndef\s+([A-Za-z_][A-Za-z_0-9]*)\b", opening)
+    if match is None or not group.branches:
+        return False
+    start, end = group.branches[0]
+    body = source[start:end]
+    definition = re.match(
+        rb"(?:\s|/\*.*?\*/|//[^\n]*(?:\n|$))*#\s*define\s+([A-Za-z_][A-Za-z_0-9]*)\b",
+        body,
+        flags=re.DOTALL,
+    )
+    return definition is not None and definition[1] == match[1]
 
 
 def _project_view(

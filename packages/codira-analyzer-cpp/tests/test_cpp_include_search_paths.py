@@ -66,7 +66,11 @@ def test_include_search_roots_recover_original_artifacts(
     """
     root = annotated_source.parent
     analyzer = CppAnalyzer()
-    assert not analyzer.analyze_file(annotated_source, root).index_symbols
+    source_only = analyzer.analyze_file(annotated_source, root)
+    assert source_only.index_symbols
+    assert source_only.status is not None
+    assert source_only.status.coverage_state.value == "partial"
+    assert [item.name for item in source_only.functions] == ["callee"]
     analyzer.configure({"include_search_paths": ["include"]})
     result = analyzer.analyze_file(annotated_source, root)
     assert result.index_symbols

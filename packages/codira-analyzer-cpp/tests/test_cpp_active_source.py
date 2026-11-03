@@ -11,6 +11,7 @@ None
 """
 
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -138,20 +139,88 @@ def test_known_branches_preserve_calls_signatures_and_source(
     analyzer.configure({"preprocessor_definitions": {"ENABLED": enabled}})
     result = analyzer.analyze_file(path, tmp_path)
     assert result.index_symbols and result.status is None, result
-    assert [f.name for f in result.functions] == [
-        "entry" if enabled else "other",
-        "after",
-    ]
-    first, after = result.functions
-    expected = (
-        ["CHECK", "chosen"]
-        if statement and enabled
-        else ["chosen" if enabled else "alternate"]
+    assert [f.name for f in result.functions] == ["entry", "other", "after"]
+    functions = {function.name: function for function in result.functions}
+    assert [call.target for call in functions["entry"].calls] == (
+        ["CHECK", "chosen"] if statement else ["chosen"]
     )
-    assert [c.target for c in first.calls] == expected
+    assert [call.target for call in functions["other"].calls] == ["alternate"]
+    assert {"entry", "other"} == set(functions) - {"after"}
+    after = functions["after"]
     assert after.signature == "template<class T> void after()"
     assert after.lineno == 7 and [c.target for c in after.calls] == ["tail"]
     assert path.read_bytes() == source
+
+
+def test_source_first_retains_clean_symbols_with_malformed_other_branch(
+    tmp_path: Path,
+) -> None:
+    """Keep independently parsed source symbols and report partial coverage.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository containing one conditional source file.
+
+    Returns
+    -------
+    None
+    """
+    source = (
+        b"#if ENABLED\n"
+        b"void selected() { first(); }\n"
+        b"#else\n"
+        b"malformed !\n"
+        b"#endif\n"
+        b"void outside() { last(); }\n"
+    )
+    path = tmp_path / "unit.cpp"
+    path.write_bytes(source)
+    analyzer = CppAnalyzer()
+    analyzer.configure({"preprocessor_definitions": {"ENABLED": True}})
+
+    result = analyzer.analyze_file(path, tmp_path)
+
+    assert result.index_symbols is True
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    assert {function.name for function in result.functions} == {"selected", "outside"}
+
+
+def test_source_facts_survive_generated_context_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep clean source symbols when optional macro expansion reaches a bound.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository containing a source-only translation unit.
+    monkeypatch : pytest.MonkeyPatch
+        Forces optional generated expansion to report a bounded failure.
+
+    Returns
+    -------
+    None
+    """
+    source = b"void entry() { source_call(); }\n"
+    path = tmp_path / "unit.cpp"
+    path.write_bytes(source)
+    analyzer = CppAnalyzer()
+    analyzer.configure({"preprocessor_definitions": {}})
+    monkeypatch.setattr(
+        "codira_analyzer_cpp.cpp_generated_analysis.analyze_generated_file",
+        Mock(side_effect=ValueError("macro binding limit exceeded")),
+    )
+
+    result = analyzer.analyze_file(path, tmp_path)
+
+    assert result.index_symbols
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    assert [function.name for function in result.functions] == ["entry"]
+    assert result.functions[0].calls[0].target == "source_call"
+    assert result.functions[0].calls[0].resolution_mode == "exact"
 
 
 def test_unreachable_unknown_and_directive_shaped_literals(tmp_path: Path) -> None:
@@ -186,7 +255,9 @@ def test_unreachable_unknown_and_directive_shaped_literals(tmp_path: Path) -> No
     analyzer = CppAnalyzer()
     analyzer.configure({"preprocessor_definitions": {}})
     result = analyzer.analyze_file(path, tmp_path)
-    assert result.index_symbols and result.status is None
+    assert result.index_symbols is True
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
     assert [f.name for f in result.functions] == ["entry"]
     assert [c.target for c in result.functions[0].calls] == ["target"]
 
@@ -233,7 +304,9 @@ def test_activity_with_generated_namespace_and_statement(tmp_path: Path) -> None
     analyzer = CppAnalyzer()
     analyzer.configure({"preprocessor_definitions": {}})
     result = analyzer.analyze_file(path, tmp_path)
-    assert result.index_symbols and result.status is None, result
+    assert result.index_symbols is True
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
     function = result.functions[0]
     assert function.name == "actual_namespace::entry"
     assert function.lineno == 7 and function.end_lineno == 7
@@ -260,6 +333,171 @@ def test_default_unconfigured_analysis_keeps_both_branches(tmp_path: Path) -> No
     result = CppAnalyzer().analyze_file(path, tmp_path)
     assert result.index_symbols and result.status is None
     assert [f.name for f in result.functions] == ["first", "second"]
+
+
+def test_source_first_branches_preserve_occurrences_and_unproven_calls(
+    tmp_path: Path,
+) -> None:
+    """Index source branches without profiles and keep uncertain calls unresolved.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository containing only the source translation unit.
+
+    Returns
+    -------
+    None
+    """
+    source = (
+        b"#if defined(PLATFORM_A)\n"
+        b"namespace platform_a { class Renderer { public: void draw() { a(); } }; }\n"
+        b"void render() { platform_a_only(); }\n"
+        b"#else\n"
+        b"namespace platform_b { class Renderer { public: void draw() { b(); } }; }\n"
+        b"void render() { platform_b_only(); }\n"
+        b"#endif\n"
+        b"void dispatch() { render(); }\n"
+    )
+    path = tmp_path / "unit.cpp"
+    path.write_bytes(source)
+
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+
+    assert result.index_symbols and result.status is None, result
+    assert path.read_bytes() == source
+    assert {item.name for item in result.classes} == {
+        "platform_a::Renderer",
+        "platform_b::Renderer",
+    }
+    assert {
+        (method.name, method.lineno, method.calls[0].target)
+        for item in result.classes
+        for method in item.methods
+    } == {("draw", 2, "a"), ("draw", 5, "b")}
+    renderers = [function for function in result.functions if function.name == "render"]
+    assert [(function.lineno, function.calls[0].target) for function in renderers] == [
+        (3, "platform_a_only"),
+        (6, "platform_b_only"),
+    ]
+    assert len({function.stable_id for function in renderers}) == 2
+    dispatch = next(
+        function for function in result.functions if function.name == "dispatch"
+    )
+    ambiguous = dispatch.calls[0]
+    assert ambiguous.target == "render"
+    assert ambiguous.target_identity is None
+    assert ambiguous.resolution_mode == "exact"
+    assert ambiguous.external_target_kind is None
+    assert ambiguous.external_target_name == "render"
+    assert source.splitlines()[0] in path.read_bytes()
+
+
+def test_same_name_class_occurrences_keep_branch_ownership(tmp_path: Path) -> None:
+    """Keep class extents and method owners distinct across alternatives.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository containing two alternative class definitions.
+
+    Returns
+    -------
+    None
+    """
+    source = (
+        b"#if PLATFORM_A\n"
+        b"namespace api { struct Renderer { void draw() { branch_a(); } }; }\n"
+        b"#else\n"
+        b"namespace api { struct Renderer { void draw() { branch_b(); } }; }\n"
+        b"#endif\n"
+    )
+    path = tmp_path / "unit.cpp"
+    path.write_bytes(source)
+
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+
+    assert result.index_symbols and result.status is None
+    assert len(result.classes) == 2
+    assert {item.name for item in result.classes} == {"api::Renderer"}
+    assert [item.end_lineno for item in result.classes] == [2, 4]
+    assert len({item.stable_id for item in result.classes}) == 2
+    methods = [item.methods[0] for item in result.classes]
+    assert [method.calls[0].target for method in methods] == ["branch_a", "branch_b"]
+    assert len({method.stable_id for method in methods}) == 2
+    assert [method.owner_stable_id for method in methods] == [
+        item.stable_id for item in result.classes
+    ]
+
+
+def test_unproven_uppercase_call_is_not_classified_as_macro(tmp_path: Path) -> None:
+    """Keep uppercase spelling without inventing a macro classification.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository containing a source-only translation unit.
+
+    Returns
+    -------
+    None
+    """
+    path = tmp_path / "unit.cpp"
+    path.write_text("void entry() { API(); }\n")
+
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+
+    call = result.functions[0].calls[0]
+    assert call.target == "API"
+    assert call.resolution_mode == "exact"
+    assert call.external_target_name == "API"
+    assert call.external_target_kind is None
+
+
+def test_out_of_branch_method_does_not_create_ambiguous_class_owner(
+    tmp_path: Path,
+) -> None:
+    """Keep an out-of-class definition without fabricating a third class.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository containing alternative class definitions.
+
+    Returns
+    -------
+    None
+    """
+    source = (
+        b"#if PLATFORM_A\n"
+        b"class C { public: void first() {} };\n"
+        b"#else\n"
+        b"class C { public: void second() {} };\n"
+        b"#endif\n"
+        b"void C::outside() {}\n"
+    )
+    path = tmp_path / "unit.cpp"
+    path.write_bytes(source)
+
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+
+    assert result.index_symbols and result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    assert "class_method_ownership" in result.status.omitted_categories
+    assert [(item.name, item.lineno) for item in result.classes] == [
+        ("C", 2),
+        ("C", 4),
+    ]
+    assert [method.name for item in result.classes for method in item.methods] == [
+        "first",
+        "second",
+    ]
+    assert len(result.functions) == 1
+    outside = result.functions[0]
+    assert outside.name == "outside"
+    assert outside.signature == "void C::outside()"
+    assert outside.is_method == 0
+    assert outside.owner_name is None and outside.owner_stable_id is None
 
 
 @pytest.mark.parametrize("outer", [False, True])
@@ -289,12 +527,13 @@ def test_static_continuation_preserves_only_reachable_enclosing_region(
     analyzer = CppAnalyzer()
     analyzer.configure({"preprocessor_definitions": {"OUTER": outer}})
     result = analyzer.analyze_file(path, tmp_path)
-    assert result.index_symbols and result.status is None, result
-    assert [f.name for f in result.functions] == (
-        ["entry", "after"] if outer else ["after"]
+    assert result.index_symbols is True
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    assert [f.name for f in result.functions] == ["entry", "after"]
+    assert [c.target for c in result.functions[0].calls] == (
+        ["left", "right"] if outer else ["left"]
     )
-    if outer:
-        assert [c.target for c in result.functions[0].calls] == ["left", "right"]
 
 
 @pytest.mark.parametrize("namespace", [b"plain", b"NS"])

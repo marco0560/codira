@@ -429,7 +429,7 @@ def _cpp_external_target_kind(base: str, target: str) -> str:
     str
         Analyzer-owned external target classifier.
     """
-    if target in _CPP_MACROS or target.isupper():
+    if target in _CPP_MACROS:
         return "C++:<macro>"
     if base == "std" or base.startswith("std::") or target in _CPP_SYSTEM_FUNCTIONS:
         return "C++:<system-header>"

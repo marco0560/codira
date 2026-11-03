@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from dataclasses import replace
 import hashlib
 import json
 from codira.generated import CompilerObservedCallableProvenance
@@ -52,8 +53,8 @@ def test_cpp_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.52"
-    assert version("codira-analyzer-cpp") == "2.0.52"
+    assert project["project"]["version"] == "2.0.53"
+    assert version("codira-analyzer-cpp") == "2.0.53"
     assert (
         Path(inspect.getfile(CppAnalyzer)).resolve()
         == (
@@ -83,7 +84,7 @@ def test_cpp_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CppAnalyzer)
     assert analyzer.name == "cpp"
-    assert analyzer.version == "51"
+    assert analyzer.version == "52"
 
 
 def test_cpp_clang_frontend_is_opt_in_and_missing_profile_is_visible(
@@ -117,6 +118,146 @@ def test_cpp_clang_frontend_is_opt_in_and_missing_profile_is_visible(
     assert analysis.status.coverage_state == "partial"
     assert analysis.status.target_contract["selected_frontend"] == "tree-sitter"
     assert analysis.status.diagnostics[-1].category == "clang_frontend_fallback"
+
+
+def test_cpp_successful_clang_path_keeps_unselected_source_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Merge Clang facts with source-written alternatives outside its profile.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository containing a conditional source file.
+    monkeypatch : pytest.MonkeyPatch
+        Supplies a complete Clang result representing only one selected branch.
+
+    Returns
+    -------
+    None
+    """
+    source = tmp_path / "sample.cpp"
+    source.write_bytes(
+        b"#if defined(PLATFORM_A)\n"
+        b"void render() { platform_a(); }\n"
+        b"#else\n"
+        b"void render() { platform_b(); }\n"
+        b"#endif\n"
+        b"void dispatch() { render(); }\n"
+    )
+    source_result = CppAnalyzer().analyze_file(source, tmp_path)
+    selected_result = AnalysisResult(
+        source_path=source,
+        module=source_result.module,
+        classes=(),
+        functions=(source_result.functions[0],),
+        declarations=(),
+        imports=(),
+    )
+    analyzer = CppAnalyzer()
+    analyzer.configure({"frontend": "clang"})
+    monkeypatch.setattr(
+        analyzer,
+        "_try_clang_frontend",
+        lambda _path, _root: (SimpleNamespace(callables=(), declarations=()), ""),
+    )
+    monkeypatch.setattr(
+        cpp_analyzer_module,
+        "_analysis_from_clang_result",
+        lambda _path, _root, _result, *, context_identity=None: selected_result,
+    )
+
+    result = analyzer.analyze_file(source, tmp_path)
+
+    renderers = [function for function in result.functions if function.name == "render"]
+    assert [(function.lineno, function.calls[0].target) for function in renderers] == [
+        (2, "platform_a"),
+        (4, "platform_b"),
+    ]
+    assert len({function.stable_id for function in renderers}) == 2
+    dispatch = next(
+        function for function in result.functions if function.name == "dispatch"
+    )
+    assert dispatch.calls[0].target == "render"
+    assert dispatch.calls[0].target_identity is None
+    assert dispatch.calls[0].resolution_mode == "exact"
+
+
+def test_cpp_clang_merge_preserves_branch_class_and_method_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep source occurrence identities when Clang supplies one branch.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository containing two same-name class alternatives.
+    monkeypatch : pytest.MonkeyPatch
+        Supplies a complete Clang result with independent identities.
+
+    Returns
+    -------
+    None
+        Matched Clang class and method rows retain source-first identities.
+    """
+    source = tmp_path / "classes.cpp"
+    source.write_bytes(
+        b"#if PLATFORM_A\n"
+        b"class C { public: void first() { a(); } };\n"
+        b"#else\n"
+        b"class C { public: void second() { b(); } };\n"
+        b"#endif\n"
+    )
+    source_result = CppAnalyzer().analyze_file(source, tmp_path)
+    selected_source_class = source_result.classes[0]
+    clang_class = replace(
+        selected_source_class,
+        stable_id="clang:class:C",
+        methods=tuple(
+            replace(
+                method,
+                stable_id=f"clang:method:{method.name}",
+                owner_stable_id="clang:class:C",
+            )
+            for method in selected_source_class.methods
+        ),
+    )
+    selected_result = AnalysisResult(
+        source_path=source,
+        module=source_result.module,
+        classes=(clang_class,),
+        functions=(),
+        declarations=(),
+        imports=(),
+        documentation=(),
+    )
+    analyzer = CppAnalyzer()
+    analyzer.configure({"frontend": "clang"})
+    monkeypatch.setattr(
+        analyzer,
+        "_try_clang_frontend",
+        lambda _path, _root: (SimpleNamespace(callables=(), declarations=()), ""),
+    )
+    monkeypatch.setattr(
+        cpp_analyzer_module,
+        "_analysis_from_clang_result",
+        lambda _path, _root, _result, *, context_identity=None: selected_result,
+    )
+
+    result = analyzer.analyze_file(source, tmp_path)
+
+    assert [item.stable_id for item in result.classes] == [
+        item.stable_id for item in source_result.classes
+    ]
+    assert [
+        (method.stable_id, method.owner_stable_id)
+        for item in result.classes
+        for method in item.methods
+    ] == [
+        (method.stable_id, item.stable_id)
+        for item in source_result.classes
+        for method in item.methods
+    ]
 
 
 def _clang_output_options_fixture(path: Path) -> AnalysisResult:
@@ -238,7 +379,10 @@ def test_cpp_clang_route_applies_output_options(
         The test verifies comment, namespace, macro, import, and docs filters.
     """
     source = tmp_path / "sample.cpp"
-    source.write_text("int run() { return 1; }\n", encoding="utf-8")
+    source.write_text(
+        "class Thing { public: void method() {} }; int run() { return 1; }\n",
+        encoding="utf-8",
+    )
     expected = _clang_output_options_fixture(source)
     fake_frontend_result = SimpleNamespace(callables=(), declarations=())
     analyzer = CppAnalyzer()
@@ -296,7 +440,10 @@ def test_cpp_clang_doxygen_option_keeps_semantic_docstrings(
         The test checks Doxygen output can be disabled independently.
     """
     source = tmp_path / "sample.cpp"
-    source.write_text("int run() { return 1; }\n", encoding="utf-8")
+    source.write_text(
+        "class Thing { public: void method() {} }; int run() { return 1; }\n",
+        encoding="utf-8",
+    )
     expected = _clang_output_options_fixture(source)
     fake_frontend_result = SimpleNamespace(callables=(), declarations=())
     analyzer = CppAnalyzer()
@@ -1114,8 +1261,8 @@ def test_cpp_clang_header_owner_selection_config_is_strict() -> None:
             )
 
 
-def test_cpp_clang_unowned_header_is_claimed_only_as_held(tmp_path: Path) -> None:
-    """Route an unresolved header to a non-indexable partial C++ result.
+def test_cpp_clang_unowned_header_keeps_source_fallback(tmp_path: Path) -> None:
+    """Retain source-written header declarations when Clang context is missing.
 
     Parameters
     ----------
@@ -1125,7 +1272,7 @@ def test_cpp_clang_unowned_header_is_claimed_only_as_held(tmp_path: Path) -> Non
     Returns
     -------
     None
-        The test verifies ambiguous routing does not emit heuristic symbols.
+        The test verifies fallback symbols remain available with partial status.
     """
     header = tmp_path / "include" / "api.h"
     header.parent.mkdir()
@@ -1136,8 +1283,8 @@ def test_cpp_clang_unowned_header_is_claimed_only_as_held(tmp_path: Path) -> Non
     result = analyzer.analyze_file(header, tmp_path)
 
     assert analyzer.allows_path(header, tmp_path) is True
-    assert result.index_symbols is False
-    assert result.functions == ()
+    assert result.index_symbols is True
+    assert [function.name for function in result.functions] == ["declared"]
     assert result.declarations == ()
     assert result.status is not None
     assert result.status.coverage_state.value == "partial"

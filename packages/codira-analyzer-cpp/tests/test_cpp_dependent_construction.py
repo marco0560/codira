@@ -146,7 +146,11 @@ def test_dependent_construction_holds_keyword_overrides(
         '#include "keyword.h"\nvoid sink(...);\n'
         "template<class T> void run(){sink(typename T::type());}\n"
     )
-    assert not CppAnalyzer().analyze_file(path, tmp_path).index_symbols
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    assert result.index_symbols
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    assert {function.name for function in result.functions} == {"sink", "run"}
 
 
 def test_dependent_construction_composes_namespace_wrappers(tmp_path: Path) -> None:
@@ -194,4 +198,8 @@ def test_dependent_construction_keeps_unrelated_errors(tmp_path: Path) -> None:
         "void sink(...); template<class T> void run(){sink(typename T::type());}\n"
         "int broken( {\n"
     )
-    assert not CppAnalyzer().analyze_file(path, tmp_path).index_symbols
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    assert result.index_symbols
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    assert {function.name for function in result.functions} == {"sink", "run"}

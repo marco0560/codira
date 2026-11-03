@@ -376,7 +376,10 @@ def test_later_function_declaration_cannot_supply_earlier_decltype(
     path = tmp_path / "main.cpp"
     path.write_bytes(_SOURCE.replace(b"\n}\n", b"\ndouble f(double x);\n}\n"))
     result = _analyzer(True).analyze_file(path, tmp_path)
-    assert not result.index_symbols and result.status is not None
+    assert result.index_symbols and result.status is not None
+    assert [
+        (item.name, item.signature, item.generated) for item in result.functions
+    ] == [("NS::f", "double f(double x);", None)]
 
 
 @pytest.mark.parametrize("redefine", [False, True])

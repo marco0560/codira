@@ -131,4 +131,7 @@ def test_linkage_recovery_preserves_unrelated_syntax_errors(tmp_path: Path) -> N
     path = tmp_path / "broken.cpp"
     path.write_text('extern "C" { int good(); int broken( ; }\n')
     result = CppAnalyzer().analyze_file(path, tmp_path)
-    assert not result.index_symbols
+    assert result.index_symbols and result.status is not None
+    assert [(item.name, item.signature) for item in result.functions] == [
+        ("good", "int good();")
+    ]

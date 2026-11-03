@@ -529,7 +529,7 @@ def test_external_methods_link_to_real_header_class_without_duplicate_declaratio
         assert conn.execute(
             "SELECT caller_name, callee_name, resolved FROM call_edges "
             "WHERE caller_name = 'Widget.run'"
-        ).fetchall() == [("Widget.run", "Widget.helper", 1)]
+        ).fetchall() == [("Widget.run", "helper", 1)]
     finally:
         conn.close()
     header.write_bytes(header.read_bytes().replace(b"private:", b"public:"))
