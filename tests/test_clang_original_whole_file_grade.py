@@ -15,6 +15,7 @@ from scripts.clang_original_whole_file_grade import (
     GradeRequest,
     _canonical,
     _read_actual_analysis_status,
+    _source_literal_includes,
     _validate_compile_database_row,
     _validate_contract_header,
     _validate_extractor_domain,
@@ -643,6 +644,37 @@ def test_authored_controls_must_cover_every_fact_category(tmp_path: Path) -> Non
         _validate_contract_header(contract)
 
 
+def _include_snapshot_rows(source: bytes, mutation: str) -> list[JSONValue]:
+    """Build one fixture snapshot's include rows and apply an adversarial edit.
+
+    Parameters
+    ----------
+    source : bytes
+        Exact source bytes for the test contract.
+    mutation : str
+        ``valid``, ``missing``, ``extra``, or ``duplicate`` row treatment.
+
+    Returns
+    -------
+    list[JSONValue]
+        Snapshot rows after the selected mutation.
+    """
+    parsed = _source_literal_includes(source)
+    assert parsed is not None
+    rows: list[JSONValue] = cast("list[JSONValue]", parsed)
+    if mutation == "missing":
+        rows.pop()
+    elif mutation == "extra":
+        rows.append({"kind": "include_system", "name": "extra.h", "line": 1})
+    elif mutation == "duplicate":
+        rows.append(dict(cast("dict[str, JSONValue]", rows[0])))
+    elif mutation == "wrong_same_count":
+        cast("dict[str, JSONValue]", rows[0])["name"] = "wrong.h"
+    else:
+        assert mutation == "valid"
+    return rows
+
+
 def _run_grade_flow(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -650,10 +682,13 @@ def _run_grade_flow(
     held_category: str | None = None,
     diverge_backend: bool = False,
     inject_negative_control: bool = False,
+    include_source: bytes = b"",
+    include_mutation: str | None = None,
+    include_state: str | None = None,
 ) -> dict[str, JSONValue]:
     """Run grade_contract with only external database/profile readers stubbed."""
     source = tmp_path / "fixture.cpp"
-    source.write_text("int value;\n", encoding="utf-8")
+    source.write_bytes(include_source + b"int value;\n")
     source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     fixture_root = tmp_path / "fixtures"
     fixture_root.mkdir()
@@ -823,7 +858,13 @@ def _run_grade_flow(
         },
         "categories": {
             category: {
-                "state": "held" if category == held_category else "graded",
+                "state": (
+                    "held"
+                    if category == held_category
+                    else include_state
+                    if category == "includes" and include_state is not None
+                    else "graded"
+                ),
                 "independent_basis": "source-bound empty inventory for test fixture",
                 "inventory_complete": True,
                 "reason": "test holds this category"
@@ -850,6 +891,11 @@ def _run_grade_flow(
             "analysis_input_fingerprint": f"{backend}-context",
         }
         rows.update({category: [] for category in FACT_CATEGORIES})
+        if include_mutation is not None:
+            rows["includes"] = cast(
+                "JSONValue",
+                _include_snapshot_rows(source.read_bytes(), include_mutation),
+            )
         if backend == "duckdb" and diverge_backend:
             rows["calls"] = [{"name": "unexpected"}]
         control_snapshot_rows: dict[str, JSONValue] = {
@@ -964,8 +1010,190 @@ def test_manual_source_review_assertions_cannot_admit_full_flow(tmp_path: Path) 
     held_categories = cast(
         "list[str]", report["categories_held_without_machine_semantics"]
     )
-    assert set(held_categories) == set(FACT_CATEGORIES) - {"coverage"}
+    assert set(held_categories) == set(FACT_CATEGORIES) - {"coverage", "includes"}
     assert report["held_category_count"] == len(held_categories)
+
+
+def test_literal_include_evaluator_is_bounded_and_exact() -> None:
+    """Derive direct include rows and hold unsupported preprocessing syntax.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+    assert _source_literal_includes(
+        b'/* prefix */\n#include <alpha/beta.h>\n#include "local.h"\n'
+    ) == [
+        {"kind": "include_system", "name": "alpha/beta.h", "line": 2},
+        {"kind": "include_local", "name": "local.h", "line": 3},
+    ]
+    for unsupported in (
+        b"#if FEATURE\n#include <alpha.h>\n#endif\n",
+        b"#include HEADER_NAME\n",
+        b"#include <alpha.h> \\\n\n",
+        b"??=include <alpha.h>\n",
+        b"%:if FEATURE\n#include <alpha.h>\n%:endif\n",
+        b"\xef\xbb\xbf#if FEATURE\n#include <alpha.h>\n#endif\n",
+        b"%:include <alpha.h>\n",
+        b'const char *text = R"(\n#include <false.h>\n)";\n',
+        b"/* unterminated comment\n#include <alpha.h>\n",
+    ):
+        assert _source_literal_includes(unsupported) is None
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        b"%:if FEATURE\n#include <alpha.h>\n%:endif\n",
+        b"\xef\xbb\xbf#if FEATURE\n#include <alpha.h>\n#endif\n",
+    ],
+)
+def test_unsupported_include_preprocessor_forms_remain_held(
+    source: bytes, tmp_path: Path
+) -> None:
+    """Keep includes held when alternate directive spellings are present.
+
+    Parameters
+    ----------
+    source : bytes
+        Unsupported source text to bind to the fixture.
+    tmp_path : pathlib.Path
+        Temporary workspace for the full-contract fixture.
+
+    Returns
+    -------
+    None
+    """
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        report = _run_grade_flow(tmp_path, monkeypatch, include_source=source)
+    held_categories = cast(
+        "list[str]", report["categories_held_without_machine_semantics"]
+    )
+    assert "includes" in held_categories
+    includes = cast(
+        "dict[str, JSONValue]",
+        cast("dict[str, JSONValue]", report["category_reports"])["includes"],
+    )
+    assert includes["semantic_validation"] == (
+        "held: no independent machine evaluator is implemented"
+    )
+
+
+def test_literal_includes_are_machine_graded_from_source_bytes(tmp_path: Path) -> None:
+    """Use exact source directives as the include oracle in full flow.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace for the full-contract fixture.
+
+    Returns
+    -------
+    None
+    """
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        report = _run_grade_flow(
+            tmp_path,
+            monkeypatch,
+            include_source=b'#include <alpha.h>\n#include "local.h"\n',
+            include_mutation="valid",
+        )
+    includes = cast(
+        "dict[str, JSONValue]",
+        cast("dict[str, JSONValue]", report["category_reports"])["includes"],
+    )
+    assert includes["expected_count"] == 2
+    assert includes["semantic_validation"] == (
+        "source-derived exhaustive literal directive inventory"
+    )
+    assert includes["grader_failures"] == []
+    assert report["passed"] is False
+    assert "calls" in cast(
+        "list[str]", report["categories_held_without_machine_semantics"]
+    )
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra", "duplicate"])
+def test_literal_include_evaluator_rejects_snapshot_drift(
+    mutation: str, tmp_path: Path
+) -> None:
+    """Reject missing, extra, and duplicate persisted include rows.
+
+    Parameters
+    ----------
+    mutation : str
+        Snapshot mutation to exercise.
+    tmp_path : pathlib.Path
+        Temporary workspace for the full-contract fixture.
+
+    Returns
+    -------
+    None
+    """
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        report = _run_grade_flow(
+            tmp_path,
+            monkeypatch,
+            include_source=b"#include <alpha.h>\n",
+            include_mutation=mutation,
+        )
+    includes = cast(
+        "dict[str, JSONValue]",
+        cast("dict[str, JSONValue]", report["category_reports"])["includes"],
+    )
+    assert includes["grader_failures"]
+    assert includes["exact_count_by_backend"] == {"sqlite": False, "duckdb": False}
+    assert report["passed"] is False
+
+
+def test_nonempty_include_inventory_rejects_not_applicable_state(
+    tmp_path: Path,
+) -> None:
+    """Count same-sized wrong rows despite an invalid not-applicable claim.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace for the full-contract fixture.
+
+    Returns
+    -------
+    None
+    """
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        report = _run_grade_flow(
+            tmp_path,
+            monkeypatch,
+            include_source=b"#include <alpha.h>\n",
+            include_mutation="wrong_same_count",
+            include_state="not_applicable",
+        )
+    includes = cast(
+        "dict[str, JSONValue]",
+        cast("dict[str, JSONValue]", report["category_reports"])["includes"],
+    )
+    assert includes["state"] == "not_applicable"
+    assert includes["expected_count"] == 1
+    assert includes["observed_counts"] == {"sqlite": 1, "duckdb": 1}
+    assert includes["exact_count_by_backend"] == {"sqlite": True, "duckdb": True}
+    assert includes["backend_parity"] is True
+    failures = cast("list[dict[str, JSONValue]]", includes["grader_failures"])
+    assert any(
+        failure.get("reason")
+        == "persisted include rows differ from the exhaustive source-derived literal directive inventory"
+        for failure in failures
+    )
+    assert any(
+        failure.get("reason")
+        == "nonempty source-derived include inventory cannot be not_applicable"
+        for failure in failures
+    )
+    assert report["mismatched_category_count"] == 1
+    assert report["passed"] is False
 
 
 @pytest.mark.parametrize(

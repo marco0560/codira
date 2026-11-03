@@ -62,9 +62,9 @@ SOURCE_FACT_CATEGORIES = frozenset(
         "generated_declarations",
     }
 )
-# Persisted analysis-status checks independently validate coverage only. There
-# is currently no machine evaluator that proves the source semantics of any
-# authored fact category.
+# Persisted analysis-status checks validate coverage. Source include semantics
+# are enabled separately only when the bounded literal-directive parser accepts
+# the exact source file.
 MACHINE_VALIDATED_CATEGORIES = frozenset({"coverage"})
 
 
@@ -2461,6 +2461,7 @@ def _validate_persisted_status_claims(
 
 def _hold_categories_without_machine_semantics(
     category_states: dict[str, str],
+    machine_supported_categories: frozenset[str] = MACHINE_VALIDATED_CATEGORIES,
 ) -> set[str]:
     """Hold every category without an independent semantic evaluator.
 
@@ -2473,6 +2474,8 @@ def _hold_categories_without_machine_semantics(
     ----------
     category_states : dict[str, str]
         Validated authored category states.
+    machine_supported_categories : frozenset[str]
+        Categories with a complete evaluator for this source file.
 
     Returns
     -------
@@ -2481,10 +2484,268 @@ def _hold_categories_without_machine_semantics(
     """
     held_categories: set[str] = set()
     for category, state in category_states.items():
-        if state != "held" and category not in MACHINE_VALIDATED_CATEGORIES:
+        if state != "held" and category not in machine_supported_categories:
             category_states[category] = "held"
             held_categories.add(category)
     return held_categories
+
+
+def _normal_c_comment_step(
+    source: bytes, masked: bytearray, index: int
+) -> tuple[int, str]:
+    """Advance the scanner while it is outside C comments and literals.
+
+    Parameters
+    ----------
+    source : bytes
+        Original source bytes.
+    masked : bytearray
+        Mutable source copy whose comments are replaced with whitespace.
+    index : int
+        Current byte offset.
+
+    Returns
+    -------
+    tuple[int, str]
+        Next offset and scanner state.
+    """
+    current = source[index]
+    following = source[index + 1] if index + 1 < len(source) else None
+    if current == 47 and following == 42:
+        masked[index : index + 2] = b"  "
+        return index + 2, "block_comment"
+    if current == 47 and following == 47:
+        while index < len(source) and source[index] not in (10, 13):
+            masked[index] = 32
+            index += 1
+        return index, "normal"
+    if current == 34:
+        return index + 1, "string"
+    if current == 39:
+        return index + 1, "character"
+    return index + 1, "normal"
+
+
+def _block_c_comment_step(
+    source: bytes, masked: bytearray, index: int
+) -> tuple[int, str]:
+    """Advance the scanner through a C block comment.
+
+    Parameters
+    ----------
+    source : bytes
+        Original source bytes.
+    masked : bytearray
+        Mutable source copy whose comments are replaced with whitespace.
+    index : int
+        Current byte offset.
+
+    Returns
+    -------
+    tuple[int, str]
+        Next offset and scanner state.
+    """
+    current = source[index]
+    following = source[index + 1] if index + 1 < len(source) else None
+    if current not in (10, 13):
+        masked[index] = 32
+    if current == 42 and following == 47:
+        masked[index + 1] = 32
+        return index + 2, "normal"
+    return index + 1, "block_comment"
+
+
+def _quoted_c_literal_step(
+    source: bytes, index: int, state: str
+) -> tuple[int, str] | None:
+    """Advance through a C string or character literal.
+
+    Parameters
+    ----------
+    source : bytes
+        Original source bytes.
+    index : int
+        Current byte offset.
+    state : str
+        Either ``string`` or ``character``.
+
+    Returns
+    -------
+    tuple[int, str] or None
+        Next offset and state, or ``None`` for a malformed literal.
+    """
+    current = source[index]
+    following = source[index + 1] if index + 1 < len(source) else None
+    quote = 34 if state == "string" else 39
+    if current == 92:
+        if following in (None, 10, 13):
+            return None
+        return index + 2, state
+    if current in (10, 13):
+        return None
+    return (index + 1, "normal") if current == quote else (index + 1, state)
+
+
+def _mask_c_comments(source: bytes) -> bytearray | None:
+    """Replace C comments while preserving source line structure.
+
+    Parameters
+    ----------
+    source : bytes
+        Source bytes to scan.
+
+    Returns
+    -------
+    bytearray or None
+        Comment-masked bytes, or ``None`` for malformed strings or comments.
+    """
+    masked = bytearray(source)
+    state = "normal"
+    index = 0
+    while index < len(source):
+        if state == "normal":
+            index, state = _normal_c_comment_step(source, masked, index)
+        elif state == "block_comment":
+            index, state = _block_c_comment_step(source, masked, index)
+        else:
+            literal_step = _quoted_c_literal_step(source, index, state)
+            if literal_step is None:
+                return None
+            index, state = literal_step
+    if state not in {"normal"}:
+        return None
+    return masked
+
+
+def _source_literal_includes(source: bytes) -> list[dict[str, JSONValue]] | None:
+    """Derive unconditional literal include rows from a bounded C source subset.
+
+    The subset accepts only direct quoted or angle-bracket include directives
+    and ordinary source lines. Conditional or macro directives, line splices,
+    trigraphs, malformed comments, and non-literal include operands remain
+    unsupported so callers can keep the category held.
+
+    Parameters
+    ----------
+    source : bytes
+        Exact source bytes whose include directives are being evaluated.
+
+    Returns
+    -------
+    list[dict[str, JSONValue]] or None
+        Source-derived include identities, or ``None`` for unsupported syntax.
+    """
+    if source.startswith(b"\xef\xbb\xbf"):
+        return None
+    if b"\\\n" in source or b"\\\r\n" in source:
+        return None
+    trigraph_final_bytes = b"=/\\'()!<>-"
+    if any(
+        source[index : index + 2] == b"??" and source[index + 2] in trigraph_final_bytes
+        for index in range(max(0, len(source) - 2))
+    ):
+        return None
+    raw_prefixes = (b'u8R"', b'uR"', b'UR"', b'LR"', b'R"')
+    if _contains_raw_string_prefix(source, raw_prefixes):
+        return None
+    if any(
+        current == 13 and (index + 1 >= len(source) or source[index + 1] != 10)
+        for index, current in enumerate(source)
+    ):
+        return None
+    masked = _mask_c_comments(source)
+    if masked is None:
+        return None
+
+    includes: list[dict[str, JSONValue]] = []
+    for line_number, line in enumerate(masked.split(b"\n"), start=1):
+        if line.endswith(b"\r"):
+            line = line[:-1]
+        stripped = line.lstrip(b" \t\v\f")
+        if stripped.startswith(b"%:"):
+            return None
+        if not stripped.startswith(b"#"):
+            continue
+        parsed = _parse_literal_include(bytes(line))
+        if parsed is None:
+            return None
+        kind, name_bytes = parsed
+        includes.append(
+            {
+                "kind": kind,
+                "name": name_bytes.decode("ascii"),
+                "line": line_number,
+            }
+        )
+    return includes
+
+
+def _contains_raw_string_prefix(source: bytes, prefixes: tuple[bytes, ...]) -> bool:
+    """Detect C++ raw-string prefixes conservatively in source bytes.
+
+    Parameters
+    ----------
+    source : bytes
+        Source bytes to inspect.
+    prefixes : tuple[bytes, ...]
+        Raw-string prefixes recognized by C++.
+
+    Returns
+    -------
+    bool
+        Whether an unambiguous token boundary precedes a raw-string prefix.
+    """
+    identifier_bytes = (
+        b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+    )
+    for prefix in prefixes:
+        start = 0
+        while (offset := source.find(prefix, start)) >= 0:
+            if offset == 0 or source[offset - 1] not in identifier_bytes:
+                return True
+            start = offset + len(prefix)
+    return False
+
+
+def _parse_literal_include(line: bytes) -> tuple[str, bytes] | None:
+    """Parse one direct literal include directive.
+
+    Parameters
+    ----------
+    line : bytes
+        Comment-masked preprocessing line.
+
+    Returns
+    -------
+    tuple[str, bytes] or None
+        Include kind and exact operand spelling, or ``None`` if unsupported.
+    """
+    stripped = line.strip(b" \t\v\f")
+    if not stripped.startswith(b"#"):
+        return None
+    directive = stripped[1:].lstrip(b" \t\v\f")
+    if not directive.startswith(b"include"):
+        return None
+    remainder = directive[len(b"include") :]
+    if not remainder or remainder[0] not in b" \t\v\f":
+        return None
+    operand = remainder.lstrip(b" \t\v\f")
+    if not operand:
+        return None
+    opening, closing = (b"<", b">") if operand.startswith(b"<") else (b'"', b'"')
+    if not operand.startswith(opening):
+        return None
+    end = operand.find(closing, 1)
+    if end <= 1 or operand[end + 1 :].strip(b" \t\v\f"):
+        return None
+    name = operand[1:end]
+    allowed_name_bytes = (
+        b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./+-"
+    )
+    if any(character not in allowed_name_bytes for character in name):
+        return None
+    kind = "include_system" if opening == b"<" else "include_local"
+    return kind, name
 
 
 def _validate_persisted_clang_identity(
@@ -2714,7 +2975,14 @@ def grade_contract(
     states, bindings, source = _validate_contract(
         contract, oracle_path, fixture_root, source_key
     )
-    semantic_holds = _hold_categories_without_machine_semantics(states)
+    source_path = Path(cast("str", source["path"]))
+    source_includes = _source_literal_includes(source_path.read_bytes())
+    machine_categories = frozenset(
+        {"coverage"} | ({"includes"} if source_includes is not None else set())
+    )
+    semantic_holds = _hold_categories_without_machine_semantics(
+        states, machine_categories
+    )
     if Path(
         cast("str", bindings["profile_collection_path"])
     ).resolve() != request.profile_document.resolve() or _sha256(
@@ -2778,6 +3046,7 @@ def grade_contract(
     snapshots: dict[str, dict[str, JSONValue]] = {}
     backend_rows: dict[str, dict[str, JSONValue]] = {}
     backend_failures: dict[str, JSONValue] = {}
+    source_semantic_failures: dict[str, list[dict[str, JSONValue]]] = {}
     control_sources = {
         _string(
             _object(value, f"source_authored_controls[{index}]").get("relative_path"),
@@ -2803,6 +3072,28 @@ def grade_contract(
         )
         snapshots[backend] = snapshot
         backend_rows[backend] = source_rows
+        if source_includes is not None:
+            expected_include_rows = Counter(_canonical(row) for row in source_includes)
+            observed_include_rows = Counter(
+                _canonical(
+                    {
+                        "kind": row.get("kind"),
+                        "name": row.get("name"),
+                        "line": row.get("line"),
+                    }
+                )
+                for row in _as_rows(source_rows.get("includes"), f"{backend}.includes")
+            )
+            source_semantic_failures[backend] = []
+            if observed_include_rows != expected_include_rows:
+                source_semantic_failures[backend].append(
+                    {
+                        "case": source_key,
+                        "category": "includes",
+                        "reason": "persisted include rows differ from the exhaustive source-derived literal directive inventory",
+                        "expected": cast("JSONValue", source_includes),
+                    }
+                )
         backend_contexts[backend] = _string(
             source_rows.get("analysis_input_fingerprint"),
             f"{backend}.case.analysis_input_fingerprint",
@@ -2827,9 +3118,12 @@ def grade_contract(
             }
             for failure in failures
             if failure.case in control_sources
+            and failure.category not in machine_categories
         ]
         control_failures[backend].extend(
-            _negative_control_snapshot_failures(contract, snapshot)
+            failure
+            for failure in _negative_control_snapshot_failures(contract, snapshot)
+            if failure.get("category") not in machine_categories
         )
     backend_context_details = {
         backend: _validate_indexed_context_identity(
@@ -2848,7 +3142,9 @@ def grade_contract(
     for category in FACT_CATEGORIES:
         state = states[category]
         expected_count = (
-            len(authored_case.facts.get(category, ()))
+            len(source_includes)
+            if category == "includes" and source_includes is not None
+            else len(authored_case.facts.get(category, ()))
             if category in SOURCE_FACT_CATEGORIES
             else 0
         )
@@ -2869,14 +3165,44 @@ def grade_contract(
             for failure in cast("list[dict[str, JSONValue]]", backend)
             if failure.get("category") == category
         ]
+        if category == "includes" and source_includes is not None:
+            category_failures = [
+                failure
+                for failure in category_failures
+                if failure.get("reason")
+                == "persisted include rows differ from the exhaustive source-derived literal directive inventory"
+            ]
+            category_failures.extend(
+                failure
+                for failures in source_semantic_failures.values()
+                for failure in failures
+            )
+            if source_includes and state == "not_applicable":
+                category_failures.append(
+                    {
+                        "case": source_key,
+                        "category": "includes",
+                        "reason": "nonempty source-derived include inventory cannot be not_applicable",
+                        "expected": cast("JSONValue", source_includes),
+                    }
+                )
         if state == "held":
             held += 1
         exact_count_required = (
             state in {"graded", "not_applicable"} and category in SOURCE_FACT_CATEGORIES
         )
-        if (state == "graded" and category_failures) or (
-            exact_count_required
-            and (not category_parity or not all(exact_counts.values()))
+        machine_include_failure = (
+            category == "includes"
+            and source_includes is not None
+            and bool(category_failures)
+        )
+        if (
+            machine_include_failure
+            or (state == "graded" and category_failures)
+            or (
+                exact_count_required
+                and (not category_parity or not all(exact_counts.values()))
+            )
         ):
             mismatches += 1
         category_contract = _object(contract["categories"], "contract.categories")
@@ -2890,7 +3216,9 @@ def grade_contract(
                     "held: no independent machine evaluator is implemented"
                     if category in semantic_holds
                     else "persisted-analysis-status"
-                    if category in MACHINE_VALIDATED_CATEGORIES
+                    if category == "coverage"
+                    else "source-derived exhaustive literal directive inventory"
+                    if category == "includes" and source_includes is not None
                     else "not-required: category was already held"
                 ),
                 "expected_count": expected_count,
