@@ -446,6 +446,98 @@ def test_unusable_partial_index_withholds_queries(
     assert campaign.results[-1]["reason"] == "full index is partial"
 
 
+def test_missing_daemon_member_reports_retained_index_evidence_without_traceback(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Report the failed daemon prerequisite concisely and preserve its evidence.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable run directory containing the failed index checkpoint.
+    caplog : pytest.LogCaptureFixture
+        Captures the concise prerequisite diagnostic.
+
+    Returns
+    -------
+    None
+        The message identifies its repository and retains the source result.
+    """
+    evidence = tmp_path / "stages/primary/fixture/index-full/result.json"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text(
+        json.dumps({"key": "primary/fixture/index-full", "status": "failed"})
+    )
+    spec = {"daemon_repository": "fixture", "profiles": [{"id": "primary"}]}
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"temporary_root": str(tmp_path)}))
+
+    with pytest.raises(RUNNER.MissingDaemonPrerequisite) as raised:
+        RUNNER.missing_daemon_prerequisite(spec, tmp_path)
+    campaign = RUNNER.Campaign(manifest, tmp_path, False)
+    result = RUNNER.record_extension_failure(
+        campaign, tmp_path, "daemons", raised.value
+    )
+
+    diagnostic = caplog.records[-1]
+    assert "repository 'fixture'" in diagnostic.message
+    assert "upstream index status is failed" in diagnostic.message
+    assert str(evidence) in diagnostic.message
+    assert diagnostic.exc_info is None
+    assert json.loads(evidence.read_text())["status"] == "failed"
+    assert campaign.results == [result]
+    assert (
+        json.loads((tmp_path / "stages/daemons/exception/result.json").read_text())
+        == result
+    )
+
+
+def test_missing_daemon_member_tolerates_non_object_index_record(
+    tmp_path: Path,
+) -> None:
+    """Keep the prerequisite diagnostic actionable for malformed JSON shape.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable run directory containing an unexpected JSON value.
+
+    Returns
+    -------
+    None
+        A non-object record is reported as unreadable instead of crashing.
+    """
+    evidence = tmp_path / "stages/primary/fixture/index-full/result.json"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("[]")
+    spec = {"daemon_repository": "fixture", "profiles": [{"id": "primary"}]}
+
+    with pytest.raises(RUNNER.MissingDaemonPrerequisite, match="status is unreadable"):
+        RUNNER.missing_daemon_prerequisite(spec, tmp_path)
+
+
+def test_unexpected_extension_failure_keeps_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Keep traceback diagnostics for faults outside expected prerequisites.
+
+    Parameters
+    ----------
+    caplog : pytest.LogCaptureFixture
+        Captures the unexpected extension failure diagnostic.
+
+    Returns
+    -------
+    None
+        The error remains logged with its traceback.
+    """
+    error = RuntimeError("unexpected runner fault")
+    RUNNER.log_stage_failure(error)
+
+    assert caplog.records[-1].exc_info is not None
+    assert caplog.records[-1].message == "Benchmark stage failed; retaining checkpoint"
+
+
 def test_architecture_timeout_stops_descendants(
     tmp_path: Path, assert_process_terminated: Callable[[int], None]
 ) -> None:

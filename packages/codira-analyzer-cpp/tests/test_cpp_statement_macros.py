@@ -756,7 +756,10 @@ def test_unclosed_invocation_remains_partial(tmp_path: Path) -> None:
         tmp_path,
         b"#define CHECK(X) static_assert(X)\nvoid entry() { CHECK(true; }\n",
     )
-    assert not result.index_symbols and result.status is not None
+    assert result.index_symbols and result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    assert [item.name for item in result.functions] == ["entry"]
+    assert not result.functions[0].calls
 
 
 def test_qualified_argument_keeps_original_template_spelling(tmp_path: Path) -> None:

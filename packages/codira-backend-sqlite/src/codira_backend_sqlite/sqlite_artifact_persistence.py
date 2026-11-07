@@ -1769,7 +1769,10 @@ def _flush_persisted_relationship_rows(
     None
         Relationship rows are inserted in deterministic order.
     """
-    for row in sorted(set(call_rows)):
+    for row in sorted(
+        set(call_rows),
+        key=lambda item: tuple((value is not None, str(value)) for value in item),
+    ):
         conn.execute(
             "INSERT INTO call_records"
             "(file_id, owner_module, owner_name, owner_stable_id, kind, base, target, "
@@ -1779,7 +1782,10 @@ def _flush_persisted_relationship_rows(
             row,
         )
 
-    for ref_row in sorted(set(ref_rows)):
+    for ref_row in sorted(
+        set(ref_rows),
+        key=lambda item: tuple((value is not None, str(value)) for value in item),
+    ):
         conn.execute(
             "INSERT INTO callable_ref_records"
             "(file_id, owner_module, owner_name, kind, ref_kind, base, "

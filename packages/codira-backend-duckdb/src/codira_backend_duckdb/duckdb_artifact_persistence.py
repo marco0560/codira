@@ -1733,14 +1733,20 @@ def _flush_persisted_relationship_rows(
     None
         Relationship rows are inserted in deterministic order.
     """
-    deduplicated_call_rows = sorted(set(call_rows))
+    deduplicated_call_rows = sorted(
+        set(call_rows),
+        key=lambda item: tuple((value is not None, str(value)) for value in item),
+    )
     if deduplicated_call_rows:
         if pending_call_rows is None:
             _flush_call_record_rows(conn, deduplicated_call_rows)
         else:
             pending_call_rows.extend(deduplicated_call_rows)
 
-    deduplicated_ref_rows = sorted(set(ref_rows))
+    deduplicated_ref_rows = sorted(
+        set(ref_rows),
+        key=lambda item: tuple((value is not None, str(value)) for value in item),
+    )
     if deduplicated_ref_rows:
         if pending_ref_rows is None:
             _flush_callable_ref_record_rows(conn, deduplicated_ref_rows)

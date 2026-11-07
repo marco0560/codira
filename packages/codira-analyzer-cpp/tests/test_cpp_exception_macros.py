@@ -147,11 +147,16 @@ def test_exception_alias_cannot_be_used_as_prefix(tmp_path: Path) -> None:
     Returns
     -------
     None
-        Recovery does not turn exception-only aliases into general annotations.
+        The written function remains visible while the invalid prefix stays partial.
     """
     path = tmp_path / "unit.cpp"
     path.write_text("#define API throw()\nint valid() API {}\nAPI int broken() {}\n")
-    assert not CppAnalyzer().analyze_file(path, tmp_path).index_symbols
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    assert result.index_symbols
+    assert [function.name for function in result.functions] == ["broken"]
+    assert result.functions[0].signature == "API int broken()"
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
 
 
 def test_exception_suffix_does_not_rewrite_body(tmp_path: Path) -> None:

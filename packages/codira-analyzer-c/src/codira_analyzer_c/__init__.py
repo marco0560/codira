@@ -2876,6 +2876,63 @@ def _top_level_nodes(root: Node) -> Iterator[Node]:
             )
 
 
+def _only_call_argument_errors(node: Node, source: bytes) -> bool:
+    """Check whether a complete definition has only typed-argument errors.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Source function definition with parser errors.
+    source : bytes
+        Original source bytes.
+
+    Returns
+    -------
+    bool
+        True only for explicit braces and bounded typed-argument errors.
+    """
+    body = node.child_by_field_name("body")
+    if (
+        body is None
+        or body.type != "compound_statement"
+        or source[body.start_byte : body.start_byte + 1] != b"{"
+        or source[body.end_byte - 1 : body.end_byte] != b"}"
+    ):
+        return False
+    errors = 0
+    pending = [node]
+    while pending:
+        current = pending.pop()
+        if current.is_missing:
+            return False
+        if current.type == "ERROR":
+            parent = current.parent
+            argument = None
+            while parent is not None and parent != body:
+                if parent.type == "argument_list":
+                    argument = parent
+                    break
+                parent = parent.parent
+            if (
+                argument is None
+                or argument.parent is None
+                or argument.parent.type != "call_expression"
+            ):
+                return False
+            prefix = source[argument.start_byte + 1 : current.start_byte].strip()
+            if (
+                source[current.start_byte : current.end_byte] != b","
+                or not prefix.endswith(b"*")
+                or _new_parser()
+                .parse(b"typedef " + prefix + b" __codira_type;")
+                .root_node.has_error
+            ):
+                return False
+            errors += 1
+        pending.extend(current.children)
+    return errors > 0
+
+
 def _function_declaration(node: Node) -> Node | None:
     """Follow a declared name's binding to distinguish functions from variables.
 
@@ -4622,7 +4679,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "32"
+    version = "33"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 
@@ -5551,6 +5608,101 @@ class CAnalyzer:
                     macros,
                 )
             )
+        if (
+            branch_views and (unresolved_conditions or incomplete_source_coverage)
+        ) or not any(analysis.index_symbols for analysis in analyses):
+            # A clean projection can omit an entire written alternative. Retain
+            # source-backed declarators, filtering calls affected by body errors.
+            original_root = parser.parse(source).root_node
+            definition_errors: dict[tuple[str, int, int], set[int]] = {}
+            for node in _top_level_nodes(original_root):
+                if node.type != "function_definition" or (
+                    not branch_views
+                    and node.has_error
+                    and not _only_call_argument_errors(node, source)
+                ):
+                    continue
+                declarator = node.child_by_field_name("declarator")
+                if declarator is None or declarator.has_error:
+                    continue
+                name = _unwrap_declarator_name(declarator, source)
+                if name is None:
+                    continue
+                error_lines: set[int] = set()
+                if node.has_error:
+                    pending_nodes = [node]
+                    while pending_nodes:
+                        current = pending_nodes.pop()
+                        if current.type == "ERROR" or current.is_missing:
+                            error_lines.update(
+                                range(
+                                    current.start_point.row + 1,
+                                    current.end_point.row + 2,
+                                )
+                            )
+                            if not branch_views:
+                                ancestor = current.parent
+                                while ancestor is not None and ancestor != node:
+                                    if ancestor.type == "call_expression":
+                                        error_lines.add(ancestor.start_point.row + 1)
+                                    ancestor = ancestor.parent
+                        pending_nodes.extend(current.children)
+                definition_errors[
+                    (name, node.start_point.row + 1, node.end_point.row + 1)
+                ] = error_lines
+            original_functions = _extract_functions(
+                original_root,
+                source,
+                module_name=_module_name_for_path(path, root),
+                owner_id=_symbol_owner_id(path, root),
+                macros=macros,
+            )
+            recovered_functions: list[FunctionArtifact] = []
+            for item in original_functions:
+                if item.end_lineno is None:
+                    continue
+                for start in range(item.lineno, item.lineno + 3):
+                    key = (item.name, start, item.end_lineno)
+                    if key not in definition_errors:
+                        continue
+                    error_lines = definition_errors[key]
+                    recovered_functions.append(
+                        replace(
+                            item,
+                            calls=tuple(
+                                call
+                                for call in item.calls
+                                if call.lineno not in error_lines
+                            ),
+                        )
+                    )
+                    break
+            if recovered_functions:
+                # A non-indexable view may contain artifacts from malformed
+                # subtrees; merging it must not promote those artifacts.
+                analyses = [
+                    analysis
+                    if analysis.index_symbols
+                    else replace(
+                        analysis,
+                        classes=(),
+                        functions=(),
+                        declarations=(),
+                        imports=(),
+                        documentation=(),
+                    )
+                    for analysis in analyses
+                ]
+                analyses.append(
+                    replace(
+                        analyses[0],
+                        functions=tuple(recovered_functions),
+                        declarations=(),
+                        imports=(),
+                        documentation=(),
+                        index_symbols=True,
+                    )
+                )
         result = (
             analyses[0]
             if len(analyses) == 1

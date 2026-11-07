@@ -16,11 +16,34 @@ from typing import TYPE_CHECKING
 
 import pytest
 from codira_analyzer_c import CAnalyzer, _new_parser
-from codira_analyzer_c.c_conditionals import c_parse_views
+from codira_analyzer_c.c_conditionals import _conditionals, c_parse_views
 from codira_analyzer_c.c_preprocessing import _parse_c_source
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def test_directives_in_comments_do_not_change_conditional_groups() -> None:
+    """Ignore directive-shaped comment text while retaining real branches.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Checks the number of groups and their real source boundaries.
+    """
+    source = (
+        b"/*\n#if NOT_A_DIRECTIVE\n*/\n#if FEATURE\nint a;\n#else\nint b;\n#endif\n"
+    )
+    parser = _new_parser()
+    groups = _conditionals(source, parser.parse(source).root_node, parser)
+    assert groups is not None
+    assert len(groups) == 1
+    assert groups[0].start == source.index(b"#if FEATURE")
+    assert len(groups[0].branches) == 2
 
 
 def test_shared_body_retains_signatures_coordinates_and_calls(tmp_path: Path) -> None:
@@ -535,3 +558,73 @@ def test_documentation_owners_follow_final_variant_ids(tmp_path: Path) -> None:
     docs = [d for d in result.documentation if d.owner_kind == "function"]
     assert len(docs) == 2 and {d.owner_stable_id for d in docs} == ids
     assert len({d.stable_id for d in docs}) == 2
+
+
+def test_incomplete_branch_preserves_clean_original_definitions(tmp_path: Path) -> None:
+    """Retain independently written functions from an unparseable branch view.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Repository with clean definitions and a malformed conditional sibling.
+
+    Returns
+    -------
+    None
+        Both written alternatives survive, the malformed declaration is omitted,
+        and the written call is not given an unproven target identity.
+    """
+    source = (
+        "#if FEATURE\n"
+        "int shown(void) { return helper(); }\n"
+        "void broken( {\n"
+        "#else\n"
+        "int other(void) { return 2; }\n"
+        "#endif\n"
+    )
+    path = tmp_path / "conditional.c"
+    path.write_text(source)
+    result = CAnalyzer().analyze_file(path, tmp_path)
+    assert [(item.name, item.lineno) for item in result.functions] == [
+        ("shown", 2),
+        ("other", 5),
+    ]
+    assert [call.target for call in result.functions[0].calls] == ["helper"]
+    assert result.functions[0].calls[0].target_identity is None
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+
+
+def test_source_recovery_retains_written_names_without_broken_calls(
+    tmp_path: Path,
+) -> None:
+    """Recover written names without promoting calls from malformed bodies.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Repository with syntax errors in both conditional alternatives.
+
+    Returns
+    -------
+    None
+        Written names survive, calls on error lines do not, and coverage is partial.
+    """
+    path = tmp_path / "partial.c"
+    path.write_text(
+        "#if FEATURE\n"
+        "int shown(void) { return 1; }\n"
+        "int broken(void) { return helper( ? ); }\n"
+        "#else\n"
+        "int other(void) { return helper( ? ); }\n"
+        "#endif\n"
+    )
+    result = CAnalyzer().analyze_file(path, tmp_path)
+    assert [(item.name, item.lineno) for item in result.functions] == [
+        ("shown", 2),
+        ("broken", 3),
+        ("other", 5),
+    ]
+    assert all(not item.calls for item in result.functions)
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"

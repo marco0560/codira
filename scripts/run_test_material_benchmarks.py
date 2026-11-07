@@ -2813,6 +2813,108 @@ def reject(message: str) -> NoReturn:
     raise ValueError(message)
 
 
+class MissingDaemonPrerequisite(ValueError):
+    """Identify a missing prerequisite for a required daemon measurement.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Exception instances carry the actionable upstream index diagnostic.
+    """
+
+
+def log_stage_failure(error: Exception) -> None:
+    """Log expected prerequisites concisely and retain unexpected tracebacks.
+
+    Parameters
+    ----------
+    error : Exception
+        Stage failure being reported.
+
+    Returns
+    -------
+    None
+        The diagnostic is written to the benchmark logger.
+    """
+    if isinstance(error, MissingDaemonPrerequisite):
+        LOGGER.error("%s; retaining checkpoint", error)
+    else:
+        LOGGER.exception("Benchmark stage failed; retaining checkpoint", exc_info=error)
+
+
+def record_extension_failure(
+    campaign: Campaign, root: Path, key: str, error: Exception
+) -> dict[str, Any]:
+    """Log and persist a failed extension stage without losing its checkpoint.
+
+    Parameters
+    ----------
+    campaign : Campaign
+        Active campaign whose result summary is being accumulated.
+    root : pathlib.Path
+        Durable run directory.
+    key : str
+        Extension stage identity.
+    error : Exception
+        Failure to retain as a terminal stage result.
+
+    Returns
+    -------
+    dict[str, Any]
+        Failed result written to the stage checkpoint and campaign results.
+    """
+    log_stage_failure(error)
+    result = {"key": key + "/exception", "status": "failed", "error": str(error)}
+    campaign.results.append(result)
+    write(root / "stages" / result["key"] / "result.json", result)
+    return result
+
+
+def missing_daemon_prerequisite(spec: dict[str, Any], root: Path) -> NoReturn:
+    """Raise an actionable error linked to the retained upstream index record.
+
+    Parameters
+    ----------
+    spec : dict[str, Any]
+        Validated benchmark specification.
+    root : pathlib.Path
+        Run directory holding durable stage records.
+
+    Returns
+    -------
+    NoReturn
+        Always raises with the daemon repository and its index evidence path.
+
+    Raises
+    ------
+    MissingDaemonPrerequisite
+        The required daemon repository did not produce a usable index member.
+    """
+    repository = spec["daemon_repository"]
+    profile = spec["profiles"][0]["id"]
+    evidence = root / "stages" / profile / repository / "index-full" / "result.json"
+    status = "missing"
+    if evidence.is_file():
+        try:
+            payload = json.loads(evidence.read_text())
+            status = (
+                payload.get("status", "unknown")
+                if isinstance(payload, dict)
+                else "unreadable"
+            )
+        except (OSError, json.JSONDecodeError):
+            status = "unreadable"
+    message = (
+        f"daemon stage requires repository {repository!r}; upstream index status "
+        f"is {status}; evidence: {evidence}"
+    )
+    raise MissingDaemonPrerequisite(message)  # noqa: TRY003
+
+
 def tool_arguments(
     tool: str, query: str, symbol: dict[str, Any] | None
 ) -> dict[str, Any] | None:
@@ -3611,17 +3713,10 @@ def main() -> int:
         ]:
             try:
                 if key == "daemons" and daemon is None:
-                    reject("required daemon member did not index successfully")
+                    missing_daemon_prerequisite(spec, root)
                 execute_extension(operation)
-            except Exception as error:
-                LOGGER.exception("Benchmark stage failed; retaining checkpoint")
-                result = {
-                    "key": key + "/exception",
-                    "status": "failed",
-                    "error": str(error),
-                }
-                campaign.results.append(result)
-                write(root / "stages" / result["key"] / "result.json", result)
+            except Exception as error:  # noqa: BLE001
+                record_extension_failure(campaign, root, key, error)
             finally:
                 campaign.progress.omit(
                     key, "extension prerequisites unavailable or orchestration failed"

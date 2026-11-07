@@ -331,13 +331,23 @@ def _flush_pending_relationship_rows(
     if pending_call_rows:
         _flush_call_record_rows(
             conn,
-            sorted(set(pending_call_rows)),
+            sorted(
+                set(pending_call_rows),
+                key=lambda item: tuple(
+                    (value is not None, str(value)) for value in item
+                ),
+            ),
             profiler=profiler,
         )
     if pending_ref_rows:
         _flush_callable_ref_record_rows(
             conn,
-            sorted(set(pending_ref_rows)),
+            sorted(
+                set(pending_ref_rows),
+                key=lambda item: tuple(
+                    (value is not None, str(value)) for value in item
+                ),
+            ),
             profiler=profiler,
         )
 

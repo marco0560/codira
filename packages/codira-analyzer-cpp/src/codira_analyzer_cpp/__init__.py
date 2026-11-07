@@ -2900,8 +2900,9 @@ class _ClassBuilder:
         """
         key = (pending.artifact.stable_id, pending.binding_key)
         current = self.methods_by_key.get(key)
-        if current is None or _prefer_pending_function(current, pending) is pending:
-            self.methods_by_key[key] = pending
+        self.methods_by_key[key] = (
+            pending if current is None else _prefer_pending_function(current, pending)
+        )
 
     def build(self) -> ClassArtifact:
         """
@@ -3223,6 +3224,105 @@ def _annotated_function_call_name(node: Node, source: bytes) -> str | None:
     return None
 
 
+def _missing_scope_annotation_name(node: Node, source: bytes) -> str | None:
+    """Recover a written name after a return type mistaken for a namespace.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Function declarator in the original parse tree.
+    source : bytes
+        Original source bytes.
+
+    Returns
+    -------
+    str or None
+        The written identifier only for the bounded missing-scope pattern.
+    """
+    parent = node.parent
+    if parent is None or parent.type not in {
+        "function_definition",
+        "declaration",
+        "field_declaration",
+    }:
+        return None
+    declared_type = parent.child_by_field_name("type")
+    qualified = node.child_by_field_name("declarator")
+    parameters = node.child_by_field_name("parameters")
+    if (
+        declared_type is None
+        or re.fullmatch(
+            rb"[A-Z][A-Z_0-9]*",
+            source[declared_type.start_byte : declared_type.end_byte],
+        )
+        is None
+        or qualified is None
+        or qualified.type != "qualified_identifier"
+        or parameters is None
+        or parameters.has_error
+    ):
+        return None
+    nested = qualified
+    while True:
+        nested_name = nested.child_by_field_name("name")
+        if nested_name is None or nested_name.type != "qualified_identifier":
+            break
+        nested = nested_name
+    if nested is not qualified:
+        nested_scope = nested.child_by_field_name("scope")
+        nested_name = nested.child_by_field_name("name")
+        nested_children = nested.children
+        if (
+            nested_scope is not None
+            and nested_scope.type == "namespace_identifier"
+            and nested_name is not None
+            and nested_name.type == "identifier"
+            and not nested_scope.has_error
+            and not nested_name.has_error
+            and len(nested_children) == 3
+            and nested_children[1].is_missing
+            and nested_children[1].type == "::"
+            and source[nested_scope.end_byte : nested_name.start_byte].isspace()
+            and not source[nested_name.end_byte : parameters.start_byte].strip()
+        ):
+            return _node_text(nested_name, source)
+    scope = qualified.child_by_field_name("scope")
+    name = qualified.child_by_field_name("name")
+    if (
+        scope is None
+        or scope.type != "namespace_identifier"
+        or name is None
+        or name.type != "identifier"
+        or scope.has_error
+        or name.has_error
+    ):
+        return None
+    children = qualified.children
+    if (
+        len(children) == 3
+        and children[1].is_missing
+        and children[1].type == "::"
+        and source[scope.end_byte : name.start_byte].isspace()
+    ):
+        return _node_text(name, source)
+    if len(children) == 4 and children[1].type == "ERROR":
+        error = children[1]
+        if (
+            len(error.named_children) == 1
+            and error.named_children[0].type == "identifier"
+            and source[scope.end_byte : error.start_byte].isspace()
+            and re.fullmatch(
+                rb"[A-Za-z_][A-Za-z_0-9]*\s*::\s*[A-Za-z_][A-Za-z_0-9]*",
+                source[error.start_byte : name.end_byte],
+            )
+            is not None
+        ):
+            return _normalize_signature(
+                source[error.start_byte : name.end_byte].decode("utf-8")
+            ).replace(" ", "")
+    return None
+
+
 def _function_declarator_name(node: Node, source: bytes) -> str | None:
     """
     Resolve the callable identifier owned by one function declarator.
@@ -3239,6 +3339,9 @@ def _function_declarator_name(node: Node, source: bytes) -> str | None:
     str | None
         Callable identifier text when resolvable.
     """
+    recovered_name = _missing_scope_annotation_name(node, source)
+    if recovered_name is not None:
+        return recovered_name
     direct_declarator = node.child_by_field_name("declarator")
     if direct_declarator is not None and direct_declarator.type in {
         "identifier",
@@ -3395,8 +3498,8 @@ def _callable_binding_key(declarator: Node, source: bytes) -> tuple[str, ...]:
     Returns
     -------
     tuple[str, ...]
-        Parameter, cv/ref/constraint and lexical conditional-branch syntax. This
-        does not resolve type aliases or compiler-dependent type equivalence.
+        Parameter, cv/ref, return-SFINAE and lexical conditional-branch syntax.
+        This does not resolve type aliases or compiler-dependent type equivalence.
     """
     parameters = declarator.child_by_field_name("parameters")
     if parameters is None:
@@ -3460,7 +3563,27 @@ def _callable_binding_key(declarator: Node, source: bytes) -> tuple[str, ...]:
         }:
             conditions.append(f"{parent.type}:{parent.start_byte}")
         parent = parent.parent
-    return (*types, qualifiers, "/".join(conditions))
+    return_constraints: set[str] = set()
+    name_node = declarator.child_by_field_name("declarator")
+    pending = [name_node] if name_node is not None else []
+    declared_type = (
+        declarator.parent.child_by_field_name("type")
+        if declarator.parent is not None
+        else None
+    )
+    if declared_type is not None:
+        pending.append(declared_type)
+    while pending:
+        child = pending.pop()
+        name = child.child_by_field_name("name")
+        if (
+            child.type == "template_type"
+            and name is not None
+            and _node_text(name, source) in {"enable_if", "enable_if_t"}
+        ):
+            return_constraints.add(_canonical_node_text(child, source))
+        pending.extend(child.named_children)
+    return (*types, qualifiers, "/".join(conditions), *sorted(return_constraints))
 
 
 def _qualified_call_parts(node: Node, source: bytes) -> tuple[str, ...]:
@@ -3758,34 +3881,21 @@ def _initializer_candidate_declarations(body: Node) -> tuple[Node, ...]:
         Source-ordered declaration nodes that may represent direct initialization.
     """
     candidates: list[Node] = []
-
-    def visit(node: Node, *, root: bool = False) -> None:
-        """Walk statement containers while preserving nested callable boundaries.
-
-        Parameters
-        ----------
-        node : tree_sitter.Node
-            Current statement or compound scope.
-        root : bool, optional
-            Whether this is the body whose parameter bindings are supplied.
-
-        Returns
-        -------
-        None
-            Candidate declarations are appended in source order.
-        """
-        if not root and node.type in {"lambda_expression", "function_definition"}:
-            return
+    pending: list[tuple[Node, bool]] = [(body, True)]
+    while pending:
+        node, is_root = pending.pop()
+        if not is_root and node.type in {"lambda_expression", "function_definition"}:
+            continue
         if node.type == "declaration":
             if any(
                 child.type == "function_declarator" for child in node.named_children
             ):
                 candidates.append(node)
-            return
-        for child in node.named_children:
-            visit(child)
+            continue
+        pending.extend(
+            (cast("Node", child), False) for child in reversed(node.named_children)
+        )
 
-    visit(body, root=True)
     return tuple(candidates)
 
 
@@ -5627,8 +5737,11 @@ class _CppAnalysisBuilder:
         if pending.class_name is None:
             key = (pending.artifact.stable_id, pending.binding_key)
             current = self.functions_by_key.get(key)
-            if current is None or _prefer_pending_function(current, pending) is pending:
-                self.functions_by_key[key] = pending
+            self.functions_by_key[key] = (
+                pending
+                if current is None
+                else _prefer_pending_function(current, pending)
+            )
             return
 
         if pending.class_branch_identity is None:
@@ -5681,6 +5794,22 @@ class _CppAnalysisBuilder:
             The declaration map is updated in place when a declaration exists.
         """
         if declaration is not None:
+            current = self.declarations_by_id.get(declaration.stable_id)
+            if (
+                declaration.kind == "type_alias"
+                and current is not None
+                and (declaration.lineno, declaration.signature)
+                != (current.lineno, current.signature)
+            ):
+                digest = hashlib.sha256(
+                    declaration.signature.encode("utf-8")
+                ).hexdigest()[:12]
+                declaration = replace(
+                    declaration,
+                    stable_id=(
+                        f"{declaration.stable_id}:source:{declaration.lineno}:{digest}"
+                    ),
+                )
             self.declarations_by_id[declaration.stable_id] = declaration
 
     def _handle_type_declaration(
@@ -6753,7 +6882,7 @@ def _remove_macro_named_callables(
 def _retain_clean_partial_symbols(
     result: AnalysisResult, root: Node, source: bytes
 ) -> AnalysisResult:
-    """Retain callable and type facts outside Tree-Sitter error ranges.
+    """Retain source-backed callable and type facts despite parser recovery.
 
     Parameters
     ----------
@@ -6767,16 +6896,91 @@ def _retain_clean_partial_symbols(
     Returns
     -------
     codira.models.AnalysisResult
-        Complete results unchanged, or conservative clean entities retained
-        with partial coverage after syntax recovery.
+        Complete results unchanged, or clean entities and written callable
+        declarators retained with partial coverage after syntax recovery.
     """
     if not root.has_error or result.status is None:
         return result
     error_lines: set[int] = set()
     error_positions: list[tuple[int, int, int, int]] = []
+    clean_definitions: set[tuple[str, int, int | None]] = set()
     pending = [root]
     while pending:
         node = pending.pop()
+        if node.type in {"declaration", "field_declaration"}:
+            declarator = node.child_by_field_name("declarator")
+            if declarator is not None and declarator.type == "function_declarator":
+                declaration_name = _missing_scope_annotation_name(declarator, source)
+                declared_type = node.child_by_field_name("type")
+                errors = [
+                    child for child in node.named_children if child.type == "ERROR"
+                ]
+                if (
+                    declaration_name is None
+                    and not declarator.has_error
+                    and declared_type is not None
+                    and re.fullmatch(
+                        rb"[A-Z][A-Z_0-9]*",
+                        source[declared_type.start_byte : declared_type.end_byte],
+                    )
+                    is not None
+                    and len(errors) == 1
+                    and errors[0].end_byte <= declarator.start_byte
+                    and re.fullmatch(
+                        rb"\s*(?:(?:inline|constexpr|static|virtual|const)\s+)*(?:(?!operator\b)[A-Za-z_][A-Za-z_0-9]*(?:::[A-Za-z_][A-Za-z_0-9]*)*)\s*",
+                        source[errors[0].start_byte : errors[0].end_byte],
+                    )
+                    is not None
+                ):
+                    declaration_name = _unwrap_declarator_name(declarator, source)
+                if declaration_name is not None:
+                    clean_definitions.add(
+                        (
+                            declaration_name.rsplit("::", 1)[-1],
+                            node.start_point.row + 1,
+                            None,
+                        )
+                    )
+        if node.type == "function_definition":
+            declarator = node.child_by_field_name("declarator")
+            declared_type = node.child_by_field_name("type")
+            errors = [child for child in node.named_children if child.type == "ERROR"]
+            if declarator is not None:
+                missing_scope_name = _missing_scope_annotation_name(declarator, source)
+                if missing_scope_name is not None:
+                    clean_definitions.add(
+                        (
+                            missing_scope_name.rsplit("::", 1)[-1],
+                            node.start_point.row + 1,
+                            node.end_point.row + 1,
+                        )
+                    )
+            if (
+                declarator is not None
+                and not declarator.has_error
+                and declared_type is not None
+                and re.fullmatch(
+                    rb"[A-Z][A-Z_0-9]*",
+                    source[declared_type.start_byte : declared_type.end_byte],
+                )
+                is not None
+                and len(errors) == 1
+                and errors[0].end_byte <= declarator.start_byte
+                and re.fullmatch(
+                    rb"\s*(?:(?:inline|constexpr|static|virtual|const)\s+)*(?:(?!operator\b)[A-Za-z_][A-Za-z_0-9]*(?:::[A-Za-z_][A-Za-z_0-9]*)*)\s*",
+                    source[errors[0].start_byte : errors[0].end_byte],
+                )
+                is not None
+            ):
+                name = _unwrap_declarator_name(declarator, source)
+                if name is not None:
+                    clean_definitions.add(
+                        (
+                            name.rsplit("::", 1)[-1],
+                            node.start_point.row + 1,
+                            node.end_point.row + 1,
+                        )
+                    )
         if node.type == "ERROR" or node.is_missing:
             first = node.start_point.row + 1
             last = max(first, node.end_point.row + 1)
@@ -6789,7 +6993,7 @@ def _retain_clean_partial_symbols(
                     node.end_point.column,
                 )
             )
-        pending.extend(node.named_children)
+        pending.extend(node.children)
     if not error_lines:
         return replace(result, index_symbols=False)
 
@@ -6801,6 +7005,23 @@ def _retain_clean_partial_symbols(
         if clean_span(function.lineno, function.end_lineno):
             return function
         if function.lineno in error_lines:
+            recovered_name = function.name.rsplit("::", 1)[-1]
+            if any(
+                (recovered_name, start, function.end_lineno) in clean_definitions
+                for start in range(function.lineno, function.lineno + 3)
+            ):
+                return replace(
+                    function,
+                    calls=tuple(
+                        call
+                        for call in function.calls
+                        if all(
+                            not (first <= call.lineno <= last)
+                            or (last == call.lineno and end_column <= call.col_offset)
+                            for first, _, last, end_column in error_positions
+                        )
+                    ),
+                )
             lines = source.splitlines()
             source_line = (
                 lines[function.lineno - 1] if 0 < function.lineno <= len(lines) else b""
@@ -6852,6 +7073,10 @@ def _retain_clean_partial_symbols(
         for class_artifact in result.classes
         if class_artifact.lineno not in error_lines
     )
+    declarations = tuple(
+        item for item in result.declarations if item.lineno not in error_lines
+    )
+    imports = tuple(item for item in result.imports if item.lineno not in error_lines)
     reliable = tuple(
         category
         for category, present in (
@@ -6880,8 +7105,8 @@ def _retain_clean_partial_symbols(
         result,
         classes=classes,
         functions=functions,
-        declarations=(),
-        imports=(),
+        declarations=declarations,
+        imports=imports,
         documentation=(),
         index_symbols=bool(functions or classes),
         status=status,
@@ -7676,7 +7901,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "52"
+    version = "53"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",

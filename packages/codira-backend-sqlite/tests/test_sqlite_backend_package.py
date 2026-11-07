@@ -36,6 +36,9 @@ from codira_backend_sqlite.sqlite_docstring_policy import (
     _should_require_raises_section,
 )
 from codira_backend_sqlite.sqlite_embedding_payload import _embedding_content_hash
+from codira_backend_sqlite.sqlite_artifact_persistence import (
+    _flush_persisted_relationship_rows,
+)
 from codira_backend_sqlite.sqlite_support import _flush_pending_embedding_rows
 
 
@@ -87,6 +90,87 @@ def test_sqlite_query_batch_helpers_preserve_binding_limits() -> None:
     assert _placeholders([1, 2, 3]) == "?,?,?"
     paths = [str(index) for index in range(901)]
     assert [len(batch) for batch in _path_batches(paths)] == [900, 1]
+
+
+def test_sqlite_relationship_persistence_sorts_nullable_values_and_deduplicates() -> (
+    None
+):
+    """Persist distinct nullable and empty relationship fields in SQLite.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts nullable values remain distinct and duplicate rows
+        are written once for both relationship types.
+    """
+    connection = sqlite3.connect(":memory:")
+    try:
+        for statement in DDL:
+            connection.execute(statement)
+        connection.execute(
+            """INSERT INTO files(
+                id, path, hash, mtime, size, analyzer_name, analyzer_version
+            ) VALUES (1, 'sample.py', 'hash', 1.0, 1, 'python', '1')"""
+        )
+        call_rows = [
+            (
+                1,
+                "pkg",
+                "caller",
+                None,
+                "name",
+                "",
+                "target",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                1,
+                0,
+            ),
+            (
+                1,
+                "pkg",
+                "caller",
+                "",
+                "name",
+                "",
+                "target",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                1,
+                0,
+            ),
+        ]
+        ref_rows = [
+            (1, "pkg", "caller", "name", "attribute", "", "target", None, None, 2, 0),
+            (1, "pkg", "caller", "name", "attribute", "", "target", "", None, 3, 0),
+        ]
+        _flush_persisted_relationship_rows(
+            connection,
+            call_rows=[*call_rows, call_rows[0]],
+            ref_rows=[*ref_rows, ref_rows[0]],
+        )
+
+        assert connection.execute(
+            "SELECT owner_stable_id FROM call_records ORDER BY owner_stable_id IS NOT NULL"
+        ).fetchall() == [(None,), ("",)]
+        assert connection.execute(
+            "SELECT external_target_kind FROM callable_ref_records "
+            "ORDER BY external_target_kind IS NOT NULL"
+        ).fetchall() == [(None,), ("",)]
+    finally:
+        connection.close()
 
 
 def test_sqlite_docstring_policy_preserves_source_exclusions(tmp_path: Path) -> None:
@@ -142,7 +226,7 @@ def test_sqlite_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.7"
+    assert project["project"]["version"] == "2.0.8"
     assert project["project"]["dependencies"] == ["codira>=2.0.0,<3.0.0"]
     assert project["project"]["entry-points"]["codira.backends"] == {
         "sqlite": "codira_backend_sqlite:build_backend"

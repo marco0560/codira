@@ -183,7 +183,15 @@ def test_malformed_complex_syntax_keeps_diagnostics(
     """
     path = tmp_path / "bad.c"
     path.write_text(source)
-    assert not CAnalyzer().analyze_file(path, tmp_path).index_symbols
+    result = CAnalyzer().analyze_file(path, tmp_path)
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    if source == "double f(void) { return __real__; }":
+        assert result.index_symbols
+        assert [item.name for item in result.functions] == ["f"]
+        assert not result.functions[0].calls
+    else:
+        assert not result.index_symbols
 
 
 def test_complex_views_keep_crlf_and_utf8_call_positions(tmp_path: Path) -> None:

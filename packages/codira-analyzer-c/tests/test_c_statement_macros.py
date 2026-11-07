@@ -24,6 +24,62 @@ from codira_analyzer_c.c_statement_macros import (
 _LOOP = b"#define ITERATE(cell, list) for (int cell = 0; cell < 3; cell++)\n"
 
 
+def test_partial_function_with_typed_macro_argument(tmp_path: Path) -> None:
+    """Keep a written function while omitting calls enclosing an argument error.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable source directory.
+
+    Returns
+    -------
+    None
+        Checks source coordinates, partial coverage and unaffected calls.
+    """
+    path = tmp_path / "sample.c"
+    path.write_text(
+        'HEADER_MAGIC(.name="x", .version=V);\n'
+        "int run(void) {\n"
+        "  void *p = wrap(\n"
+        "    palloc_array(\n"
+        "      char *, n));\n"
+        "  return helper(p);\n"
+        "}\n"
+    )
+    result = CAnalyzer().analyze_file(path, tmp_path)
+    assert result.index_symbols
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    assert [(function.name, function.lineno) for function in result.functions] == [
+        ("run", 2)
+    ]
+    assert [call.target for call in result.functions[0].calls] == ["helper"]
+
+
+def test_typed_macro_argument_does_not_recover_unclosed_function(
+    tmp_path: Path,
+) -> None:
+    """Do not promote a function without an explicit closing brace.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable source directory.
+
+    Returns
+    -------
+    None
+        Checks that the malformed source remains non-indexable.
+    """
+    path = tmp_path / "sample.c"
+    path.write_text("int run(void) { void *p = palloc_array(char *, n);\n")
+    result = CAnalyzer().analyze_file(path, tmp_path)
+    assert not result.index_symbols
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+
+
 @pytest.mark.parametrize("ending", [b"\n", b"\r\n"])
 def test_loop_prefix_preserves_arguments_body_calls_and_positions(
     tmp_path: Path, ending: bytes

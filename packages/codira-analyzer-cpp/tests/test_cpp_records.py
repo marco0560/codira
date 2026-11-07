@@ -245,6 +245,74 @@ def test_overloads_merge_redeclarations_without_losing_types_or_qualifiers(
     assert {method.end_lineno for method in operators} == {10, 11}
 
 
+def test_return_constrained_redeclaration_merges_with_definition(
+    tmp_path: Path,
+) -> None:
+    """Merge a constrained prototype and definition with identical spelling.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source directory.
+
+    Returns
+    -------
+    None
+        Checks one callable points to its definition.
+    """
+    path = tmp_path / "constraints.cpp"
+    path.write_text(
+        "template<class T> typename std::enable_if<P<T>::value,int>::type run(T x);\n"
+        "template<class T> typename std::enable_if<P<T>::value,int>::type run(T x) { return x; }\n"
+    )
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    functions = [function for function in result.functions if function.name == "run"]
+    assert len(functions) == 1
+    assert functions[0].lineno == 2
+
+
+def test_documented_declarations_merge_into_later_definitions(tmp_path: Path) -> None:
+    """Keep implementation coordinates and earlier declaration documentation.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source directory.
+
+    Returns
+    -------
+    None
+        Both functions and methods retain bodies, calls and documentation.
+    """
+    path = tmp_path / "documented.cpp"
+    path.write_text(
+        "// Function documentation.\n"
+        "int calculate(int value);\n"
+        "int calculate(int value) { return helper(value); }\n"
+        "class Widget { public:\n"
+        "  // Method documentation.\n"
+        "  int run(int value);\n"
+        "};\n"
+        "int Widget::run(int value) { return helper(value); }\n"
+        "int later(int value) { return helper(value); }\n"
+        "// Later documentation.\n"
+        "int later(int value);\n"
+    )
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    function = next(item for item in result.functions if item.name == "calculate")
+    later = next(item for item in result.functions if item.name == "later")
+    method = result.classes[0].methods[0]
+    assert function.lineno == 3
+    assert function.docstring and "Function documentation" in function.docstring
+    assert function.calls[0].target == "helper"
+    assert method.lineno == 8
+    assert method.docstring and "Method documentation" in method.docstring
+    assert method.calls[0].target == "helper"
+    assert later.lineno == 9
+    assert later.docstring and "Later documentation" in later.docstring
+    assert later.calls[0].target == "helper"
+
+
 def test_conditional_definitions_keep_both_source_variants(tmp_path: Path) -> None:
     """Avoid choosing one configuration when duplicate bindings occupy branches.
 

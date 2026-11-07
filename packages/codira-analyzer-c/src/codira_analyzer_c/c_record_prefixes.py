@@ -170,19 +170,24 @@ def record_prefix_source(
         Equal-width projection. Source signatures, line endings and following
         declarations retain their original bytes and coordinates.
     """
+    if not definitions:
+        return source
     projected = bytearray(source)
     pending = [root]
     while pending:
         node = pending.pop()
         if node.type in _OPAQUE:
             continue
-        parent = node.parent
+        if node.type != "type_identifier":
+            pending.extend(node.children)
+            continue
         token = source[node.start_byte : node.end_byte]
+        if token not in definitions or node.start_byte < definitions[token]:
+            pending.extend(node.children)
+            continue
+        parent = node.parent
         if (
-            node.type == "type_identifier"
-            and token in definitions
-            and node.start_byte >= definitions[token]
-            and parent is not None
+            parent is not None
             and parent.type == "field_declaration"
             and parent.child_by_field_name("type") == node
             and parent.parent is not None

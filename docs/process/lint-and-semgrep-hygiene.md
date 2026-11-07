@@ -322,6 +322,8 @@ host parser.
 
 
 - `scripts/clang_parity_qualification.py:3108` (BLE001): Retain terminal evidence for every failed native preparation attempt.
+- `scripts/run_test_material_benchmarks.py:2915` (TRY003): Raise the dedicated daemon prerequisite exception with the repository, upstream index status, and retained evidence path in one actionable diagnostic.
+- `scripts/run_test_material_benchmarks.py:3718` (BLE001): Persist extension failures uniformly while the logger keeps concise diagnostics for expected prerequisites and tracebacks for unexpected faults.
 - `scripts/clang_reference_facts.py:624` (C901): The reference normalizer applies one physical ownership policy across declaration, type, field and call categories.
 - `scripts/clang_reference_facts.py:804` (C901, PLR0912): The nested AST visitor keeps lexical owner and callable stacks together with the corresponding source-range checks.
 - `scripts/clang_reference_facts.py:1372` (C901, PLR0912): Profile input validation checks each source, dependency, compiler, resource and receipt binding before capture or reuse.

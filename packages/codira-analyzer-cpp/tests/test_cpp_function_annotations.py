@@ -19,6 +19,154 @@ from codira_analyzer_cpp.cpp_preprocessing import _macro_call_arguments, _nodes
 from codira_analyzer_cpp.cpp_syntax import _new_parser
 
 
+def test_named_return_misparsed_as_qualified_name(tmp_path: Path) -> None:
+    """Preserve the written callable when a return type is mistaken for a scope.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary source directory.
+
+    Returns
+    -------
+    None
+        Checks the callable name and partial coverage.
+    """
+    path = tmp_path / "math.h"
+    path.write_text(
+        "namespace math {\n"
+        "LIBC_INLINE DoubleDouble calculate(const DoubleDouble &x) { return x; }\n"
+        "}\n"
+    )
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    assert [function.name for function in result.functions] == ["math::calculate"]
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+
+
+def test_annotated_template_return_preserves_name_and_constraints(
+    tmp_path: Path,
+) -> None:
+    """Keep written names and distinct return-constrained overloads.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary source directory.
+
+    Returns
+    -------
+    None
+        Checks source names, lines and distinct callable identities.
+    """
+    path = tmp_path / "math.cpp"
+    path.write_text(
+        "namespace math {\n"
+        "template<class T> API typename std::enable_if<P<T>::value,int>::type run(T x) { return x; }\n"
+        "template<class T> API typename std::enable_if<!P<T>::value,int>::type run(T x) { return x; }\n"
+        "}\n"
+    )
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    functions = [
+        function for function in result.functions if function.name == "math::run"
+    ]
+    assert [function.lineno for function in functions] == [2, 3]
+    assert len({function.stable_id for function in functions}) == 2
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+
+
+def test_named_return_declaration_misparsed_as_scope(tmp_path: Path) -> None:
+    """Keep the callable name in a source declaration with an annotation.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary source directory.
+
+    Returns
+    -------
+    None
+        Checks the written declaration name and partial coverage.
+    """
+    path = tmp_path / "api.h"
+    path.write_text("API Result calculate(int value);\n")
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    assert [function.name for function in result.functions] == ["calculate"]
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+
+
+def test_named_return_with_written_qualified_name(tmp_path: Path) -> None:
+    """Keep an explicit callable qualifier after an unknown annotation.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary source directory.
+
+    Returns
+    -------
+    None
+        Checks the exact source-written qualified callable name.
+    """
+    path = tmp_path / "math.cpp"
+    path.write_text("LIBC_INLINE DoubleDouble math::calculate() { return {}; }\n")
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    assert [function.name for function in result.functions] == ["math::calculate"]
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+
+
+def test_unknown_annotation_named_return_preserves_written_name(tmp_path: Path) -> None:
+    """Retain a source-backed function with a named return type.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary source directory.
+
+    Returns
+    -------
+    None
+        Checks the name and partial coverage.
+    """
+    path = tmp_path / "unit.h"
+    path.write_text(
+        "namespace LIBC_NAMESPACE_DECL { namespace math {\n"
+        "LIBC_INLINE bfloat16 calculate(double x) { return x; }\n"
+        "}}\n"
+    )
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    functions = [*result.functions, *(m for cls in result.classes for m in cls.methods)]
+    names = {function.name for function in functions}
+    assert "LIBC_NAMESPACE_DECL::math::calculate" in names
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+
+
+def test_unknown_annotation_conversion_is_not_named_after_type(tmp_path: Path) -> None:
+    """Do not mistake a conversion operator's type for a function name.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary source directory.
+
+    Returns
+    -------
+    None
+        Checks that the return type is not indexed as a function.
+    """
+    path = tmp_path / "conversion.h"
+    path.write_text(
+        "class S {\npublic:\n  LIBC_INLINE operator bool() const { return true; }\n};\n"
+    )
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    functions = [*result.functions, *(m for cls in result.classes for m in cls.methods)]
+    assert "bool" not in {function.name for function in functions}
+
+
 @pytest.mark.parametrize(
     ("definitions", "clean"),
     [
@@ -122,7 +270,12 @@ def test_function_annotation_alternatives(
         assert result.index_symbols
         assert result.status is not None
         assert result.status.coverage_state.value == "partial"
-        assert [function.name for function in result.functions] == ["helper"]
+        assert [function.name for function in result.functions] == ["helper", "run"]
+        function = next(f for f in result.functions if f.name == "run")
+        assert function.signature == "API int run(int value)"
+        assert function.parameters == ("value",)
+        assert [call.target for call in function.calls] == ["helper"]
+        assert all(call.target_identity is None for call in function.calls)
 
 
 @pytest.mark.parametrize("before", [True, False])
@@ -139,7 +292,7 @@ def test_function_annotation_availability(tmp_path: Path, before: bool) -> None:
     Returns
     -------
     None
-        A forward definition cannot license the earlier source use.
+        A late definition does not hide the written function or prove its expansion.
     """
     definition = "#define VIS(v) __attribute__((visibility(v)))\n"
     function = "API int run(int value) { return value; }\n"
@@ -149,7 +302,11 @@ def test_function_annotation_availability(tmp_path: Path, before: bool) -> None:
         + (function + definition if before else definition + function)
     )
     result = CppAnalyzer().analyze_file(path, tmp_path)
-    assert result.index_symbols is not before
+    assert result.index_symbols
+    assert [function.name for function in result.functions] == ["run"]
+    if before:
+        assert result.status is not None
+        assert result.status.coverage_state.value == "partial"
 
 
 def test_macro_argument_comment_is_preprocessing_whitespace() -> None:

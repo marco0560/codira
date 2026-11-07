@@ -93,7 +93,12 @@ def test_pragma_aliases(tmp_path: Path, definitions: str, clean: bool) -> None:
         assert result.index_symbols
         assert result.status is not None
         assert result.status.coverage_state.value == "partial"
-        assert [function.name for function in result.functions] == ["helper"]
+        assert [function.name for function in result.functions] == ["helper", "run"]
+        function = next(f for f in result.functions if f.name == "run")
+        assert function.signature == "API int run(int x)"
+        assert function.parameters == ("x",)
+        assert [call.target for call in function.calls] == ["helper"]
+        assert all(call.target_identity is None for call in function.calls)
 
 
 def test_stringifier_availability(tmp_path: Path) -> None:
@@ -107,10 +112,14 @@ def test_stringifier_availability(tmp_path: Path) -> None:
     Returns
     -------
     None
-        The late definition cannot license an earlier compiler operator.
+        The written function survives; its compiler operator remains unresolved.
     """
     path = tmp_path / "unit.cpp"
     path.write_text(
         "#define API _Pragma(S(clang diagnostic push))\nAPI int run() { return 0; }\n#define S(x) #x\n"
     )
-    assert not CppAnalyzer().analyze_file(path, tmp_path).index_symbols
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    assert result.index_symbols
+    assert [function.name for function in result.functions] == ["run"]
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"

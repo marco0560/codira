@@ -70,7 +70,11 @@ def test_include_search_roots_recover_original_artifacts(
     assert source_only.index_symbols
     assert source_only.status is not None
     assert source_only.status.coverage_state.value == "partial"
-    assert [item.name for item in source_only.functions] == ["callee"]
+    assert [item.name for item in source_only.functions] == ["callee", "entry"]
+    unresolved = next(item for item in source_only.functions if item.name == "entry")
+    assert unresolved.signature.startswith("API int entry")
+    assert [call.target for call in unresolved.calls] == ["callee"]
+    assert unresolved.calls[0].target_identity is None
     analyzer.configure({"include_search_paths": ["include"]})
     result = analyzer.analyze_file(annotated_source, root)
     assert result.index_symbols

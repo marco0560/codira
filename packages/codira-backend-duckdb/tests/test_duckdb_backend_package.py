@@ -59,6 +59,7 @@ from codira_backend_duckdb.duckdb_support import _delete_pending_embedding_rows
 from codira_backend_duckdb.duckdb_support import _flush_pending_embedding_rows
 from codira_backend_duckdb.duckdb_support import _flush_structural_documentation_rows
 from codira_backend_duckdb.duckdb_support import _store_pending_embedding_rows
+from codira_backend_duckdb.duckdb_support import _flush_pending_relationship_rows
 from codira_backend_duckdb.duckdb_reference_scan import (
     _flush_pending_reference_scan_rows,
 )
@@ -68,7 +69,12 @@ from codira_backend_duckdb.profiling import (
     duckdb_profile_path,
 )
 from codira_backend_duckdb import duckdb_support as duckdb_support_module
-from codira_backend_duckdb.duckdb_artifact_persistence import _flush_call_record_rows
+from codira_backend_duckdb.duckdb_artifact_persistence import (
+    CallRow,
+    RefRow,
+    _flush_call_record_rows,
+    _flush_persisted_relationship_rows,
+)
 
 if TYPE_CHECKING:
     from codira_backend_duckdb.duckdb_support import _DuckDBPersistenceConnection
@@ -98,7 +104,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.11"
+    assert project["project"]["version"] == "2.0.12"
     assert project["project"]["dependencies"] == [
         "codira>=2.0.0,<3.0.0",
         "duckdb>=1.4,<2.0",
@@ -1770,6 +1776,100 @@ def test_duckdb_pending_embeddings_replace_duplicate_documentation_keys(
         "latest-hash",
     )
     assert cast("object", stored_rows[0][5]) is None
+
+
+def test_duckdb_relationship_persistence_sorts_nullable_values_and_deduplicates(
+    tmp_path: Path,
+) -> None:
+    """Persist distinct nullable and empty relationship fields in DuckDB.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts artifact collection and session flushing preserve
+        nullable values and deduplicate both relationship types.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    db_path = _duckdb_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = duckdb.connect(str(db_path))
+    try:
+        for statement in _duckdb_schema_ddl():
+            connection.execute(statement)
+        connection.execute(
+            """INSERT INTO files(
+                id, path, hash, mtime, size, analyzer_name, analyzer_version
+            ) VALUES (1, 'sample.py', 'hash', 1.0, 1, 'python', '1')"""
+        )
+        call_rows = [
+            (
+                1,
+                "pkg",
+                "caller",
+                None,
+                "name",
+                "",
+                "target",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                1,
+                0,
+            ),
+            (
+                1,
+                "pkg",
+                "caller",
+                "",
+                "name",
+                "",
+                "target",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                1,
+                0,
+            ),
+        ]
+        ref_rows = [
+            (1, "pkg", "caller", "name", "attribute", "", "target", None, None, 2, 0),
+            (1, "pkg", "caller", "name", "attribute", "", "target", "", None, 2, 0),
+        ]
+        pending_calls: list[CallRow] = []
+        pending_refs: list[RefRow] = []
+        _flush_persisted_relationship_rows(
+            cast("_DuckDBPersistenceConnection", connection),
+            call_rows=[*call_rows, call_rows[0]],
+            ref_rows=[*ref_rows, ref_rows[0]],
+            pending_call_rows=pending_calls,
+            pending_ref_rows=pending_refs,
+        )
+        _flush_pending_relationship_rows(
+            cast("_DuckDBPersistenceConnection", connection),
+            pending_call_rows=[*pending_calls, pending_calls[0]],
+            pending_ref_rows=[*pending_refs, pending_refs[0]],
+        )
+
+        assert connection.execute(
+            "SELECT owner_stable_id FROM call_records ORDER BY owner_stable_id IS NOT NULL"
+        ).fetchall() == [(None,), ("",)]
+        assert connection.execute(
+            "SELECT external_target_kind FROM callable_ref_records "
+            "ORDER BY external_target_kind IS NOT NULL"
+        ).fetchall() == [(None,), ("",)]
+    finally:
+        connection.close()
 
 
 def test_duckdb_pending_embedding_flush_respects_work_batch_size(

@@ -142,12 +142,20 @@ def _conditionals(
     list[_Conditional] | None
         Completed groups, or None for malformed or unsupported directives.
     """
-    opaque = [(n.start_byte, n.end_byte) for n in _nodes(root) if n.type in _OPAQUE]
+    opaque = sorted(
+        (n.start_byte, n.end_byte) for n in _nodes(root) if n.type in _OPAQUE
+    )
+    opaque_index = 0
+    furthest_end = -1
     stack: list[_Conditional] = []
     groups: list[_Conditional] = []
     for match in _DIRECTIVE.finditer(source):
         offset = source.index(b"#", match.start(), match.end())
-        if any(start < offset < end for start, end in opaque):
+        # Directive offsets increase, so the furthest end covers overlapping spans.
+        while opaque_index < len(opaque) and opaque[opaque_index][0] < offset:
+            furthest_end = max(furthest_end, opaque[opaque_index][1])
+            opaque_index += 1
+        if offset < furthest_end:
             continue
         kind = match[1]
         if not _valid_directive(kind, match[2], parser):

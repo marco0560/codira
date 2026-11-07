@@ -116,7 +116,18 @@ def test_malformed_and_directive_promotion_inputs_remain_partial(
     """
     path = tmp_path / "sample.c"
     path.write_text(source)
-    assert not CAnalyzer().analyze_file(path, tmp_path).index_symbols
+    result = CAnalyzer().analyze_file(path, tmp_path)
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    recoverable = source.startswith('_Pragma("a" "b")') or source.startswith(
+        "__pragma(warning(push)) #define"
+    )
+    if recoverable:
+        assert result.index_symbols
+        assert [item.name for item in result.functions] == ["target"]
+        assert not result.functions[0].calls
+    else:
+        assert not result.index_symbols
 
 
 @pytest.mark.parametrize("prefix", ["int __pragma(int);", "#define __pragma(x) x"])

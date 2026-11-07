@@ -572,3 +572,184 @@ def test_comment_ownership_survives_masked_directive_barriers(
     ]
     assert len(result.documentation) == 1
     assert result.documentation[0].text == "Direct documentation."
+
+
+def test_source_written_annotated_definitions_survive_partial_recovery(
+    tmp_path: Path,
+) -> None:
+    """Keep written names when an unresolved prefix precedes a clean declarator.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Repository containing source with unavailable annotation definitions.
+
+    Returns
+    -------
+    None
+        Both branches and class methods survive with partial coverage, while
+        a written call beyond the error is retained without an exact target.
+    """
+    path = tmp_path / "unit.cpp"
+    path.write_text(
+        "#if TARGET\n"
+        "UNKNOWN void first() { helper(); }\n"
+        "#else\n"
+        "UNKNOWN void second() {}\n"
+        "#endif\n"
+        "struct Widget {\n"
+        "  UNKNOWN void method() {}\n"
+        "};\n"
+    )
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    assert [(item.name, item.lineno) for item in result.functions] == [
+        ("first", 2),
+        ("second", 4),
+    ]
+    assert [call.target for call in result.functions[0].calls] == ["helper"]
+    assert result.functions[0].calls[0].target_identity is None
+    widget = next(item for item in result.classes if item.name == "Widget")
+    assert [(item.name, item.lineno) for item in widget.methods] == [("method", 7)]
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+
+
+def test_annotation_recovery_does_not_retain_calls_crossing_errors(
+    tmp_path: Path,
+) -> None:
+    """Keep a written callable without extracting a malformed call expression.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Repository containing an unresolved annotation and malformed call.
+
+    Returns
+    -------
+    None
+        The function remains visible, with no call record and partial coverage.
+    """
+    path = tmp_path / "unit.cpp"
+    path.write_text("UNKNOWN void first() { helper( ? ); }\n")
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    assert [item.name for item in result.functions] == ["first"]
+    assert not result.functions[0].calls
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+
+
+def test_partial_source_retains_independent_aliases_and_includes(
+    tmp_path: Path,
+) -> None:
+    """Keep written aliases and includes beside an unrelated malformed function.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Repository with conditional aliases and a malformed sibling definition.
+
+    Returns
+    -------
+    None
+        Both alias occurrences remain distinct and coverage stays partial.
+    """
+    path = tmp_path / "unit.cpp"
+    path.write_text(
+        "#include <vector>\n"
+        "#if TARGET\n"
+        "using Choice = int;\n"
+        "#else\n"
+        "using Choice = double;\n"
+        "#endif\n"
+        "void present() {}\n"
+        "int broken( {\n"
+    )
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    aliases = [item for item in result.declarations if item.kind == "type_alias"]
+    assert [(item.name, item.lineno) for item in aliases] == [
+        ("Choice", 3),
+        ("Choice", 5),
+    ]
+    assert len({item.stable_id for item in aliases}) == 2
+    assert [(item.name, item.lineno) for item in result.imports] == [("vector", 1)]
+    assert [item.name for item in result.functions] == ["present"]
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+
+
+def test_deep_chained_calls_do_not_exhaust_python_stack(tmp_path: Path) -> None:
+    """Index a long written call chain without recursive tree traversal.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Repository containing a synthetic deep call expression.
+
+    Returns
+    -------
+    None
+        The enclosing function remains visible and the call sites are retained.
+    """
+    path = tmp_path / "deep.cpp"
+    path.write_text(
+        "struct S { S& operator()(); };\n"
+        + "void run() { S s; s"
+        + "()" * 1500
+        + "; }\n"
+    )
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    function = next(item for item in result.functions if item.name == "run")
+    assert result.index_symbols
+    assert len(function.calls) == 1500
+
+
+def test_missing_punctuation_does_not_hide_unrelated_function(tmp_path: Path) -> None:
+    """Retain an independently written function when an unnamed token is missing.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Repository with a missing field terminator and a clean function.
+
+    Returns
+    -------
+    None
+        The clean function is indexable while the syntax error remains partial.
+    """
+    path = tmp_path / "unit.cpp"
+    path.write_text("struct S { int x };\nint keep() { return 1; }\n")
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    assert result.index_symbols
+    assert [(item.name, item.lineno) for item in result.functions] == [("keep", 2)]
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+
+
+def test_same_name_aliases_in_clean_alternatives_keep_occurrences(
+    tmp_path: Path,
+) -> None:
+    """Keep both written aliases even when no parser recovery is needed.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Repository with mutually exclusive alias declarations.
+
+    Returns
+    -------
+    None
+        Both source locations have distinct stable identities.
+    """
+    path = tmp_path / "unit.cpp"
+    path.write_text(
+        "#if FLAG\nusing Choice = int;\n#else\nusing Choice = double;\n#endif\n"
+    )
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    aliases = [item for item in result.declarations if item.name == "Choice"]
+    assert [(item.name, item.lineno) for item in aliases] == [
+        ("Choice", 2),
+        ("Choice", 4),
+    ]
+    assert len({item.stable_id for item in aliases}) == 2
+    assert result.index_symbols
+    assert result.status is None

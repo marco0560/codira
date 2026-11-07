@@ -362,7 +362,8 @@ def test_header_specifiers_preserve_constructors_and_source_artifacts(
     assert source_only.index_symbols
     assert source_only.status is not None
     assert source_only.status.coverage_state.value == "partial"
-    assert [item.name for item in source_only.functions] == ["caller"]
+    assert [item.name for item in source_only.functions] == ["identity", "caller"]
+    assert source_only.functions[0].signature == "API int identity(int value)"
     analyzer.configure({"include_search_paths": ["support"]})
     result = analyzer.analyze_file(path, tmp_path)
     assert result.index_symbols

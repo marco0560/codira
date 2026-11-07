@@ -93,7 +93,8 @@ def test_header_only_changes_reindex_sources_and_match_full_rebuild(
     first = index_repo(tmp_path, analysis_concurrency=concurrency)
     assert first.failed == 0 and first.indexed == 2
     assert first.analysis_concurrency.effective_strategy == strategy
-    assert backend.find_symbol(tmp_path, "answer")
+    written_symbol = backend.find_symbol(tmp_path, "answer")
+    assert written_symbol
     original_hashes = backend.load_existing_file_hashes(tmp_path)
     assert _inspect_index_rebuild_request(tmp_path) is None
     unchanged = index_repo(tmp_path, analysis_concurrency=concurrency)
@@ -110,7 +111,8 @@ def test_header_only_changes_reindex_sources_and_match_full_rebuild(
     assert any(
         d.reason == "external analysis inputs changed" for d in changed.decisions
     )
-    assert not backend.find_symbol(tmp_path, "answer")
+    assert backend.find_symbol(tmp_path, "answer") == written_symbol
+    assert changed.coverage_issues
     assert backend.load_existing_file_hashes(tmp_path) == original_hashes
     header.write_bytes(b"#define API __declspec(dllexport)\n")
     restored = index_repo(tmp_path, analysis_concurrency=concurrency)
@@ -144,7 +146,10 @@ def test_header_creation_deletion_and_transitive_edits_change_freshness(
     header, backend = _repository(tmp_path, backend_name)
     header.unlink()
     first = index_repo(tmp_path)
-    assert first.failed == 0 and not backend.find_symbol(tmp_path, "answer")
+    assert first.failed == 0
+    written_symbol = backend.find_symbol(tmp_path, "answer")
+    assert written_symbol
+    assert first.coverage_issues
     original_hashes = backend.load_existing_file_hashes(tmp_path)
     header.write_bytes(b'#include "base.inc"\n')
     base = tmp_path / "base.inc"
@@ -155,14 +160,14 @@ def test_header_creation_deletion_and_transitive_edits_change_freshness(
     base.write_bytes(b"#define API int\n")
     assert _inspect_index_rebuild_request(tmp_path) is not None
     assert index_repo(tmp_path).indexed == 2
-    assert not backend.find_symbol(tmp_path, "answer")
+    assert backend.find_symbol(tmp_path, "answer") == written_symbol
     base.write_bytes(b"#define API __declspec(dllexport)\n")
     assert index_repo(tmp_path).indexed == 2
     assert backend.find_symbol(tmp_path, "answer")
     header.unlink()
     assert _inspect_index_rebuild_request(tmp_path) is not None
     assert index_repo(tmp_path).indexed == 2
-    assert not backend.find_symbol(tmp_path, "answer")
+    assert backend.find_symbol(tmp_path, "answer") == written_symbol
     assert backend.load_existing_file_hashes(tmp_path) == original_hashes
 
 

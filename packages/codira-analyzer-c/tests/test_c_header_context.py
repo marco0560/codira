@@ -13,12 +13,31 @@ None
 import json
 import os
 from pathlib import Path
+from typing import cast
 
 import pytest
+from tree_sitter import Node
 
 from codira_analyzer_c import CAnalyzer
+from codira_analyzer_c.c_record_prefixes import record_prefix_source
 from codira.indexer import index_repo
 from codira.query.exact import symbol_inventory
+
+
+def test_empty_record_prefixes_do_not_traverse_tree() -> None:
+    """Return unchanged source without traversing when no prefixes are known.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Checks the deterministic no-op path without a usable tree.
+    """
+    source = b"struct Example { int value; };\n"
+    assert record_prefix_source(source, cast(Node, object()), {}, ()) == source
 
 
 def _fixture(root: Path, header: str, source: str) -> Path:

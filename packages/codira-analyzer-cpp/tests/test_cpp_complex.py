@@ -184,7 +184,10 @@ def test_malformed_complex_syntax_keeps_diagnostics(
     path = tmp_path / "bad.cpp"
     path.write_text(source)
     result = CppAnalyzer().analyze_file(path, tmp_path)
-    if source == "double f(void) { return __real__; }":
+    if source in {
+        "double f(void) { return __real__; }",
+        "double f(void) { return __imag__(; }",
+    }:
         assert result.index_symbols and result.status is not None
         assert [(item.name, item.signature) for item in result.functions] == [
             ("f", "double f(void)")
