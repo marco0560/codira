@@ -34,7 +34,11 @@ from codira.semantic.embeddings import (
     embed_texts as embed_texts,
 )
 from .duckdb_call_resolution import _qualified_callable_name
-from .duckdb_bulk_io import _CSV_READ_OPTIONS, _temporary_csv_path_for_rows
+from .duckdb_bulk_io import (
+    _CSV_READ_OPTIONS,
+    _flush_registered_arrow_table,
+    _temporary_csv_path_for_rows,
+)
 from .duckdb_embedding_payload import (
     _c_embedding_context,
     _embedding_text,
@@ -153,6 +157,8 @@ DocstringIssueRow = tuple[
 ImportRow = tuple[int, str, str | None, str, int]
 OverloadRow = tuple[int, str, str, int, str, str | None, int, int | None]
 EnumMemberRow = tuple[int, str, str, int, str, str, int, str, str, int]
+WrittenSourceLineRow = tuple[int, int, str]
+WrittenSourceTokenRow = tuple[str, int, int]
 _T = TypeVar("_T")
 _DUCKDB_EMBEDDING_BATCH_ROWS = 2_048
 
@@ -478,6 +484,10 @@ class DuckDBStructuralRowBuffers:
         Pending overload rows.
     enum_members : list[EnumMemberRow]
         Pending enum-member rows.
+    written_source_lines : list[WrittenSourceLineRow]
+        Pending original source lines.
+    written_source_tokens : list[WrittenSourceTokenRow]
+        Pending identifier occurrences linked to source lines.
     """
 
     files: list[FileRow] = field(default_factory=list)
@@ -490,6 +500,8 @@ class DuckDBStructuralRowBuffers:
     )
     overloads: list[OverloadRow] = field(default_factory=list)
     enum_members: list[EnumMemberRow] = field(default_factory=list)
+    written_source_lines: list[WrittenSourceLineRow] = field(default_factory=list)
+    written_source_tokens: list[WrittenSourceTokenRow] = field(default_factory=list)
 
     def clear(self) -> None:
         """
@@ -512,6 +524,37 @@ class DuckDBStructuralRowBuffers:
         self.documentation_artifacts.clear()
         self.overloads.clear()
         self.enum_members.clear()
+        self.written_source_lines.clear()
+        self.written_source_tokens.clear()
+
+    @property
+    def row_count(self) -> int:
+        """Return the total number of pending structural and source rows.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        int
+            Buffered rows across all structural tables.
+        """
+        return sum(
+            len(rows)
+            for rows in (
+                self.files,
+                self.modules,
+                self.classes,
+                self.functions,
+                self.symbol_index,
+                self.documentation_artifacts,
+                self.overloads,
+                self.enum_members,
+                self.written_source_lines,
+                self.written_source_tokens,
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -1752,6 +1795,71 @@ def _flush_persisted_relationship_rows(
             _flush_callable_ref_record_rows(conn, deduplicated_ref_rows)
         else:
             pending_ref_rows.extend(deduplicated_ref_rows)
+
+
+def _flush_written_source_rows(
+    conn: _DuckDBPersistenceConnection,
+    line_rows: Sequence[WrittenSourceLineRow],
+    token_rows: Sequence[WrittenSourceTokenRow],
+) -> None:
+    """Bulk insert original source lines and identifier lookup rows.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open DuckDB connection.
+    line_rows : collections.abc.Sequence[WrittenSourceLineRow]
+        File, line number, and original decoded line text rows.
+    token_rows : collections.abc.Sequence[WrittenSourceTokenRow]
+        Identifier, file, and line number occurrence rows.
+
+    Returns
+    -------
+    None
+        Rows are inserted through Arrow replacement scans.
+    """
+    if line_rows:
+        import pyarrow as pa
+
+        table = pa.table(
+            {
+                "file_id": pa.array([row[0] for row in line_rows], type=pa.int64()),
+                "lineno": pa.array([row[1] for row in line_rows], type=pa.int64()),
+                "line_text": pa.array([row[2] for row in line_rows], type=pa.string()),
+            }
+        )
+        _flush_registered_arrow_table(
+            conn,
+            view_name="__codira_pending_written_source_lines",
+            table=table,
+            insert_sql="""
+                INSERT INTO written_source_lines(file_id, lineno, line_text)
+                SELECT file_id, lineno, line_text
+                FROM __codira_pending_written_source_lines
+                """,
+        )
+    if token_rows:
+        import pyarrow as pa
+
+        table = pa.table(
+            {
+                "identifier": pa.array(
+                    [row[0] for row in token_rows], type=pa.string()
+                ),
+                "file_id": pa.array([row[1] for row in token_rows], type=pa.int64()),
+                "lineno": pa.array([row[2] for row in token_rows], type=pa.int64()),
+            }
+        )
+        _flush_registered_arrow_table(
+            conn,
+            view_name="__codira_pending_written_source_tokens",
+            table=table,
+            insert_sql="""
+                INSERT INTO written_source_tokens(identifier, file_id, lineno)
+                SELECT identifier, file_id, lineno
+                FROM __codira_pending_written_source_tokens
+                """,
+        )
 
 
 def _flush_docstring_issue_rows(

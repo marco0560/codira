@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 
 DDL: tuple[str, ...] = (
     "CREATE SEQUENCE IF NOT EXISTS files_id_seq START 1;",
@@ -45,6 +45,22 @@ DDL: tuple[str, ...] = (
         stable_id TEXT NOT NULL,
         payload TEXT NOT NULL,
         PRIMARY KEY(file_id, stable_id)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS written_source_lines (
+        file_id INTEGER NOT NULL,
+        lineno INTEGER NOT NULL,
+        line_text TEXT NOT NULL,
+        PRIMARY KEY(file_id, lineno)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS written_source_tokens (
+        identifier TEXT NOT NULL,
+        file_id INTEGER NOT NULL,
+        lineno INTEGER NOT NULL,
+        PRIMARY KEY(identifier, file_id, lineno)
     );
     """,
     """
@@ -343,6 +359,7 @@ DDL: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_callable_ref_records_file ON callable_ref_records(file_id);",
     "CREATE INDEX IF NOT EXISTS idx_callable_ref_records_owner ON callable_ref_records(owner_module, owner_name);",
     "CREATE INDEX IF NOT EXISTS idx_reference_scan_lines_file ON reference_scan_lines(file_id);",
+    "CREATE INDEX IF NOT EXISTS idx_written_source_token_identifier ON written_source_tokens(identifier, file_id, lineno);",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_embeddings_object_backend_version ON embeddings(object_type, object_id, backend, version);",
     "CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);",
     "CREATE INDEX IF NOT EXISTS idx_functions_name ON functions(name);",
@@ -361,6 +378,8 @@ DDL: tuple[str, ...] = (
 )
 
 INDEX_DATA_TABLES: tuple[str, ...] = (
+    "written_source_tokens",
+    "written_source_lines",
     "artifact_provenance",
     "docstring_issues",
     "call_edges",

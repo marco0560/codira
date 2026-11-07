@@ -711,6 +711,8 @@ class AnalysisResult:
     index_symbols : bool, optional
         Whether backend persistence should index the module, symbol, relation,
         and reference artifacts as code symbols.
+    written_source : bytes or None, optional
+        Exact bytes captured for neutral written-source evidence, when available.
 
     Notes
     -----
@@ -727,6 +729,7 @@ class AnalysisResult:
     documentation: tuple[DocumentationArtifact, ...] = ()
     index_symbols: bool = True
     status: AnalysisStatus | None = None
+    written_source: bytes | None = None
 
     def iter_functions(self) -> tuple[FunctionArtifact, ...]:
         """

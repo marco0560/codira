@@ -25,6 +25,7 @@ from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
 from codira.generated import generated_provenance_rows
+from codira.source_evidence import source_evidence_rows
 
 from codira.contracts import (
     EmbeddingIndexingMetrics,
@@ -102,6 +103,8 @@ def _clear_index_tables(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM call_records")
     conn.execute("DELETE FROM callable_ref_records")
     conn.execute("DELETE FROM reference_scan_lines")
+    conn.execute("DELETE FROM written_source_tokens")
+    conn.execute("DELETE FROM written_source_lines")
     conn.execute("DELETE FROM overloads")
     conn.execute("DELETE FROM enum_members")
     conn.execute("DELETE FROM embeddings")
@@ -891,6 +894,18 @@ def _store_analysis(
     )
     assert cur.lastrowid is not None
     file_id = int(cur.lastrowid)
+    if analysis.written_source is not None:
+        source_lines, source_tokens = source_evidence_rows(
+            analysis.written_source, file_metadata.sha256
+        )
+        conn.executemany(
+            "INSERT INTO written_source_lines(file_id, lineno, line_text) VALUES (?, ?, ?)",
+            [(file_id, lineno, line_text) for lineno, line_text in source_lines],
+        )
+        conn.executemany(
+            "INSERT INTO written_source_tokens(identifier, file_id, lineno) VALUES (?, ?, ?)",
+            [(identifier, file_id, lineno) for identifier, lineno in source_tokens],
+        )
     if analysis.status is not None:
         conn.execute(
             "INSERT OR REPLACE INTO analysis_status "
@@ -1211,6 +1226,8 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
     conn.execute("DELETE FROM call_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM callable_ref_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM reference_scan_lines WHERE file_id = ?", (file_id,))
+    conn.execute("DELETE FROM written_source_tokens WHERE file_id = ?", (file_id,))
+    conn.execute("DELETE FROM written_source_lines WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM artifact_provenance WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM files WHERE path = ?", (file_path,))
     conn.execute("DELETE FROM analysis_status WHERE path = ?", (file_path,))

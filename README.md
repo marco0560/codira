@@ -451,6 +451,11 @@ codira ctx "missing numpy docstring"
 codira ctx "missing numpy docstring" --prefix src/codira
 ```
 
+For C and C++ files, context can also include separately labeled written-source
+evidence for matching identifiers. These excerpts are lexical occurrences from
+the indexed source, including conditional branches, comments, and strings;
+they do not assert that a symbol exists or that a branch is active.
+
 Embedding-assisted retrieval works best for natural-language queries such as:
 
 ```bash

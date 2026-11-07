@@ -1186,7 +1186,7 @@ def test_c_import_kinds_persist_through_sqlite_backend(tmp_path: Path) -> None:
     analysis = CAnalyzer().analyze_file(source, tmp_path)
     snapshot = FileMetadataSnapshot(
         path=source,
-        sha256="abc123",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
         mtime=1.0,
         size=source.stat().st_size,
     )
@@ -1260,7 +1260,7 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
     analysis = CAnalyzer().analyze_file(source, tmp_path)
     snapshot = FileMetadataSnapshot(
         path=source,
-        sha256="abc123",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
         mtime=1.0,
         size=source.stat().st_size,
     )
@@ -1490,7 +1490,7 @@ def test_c_declaration_comments_contribute_to_embedding_candidates(
     analysis = CAnalyzer().analyze_file(source, tmp_path)
     snapshot = FileMetadataSnapshot(
         path=source,
-        sha256="abc123",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
         mtime=1.0,
         size=source.stat().st_size,
     )

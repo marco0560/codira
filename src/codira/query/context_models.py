@@ -196,6 +196,37 @@ ProducerDiagnosticsEntry = dict[str, object]
 SignalCollectionDiagnostics = dict[str, object]
 
 
+@dataclass(frozen=True, order=True)
+class SourceEvidence:
+    """One exact source line matched by an identifier in the query.
+
+    Parameters
+    ----------
+    file : str
+        Repository-relative path containing the line.
+    lineno : int
+        One-based physical line number.
+    identifiers : tuple[str, ...]
+        Query identifiers found on this line.
+    line_text : str
+        Bounded text excerpt from the indexed line.
+    file_sha256 : str
+        Digest of the indexed file snapshot.
+    coverage_state : str or None
+        Analyzer coverage state when one was recorded.
+    line_truncated : bool, optional
+        Whether the stored line exceeded the excerpt limit.
+    """
+
+    file: str
+    lineno: int
+    identifiers: tuple[str, ...]
+    line_text: str
+    file_sha256: str
+    coverage_state: str | None
+    line_truncated: bool = False
+
+
 @dataclass
 class _DiversitySelectionState:
     """
@@ -362,6 +393,8 @@ class PromptRenderRequest:
     doc_issues: list[tuple[str, str]]
     expanded: list[SymbolRow]
     unique_refs: list[ReferenceRow]
+    source_evidence: list[SourceEvidence] = field(default_factory=list)
+    source_evidence_truncated: bool = False
     max_source_file_bytes: int = DEFAULT_EMBEDDING_INDEX_MAX_SOURCE_FILE_BYTES
 
 
@@ -430,6 +463,8 @@ class ContextJsonRenderRequest:
     doc_issues: list[tuple[str, str]]
     expanded: list[SymbolRow]
     unique_refs: list[ReferenceRow]
+    source_evidence: list[SourceEvidence] = field(default_factory=list)
+    source_evidence_truncated: bool = False
     confidence_map: dict[SymbolRow, float] | None = None
     explain: bool = False
     intent: QueryIntent | None = None
@@ -619,6 +654,8 @@ class ContextRenderRequest:
     doc_issues: list[tuple[str, str]]
     expanded: list[SymbolRow]
     unique_refs: list[ReferenceRow]
+    source_evidence: list[SourceEvidence] = field(default_factory=list)
+    source_evidence_truncated: bool = False
     confidence_map: dict[SymbolRow, float] | None = None
     as_json: bool = False
     as_prompt: bool = False

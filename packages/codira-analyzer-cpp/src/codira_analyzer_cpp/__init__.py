@@ -7901,7 +7901,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "53"
+    version = "54"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -8805,11 +8805,14 @@ class CppAnalyzer:
                 path, root, include_paths=self._include_search_paths
             )
             source_first = self._analyze_captured_file(path, root, source_context)
-            return _merge_source_first_result(
-                source_first,
-                clang_header,
-                source_context.source,
-                prefer_configured=True,
+            return replace(
+                _merge_source_first_result(
+                    source_first,
+                    clang_header,
+                    source_context.source,
+                    prefer_configured=True,
+                ),
+                written_source=source_context.source,
             )
         clang_fallback_reason: str | None = None
         clang_result: FrontendResult | None = None
@@ -8847,7 +8850,10 @@ class CppAnalyzer:
                         source_context.source,
                         prefer_configured=True,
                     )
-                    return self._apply_clang_output_options(mapped)
+                    return replace(
+                        self._apply_clang_output_options(mapped),
+                        written_source=source_context.source,
+                    )
                 clang_fallback_reason = "clang_entities_outside_supported_cpp_dto_scope"
         context = read_include_context(
             path, root, include_paths=self._include_search_paths
@@ -8866,13 +8872,13 @@ class CppAnalyzer:
                 else:
                     combined = _constrain_unproven_source_calls(generated)
                 if clang_fallback_reason is not None:
-                    return _clang_fallback_result(
+                    combined = _clang_fallback_result(
                         combined,
                         clang_fallback_reason,
                         language="cpp",
                         frontend_result=clang_result,
                     )
-                return combined
+                return replace(combined, written_source=context.source)
             except ValueError as error:
                 result = self._analyze_captured_file(path, root, context)
                 diagnostic = AnalysisDiagnostic(
@@ -8912,13 +8918,13 @@ class CppAnalyzer:
                     ),
                 )
                 if clang_fallback_reason is not None:
-                    return _clang_fallback_result(
+                    failed = _clang_fallback_result(
                         failed,
                         clang_fallback_reason,
                         language="cpp",
                         frontend_result=clang_result,
                     )
-                return failed
+                return replace(failed, written_source=context.source)
         result = self._analyze_captured_file(path, root, context)
         if clang_fallback_reason is not None:
             result = _clang_fallback_result(
@@ -8927,7 +8933,7 @@ class CppAnalyzer:
                 language="cpp",
                 frontend_result=clang_result,
             )
-        return result
+        return replace(result, written_source=context.source)
 
     def _analyze_captured_file(
         self,

@@ -61,7 +61,7 @@ def test_c_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.24"
+    assert project["project"]["version"] == "2.0.25"
     assert "codira>=2.0.0,<3.0.0" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "c": "codira_analyzer_c:build_analyzer"
@@ -85,7 +85,7 @@ def test_c_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CAnalyzer)
     assert analyzer.name == "c"
-    assert analyzer.version == "33"
+    assert analyzer.version == "34"
 
 
 def test_c_clang_frontend_is_opt_in_and_missing_profile_is_visible(

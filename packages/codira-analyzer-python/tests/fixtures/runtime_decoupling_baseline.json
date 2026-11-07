@@ -159,5 +159,6 @@
     "name": "runtime_decoupling_baseline",
     "stable_id": "python:module:runtime_decoupling_baseline"
   },
-  "source_path": "runtime_decoupling_baseline.py"
+  "source_path": "runtime_decoupling_baseline.py",
+  "written_source": null
 }

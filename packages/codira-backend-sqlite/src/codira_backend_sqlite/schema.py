@@ -18,7 +18,7 @@ definitions for SQLite persistence actions.
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 
 DDL = [
     """
@@ -60,6 +60,25 @@ DDL = [
         PRIMARY KEY(file_id, stable_id)
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS written_source_lines (
+        file_id INTEGER NOT NULL,
+        lineno INTEGER NOT NULL,
+        line_text TEXT NOT NULL,
+        PRIMARY KEY(file_id, lineno),
+        FOREIGN KEY(file_id) REFERENCES files(id)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS written_source_tokens (
+        identifier TEXT NOT NULL,
+        file_id INTEGER NOT NULL,
+        lineno INTEGER NOT NULL,
+        PRIMARY KEY(identifier, file_id, lineno),
+        FOREIGN KEY(file_id, lineno) REFERENCES written_source_lines(file_id, lineno)
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_written_source_token_identifier ON written_source_tokens(identifier, file_id, lineno);",
     """
     CREATE TABLE IF NOT EXISTS index_analyzers (
         name TEXT PRIMARY KEY,

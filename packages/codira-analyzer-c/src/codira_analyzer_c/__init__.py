@@ -4679,7 +4679,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "33"
+    version = "34"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 
@@ -5841,7 +5841,7 @@ class CAnalyzer:
                 language="c",
                 frontend_result=clang_result,
             )
-        return result
+        return replace(result, written_source=context.source)
 
     def _analyze_view(
         self,

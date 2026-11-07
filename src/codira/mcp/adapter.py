@@ -606,6 +606,10 @@ class MCPAdapter:
             return {
                 "status": context.get("status"),
                 "items": items,
+                "source_evidence": context.get(
+                    "source_evidence",
+                    {"items": [], "truncated": False},
+                ),
                 "_total": page_info.get("total", 0),
                 **({"explain": context.get("explain")} if explain else {}),
             }
@@ -616,6 +620,8 @@ class MCPAdapter:
             message = "Core context page returned an invalid total count"
             raise TypeError(message)
         total = total_value
+        source_evidence = cast("dict[str, object]", result.get("source_evidence", {}))
+        source_evidence_truncated = source_evidence.get("truncated") is True
         next_offset = offset + len(cast("list[object]", result["items"]))
         has_more = next_offset < total
         next_cursor = (
@@ -638,7 +644,12 @@ class MCPAdapter:
         return self._envelope(
             result,
             page=page,
-            truncation={"truncated": False, "reasons": []},
+            truncation={
+                "truncated": source_evidence_truncated,
+                "reasons": (
+                    ["source_evidence_limit"] if source_evidence_truncated else []
+                ),
+            },
             output_budget=None,
         )
 

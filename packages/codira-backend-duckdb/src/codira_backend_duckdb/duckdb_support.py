@@ -87,6 +87,7 @@ from .duckdb_artifact_persistence import (
     _flush_docstring_issue_rows,
     _flush_import_rows,
     _flush_persisted_relationship_rows,
+    _flush_written_source_rows,
     _persist_class_artifacts,
     _persist_declaration_artifacts,
     _persist_documentation_artifacts,
@@ -102,6 +103,8 @@ if TYPE_CHECKING:
         FileMetadataSnapshot,
     )
     from codira.semantic.embeddings import EmbeddingBackendSpec
+
+from codira.source_evidence import source_evidence_rows
 
 CallRecord = dict[str, str | int]
 CallRow = tuple[
@@ -893,6 +896,11 @@ def _flush_structural_rows(
         Pending rows are inserted and buffers are cleared.
     """
     _flush_structural_file_rows(conn, rows.files)
+    _flush_written_source_rows(
+        conn,
+        rows.written_source_lines,
+        rows.written_source_tokens,
+    )
     _flush_structural_module_rows(conn, rows.modules)
     _flush_structural_class_rows(conn, rows.classes)
     _flush_structural_function_rows(conn, rows.functions)
@@ -1567,6 +1575,16 @@ def _append_analysis_rows(
     )
 
     file_id = id_allocator.next_id("files")
+    if analysis.written_source is not None:
+        source_lines, source_tokens = source_evidence_rows(
+            analysis.written_source, file_metadata.sha256
+        )
+        structural_rows.written_source_lines.extend(
+            (file_id, lineno, line_text) for lineno, line_text in source_lines
+        )
+        structural_rows.written_source_tokens.extend(
+            (identifier, file_id, lineno) for identifier, lineno in source_tokens
+        )
     structural_rows.files.append(
         (
             file_id,
@@ -2082,6 +2100,8 @@ def _delete_indexed_file_data(
     conn.execute("DELETE FROM call_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM callable_ref_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM reference_scan_lines WHERE file_id = ?", (file_id,))
+    conn.execute("DELETE FROM written_source_tokens WHERE file_id = ?", (file_id,))
+    conn.execute("DELETE FROM written_source_lines WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM artifact_provenance WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM files WHERE path = ?", (file_path,))
     conn.execute("DELETE FROM analysis_status WHERE path = ?", (file_path,))

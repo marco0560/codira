@@ -17,6 +17,7 @@ This module belongs to the **contract verification layer** and enforces the ADR-
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sqlite3
@@ -2301,7 +2302,7 @@ def test_run_symbol_json_includes_enum_member_metadata(
     analysis = CAnalyzer().analyze_file(source, tmp_path)
     snapshot = FileMetadataSnapshot(
         path=source,
-        sha256="json-enum-members",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
         mtime=1.0,
         size=source.stat().st_size,
     )
@@ -2767,8 +2768,8 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "einops>=0.8,<1.0",
         "codira-analyzer-python==2.0.2",
         "codira-analyzer-json==2.0.0",
-        "codira-analyzer-c==2.0.24",
-        "codira-analyzer-cpp==2.0.54",
+        "codira-analyzer-c==2.0.25",
+        "codira-analyzer-cpp==2.0.55",
         "codira-analyzer-rust==2.0.3",
         "codira-analyzer-javascript==2.0.0",
         "codira-analyzer-typescript==2.0.3",
@@ -2783,8 +2784,8 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-documentation-audit-jsdoc==2.0.0",
         "codira-documentation-audit-tsdoc==2.0.0",
         "codira-documentation-audit-go-doc-comments==2.0.0",
-        "codira-backend-sqlite==2.0.8",
-        "codira-backend-duckdb==2.0.12",
+        "codira-backend-sqlite==2.0.9",
+        "codira-backend-duckdb==2.0.13",
         "codira-embedding-sentence-transformers==2.0.1",
         "codira-embedding-onnx==2.0.0",
         "codira-vector-store-sqlite==2.0.0",
