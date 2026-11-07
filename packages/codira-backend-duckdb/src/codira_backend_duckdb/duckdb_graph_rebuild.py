@@ -38,9 +38,37 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
     None
         The derived edge tables are replaced in place.
     """
+    conn.execute("""
+        UPDATE functions SET class_id = (
+            SELECT c.id FROM classes c
+            JOIN modules m ON m.id = c.module_id
+            JOIN symbol_index s ON s.type = 'class' AND s.file_id = m.file_id
+                AND s.name = c.name AND s.lineno = c.lineno
+            WHERE s.stable_id = functions.owner_stable_id
+            ORDER BY c.id LIMIT 1
+        ) WHERE owner_stable_id IS NOT NULL
+        """)
     module_functions = _load_module_functions(conn)
     class_methods = _load_class_methods(conn)
     import_aliases_by_module = _load_import_aliases(conn)
+    semantic_identity_lookup: dict[tuple[str, str], set[tuple[str, str, str]]] = {}
+    identity_rows = conn.execute(
+        "SELECT semantic_identity_namespace, semantic_identity_value, "
+        "module_name, name, stable_id FROM symbol_index "
+        "WHERE type IN ('function', 'method') "
+        "AND semantic_identity_namespace IS NOT NULL "
+        "AND semantic_identity_value IS NOT NULL"
+    ).fetchall()
+    for (
+        namespace,
+        identity_value,
+        module_name,
+        callable_name,
+        stable_id,
+    ) in identity_rows:
+        semantic_identity_lookup.setdefault(
+            (str(namespace), str(identity_value)), set()
+        ).add((str(module_name), str(callable_name), str(stable_id)))
 
     conn.execute("DROP TABLE IF EXISTS temp_call_edges_rebuild")
     conn.execute("DROP TABLE IF EXISTS temp_callable_refs_rebuild")
@@ -49,8 +77,10 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             caller_file_id INTEGER NOT NULL,
             caller_module TEXT NOT NULL,
             caller_name TEXT NOT NULL,
+            caller_stable_id TEXT,
             callee_module TEXT,
             callee_name TEXT,
+            callee_stable_id TEXT,
             unresolved_identity TEXT NOT NULL,
             external_target_kind TEXT,
             external_target_name TEXT,
@@ -78,6 +108,8 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             str,
             str | None,
             str | None,
+            str | None,
+            str | None,
             str,
             str | None,
             str | None,
@@ -103,9 +135,13 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             file_id,
             owner_module,
             owner_name,
+            owner_stable_id,
             kind,
             base,
             target,
+            target_identity_namespace,
+            target_identity_value,
+            resolution_mode,
             external_target_kind,
             external_target_name,
             lineno,
@@ -125,9 +161,13 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
         file_id,
         owner_module,
         owner_name,
+        owner_stable_id,
         kind,
         base,
         target,
+        target_identity_namespace,
+        target_identity_value,
+        resolution_mode,
         external_target_kind,
         external_target_name,
         _lineno,
@@ -139,11 +179,21 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                 "kind": str(kind),
                 "base": str(base),
                 "target": str(target),
+                "target_identity_namespace": ""
+                if target_identity_namespace is None
+                else str(target_identity_namespace),
+                "target_identity_value": ""
+                if target_identity_value is None
+                else str(target_identity_value),
+                "resolution_mode": ""
+                if resolution_mode is None
+                else str(resolution_mode),
             },
         )
         caller_module = str(owner_module)
         caller_name = str(owner_name)
-        callee_module, callee_name, resolved = _resolve_call_record(
+        caller_stable_id = str(owner_stable_id) if owner_stable_id is not None else None
+        callee_module, callee_name, callee_stable_id, resolved = _resolve_call_record(
             CallResolutionRequest(
                 call=record,
                 caller_module=caller_module,
@@ -151,6 +201,7 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                 import_aliases=import_aliases_by_module.get(caller_module, {}),
                 module_functions=module_functions,
                 class_methods=class_methods,
+                semantic_identity_lookup=semantic_identity_lookup,
             )
         )
         edge_external_target_kind = (
@@ -168,8 +219,10 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                 _duckdb_int(file_id),
                 caller_module,
                 caller_name,
+                caller_stable_id,
                 callee_module,
                 callee_name,
+                callee_stable_id,
                 _unresolved_identity(record, resolved=resolved),
                 edge_external_target_kind,
                 edge_external_target_name,
@@ -222,7 +275,7 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
         )
         caller_module = str(owner_module)
         caller_name = str(owner_name)
-        target_module, target_name, resolved = _resolve_call_record(
+        target_module, target_name, _target_stable_id, resolved = _resolve_call_record(
             CallResolutionRequest(
                 call=record,
                 caller_module=caller_module,
@@ -264,10 +317,12 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             item[2],
             item[3] or "",
             item[4] or "",
-            item[5],
+            item[5] or "",
             item[6] or "",
-            item[7] or "",
-            item[8],
+            item[7],
+            item[8] or "",
+            item[9] or "",
+            item[10],
         ),
     )
     if sorted_edges:
@@ -287,27 +342,37 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                     [row[2] for row in sorted_edges],
                     type=pa.string(),
                 ),
-                "callee_module": pa.array(
+                "caller_stable_id": pa.array(
                     [row[3] for row in sorted_edges],
                     type=pa.string(),
                 ),
-                "callee_name": pa.array(
+                "callee_module": pa.array(
                     [row[4] for row in sorted_edges],
                     type=pa.string(),
                 ),
-                "unresolved_identity": pa.array(
+                "callee_name": pa.array(
                     [row[5] for row in sorted_edges],
                     type=pa.string(),
                 ),
-                "external_target_kind": pa.array(
+                "callee_stable_id": pa.array(
                     [row[6] for row in sorted_edges],
                     type=pa.string(),
                 ),
-                "external_target_name": pa.array(
+                "unresolved_identity": pa.array(
                     [row[7] for row in sorted_edges],
                     type=pa.string(),
                 ),
-                "resolved": pa.array([row[8] for row in sorted_edges], type=pa.int64()),
+                "external_target_kind": pa.array(
+                    [row[8] for row in sorted_edges],
+                    type=pa.string(),
+                ),
+                "external_target_name": pa.array(
+                    [row[9] for row in sorted_edges],
+                    type=pa.string(),
+                ),
+                "resolved": pa.array(
+                    [row[10] for row in sorted_edges], type=pa.int64()
+                ),
             }
         )
         _flush_registered_arrow_table(
@@ -319,8 +384,10 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                     caller_file_id,
                     caller_module,
                     caller_name,
+                    caller_stable_id,
                     callee_module,
                     callee_name,
+                    callee_stable_id,
                     unresolved_identity,
                     external_target_kind,
                     external_target_name,
@@ -330,8 +397,10 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                     caller_file_id,
                     caller_module,
                     caller_name,
+                    caller_stable_id,
                     callee_module,
                     callee_name,
+                    callee_stable_id,
                     unresolved_identity,
                     external_target_kind,
                     external_target_name,
@@ -435,8 +504,10 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             caller_file_id,
             caller_module,
             caller_name,
+            caller_stable_id,
             callee_module,
             callee_name,
+            callee_stable_id,
             unresolved_identity,
             external_target_kind,
             external_target_name,
@@ -446,8 +517,10 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             caller_file_id,
             caller_module,
             caller_name,
+            caller_stable_id,
             callee_module,
             callee_name,
+            callee_stable_id,
             unresolved_identity,
             external_target_kind,
             external_target_name,

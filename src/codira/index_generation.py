@@ -118,6 +118,10 @@ class IndexGenerationStore:
                 ):
                     return None
                 for failure in failures:
+                    if "analysis_input_fingerprint" in failure and not isinstance(
+                        failure.get("analysis_input_fingerprint"), str
+                    ):
+                        return None
                     if not all(
                         isinstance(failure.get(key), str)
                         for key in (

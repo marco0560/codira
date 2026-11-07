@@ -48,6 +48,7 @@ from codira.query.context_models import (
     ContextRequest,
     ExpansionCollectionRequest,
     GraphRetrievalRequest,
+    SourceEvidence,
 )
 from codira.query.context_render import (
     _render_context,
@@ -57,12 +58,14 @@ from codira.query.context_scoring import (
     _diversify_merged_symbols_explain,
     _is_documentation_symbol,
     _rank_signals_with_provenance,
+    _unique_exact_callable_target,
 )
 from codira.query.context_source import (
     _tokenize,
 )
 from codira.query.producers import selected_enrichment_producers
 from codira.query.signals import signal_sort_key
+from codira.query.source_evidence import query_source_evidence
 from codira.query.task_anchors import source_signals
 from codira.registry import (
     active_index_backend,
@@ -159,6 +162,24 @@ def _initial_context_state(
         retrieval_signals,
         intent=intent,
     )
+    exact_callable_target = _unique_exact_callable_target(
+        request.root,
+        request.query,
+        conn,
+        normalized_prefix,
+    )
+    if exact_callable_target is not None:
+        exact_target_index = next(
+            (
+                index
+                for index, entry in enumerate(ranked_merged)
+                if entry[0] == exact_callable_target
+            ),
+            None,
+        )
+        if exact_target_index is not None and exact_target_index > 0:
+            ranked_merged.insert(0, ranked_merged.pop(exact_target_index))
+
     if request.explain:
         top_matches, diversity = _diversify_merged_symbols_explain(
             [symbol for symbol, _score in ranked_merged],
@@ -254,6 +275,8 @@ def _filter_redundant_module_matches(
 def _empty_context_result(
     request: ContextRequest,
     state: ContextExecutionState,
+    source_evidence: list[SourceEvidence],
+    source_evidence_truncated: bool,
 ) -> str:
     """
     Render the empty-result response for one context query.
@@ -270,32 +293,32 @@ def _empty_context_result(
     str
         Empty-result context payload in the requested output mode.
     """
-    if request.as_json or request.as_prompt:
-        return _render_context(
-            ContextRenderRequest(
-                root=request.root,
-                query=request.query,
-                top_matches=[],
-                doc_issues=[],
-                expanded=[],
-                unique_refs=[],
-                as_json=request.as_json,
-                as_prompt=request.as_prompt,
-                explain=request.explain,
-                plan=state.plan,
-                producers=state.producer_diagnostics,
-                signal_collection=state.signal_collection,
-                signal_preview=state.signal_preview,
-                signal_merge=state.signal_merge,
-                diversity=state.diversity,
-                expansion=state.expansion,
-                result_offset=request.result_offset,
-                result_limit=request.result_limit,
-                result_total=0,
-                complete_context_items=request.complete_context_items,
-            )
+    return _render_context(
+        ContextRenderRequest(
+            root=request.root,
+            query=request.query,
+            top_matches=[],
+            doc_issues=[],
+            expanded=[],
+            unique_refs=[],
+            source_evidence=source_evidence,
+            source_evidence_truncated=source_evidence_truncated,
+            as_json=request.as_json,
+            as_prompt=request.as_prompt,
+            explain=request.explain,
+            plan=state.plan,
+            producers=state.producer_diagnostics,
+            signal_collection=state.signal_collection,
+            signal_preview=state.signal_preview,
+            signal_merge=state.signal_merge,
+            diversity=state.diversity,
+            expansion=state.expansion,
+            result_offset=request.result_offset,
+            result_limit=request.result_limit,
+            result_total=0,
+            complete_context_items=request.complete_context_items,
         )
-    return "No relevant matches found."
+    )
 
 
 def _apply_graph_signal_rerank(
@@ -496,12 +519,18 @@ def context_page_reader(
     try:
         with effective_config_cache(), active_plugin_instance_cache():
             state = _initial_context_state(request, conn)
+            source_evidence, source_evidence_truncated = query_source_evidence(
+                conn, request.root, request.query, state.normalized_prefix
+            )
             _append_issue_driven_matches(request, state, conn)
             state.top_matches = _filter_redundant_module_matches(state.top_matches)
 
             if not state.top_matches:
                 yield lambda offset, limit: _empty_context_result(
-                    replace(request, result_offset=offset, result_limit=limit), state
+                    replace(request, result_offset=offset, result_limit=limit),
+                    state,
+                    source_evidence,
+                    source_evidence_truncated,
                 )
                 return
 
@@ -589,6 +618,8 @@ def context_page_reader(
                         doc_issues=doc_issues,
                         expanded=expanded,
                         unique_refs=unique_refs,
+                        source_evidence=source_evidence,
+                        source_evidence_truncated=source_evidence_truncated,
                         confidence_map=page_confidence_map,
                         as_json=request.as_json,
                         as_prompt=request.as_prompt,

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codira-clang-frontend"
+version = "0.4.1"
+description = "Optional shared Clang LibTooling frontend for Codira C-family analyzers"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+codira-clang-prepare-headers = "codira_clang_frontend.header_projection_cli:main"
+
+[project.optional-dependencies]
+test = ["mypy", "pytest", "ruff"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+codira_clang_frontend = ["py.typed", "native/clang_frontend.cpp"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true

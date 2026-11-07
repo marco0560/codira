@@ -41,7 +41,23 @@ if TYPE_CHECKING:
     )
 
 CallRecord = dict[str, str | int]
-CallRow = tuple[int, str, str, str, str, str, str | None, str | None, int, int]
+CallRow = tuple[
+    int,
+    str,
+    str,
+    str | None,
+    str,
+    str,
+    str,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    int,
+    int,
+]
 RefRow = tuple[int, str, str, str, str, str, str, str | None, str | None, int, int]
 
 _embedding_content_hash = _embedding_payload._embedding_content_hash
@@ -66,6 +82,8 @@ class CallResolutionRequest:
         Known top-level functions keyed by module name.
     class_methods : dict[tuple[str, str], set[str]]
         Known method names keyed by ``(module_name, class_name)``.
+    semantic_identity_lookup : dict[tuple[str, str], set[tuple[str, str, str]]] | None
+        Exact callable candidates keyed by opaque identity namespace/value.
     """
 
     call: dict[str, str | int]
@@ -74,6 +92,9 @@ class CallResolutionRequest:
     import_aliases: dict[str, str]
     module_functions: dict[str, set[str]]
     class_methods: dict[tuple[str, str], set[str]]
+    semantic_identity_lookup: (
+        dict[tuple[str, str], set[tuple[str, str, str]]] | None
+    ) = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +145,10 @@ class SymbolIndexInsertRequest:
         Integer identifier of the owner file.
     lineno : int
         Source line of the indexed symbol.
+    signature, type_text : str | None, optional
+        Analyzer-provided declaration signature and type text when available.
+    semantic_identity_namespace, semantic_identity_value : str | None, optional
+        Opaque exact identity fields for callable definitions.
     """
 
     name: str
@@ -132,6 +157,13 @@ class SymbolIndexInsertRequest:
     module_name: str
     file_id: int
     lineno: int
+    semantic_identity_namespace: str | None = None
+    semantic_identity_value: str | None = None
+    owner_name: str | None = None
+    owner_stable_id: str | None = None
+    access: str | None = None
+    signature: str | None = None
+    type_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -439,7 +471,7 @@ def _load_module_functions(conn: sqlite3.Connection) -> dict[str, set[str]]:
         FROM functions f
         JOIN modules m
           ON f.module_id = m.id
-        WHERE f.class_id IS NULL
+        WHERE f.class_id IS NULL AND f.is_method = 0
         ORDER BY m.name, f.name
         """).fetchall()
     module_functions: dict[str, set[str]] = {}
@@ -463,13 +495,14 @@ def _load_class_methods(conn: sqlite3.Connection) -> dict[tuple[str, str], set[s
         Method names keyed by ``(module_name, class_name)``.
     """
     rows = conn.execute("""
-        SELECT m.name, c.name, f.name
+        SELECT m.name, COALESCE(f.owner_name, c.name), f.name
         FROM functions f
-        JOIN classes c
+        LEFT JOIN classes c
           ON f.class_id = c.id
         JOIN modules m
           ON f.module_id = m.id
-        ORDER BY m.name, c.name, f.name
+        WHERE f.is_method = 1 AND COALESCE(f.owner_name, c.name) IS NOT NULL
+        ORDER BY m.name, COALESCE(f.owner_name, c.name), f.name
         """).fetchall()
     class_methods: dict[tuple[str, str], set[str]] = {}
     for module_name, class_name, method_name in rows:
@@ -549,9 +582,37 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
     None
         The derived edge tables are replaced in place.
     """
+    conn.execute("""
+        UPDATE functions SET class_id = (
+            SELECT c.id FROM classes c
+            JOIN modules m ON m.id = c.module_id
+            JOIN symbol_index s ON s.type = 'class' AND s.file_id = m.file_id
+                AND s.name = c.name AND s.lineno = c.lineno
+            WHERE s.stable_id = functions.owner_stable_id
+            ORDER BY c.id LIMIT 1
+        ) WHERE owner_stable_id IS NOT NULL
+        """)
     module_functions = _load_module_functions(conn)
     class_methods = _load_class_methods(conn)
     import_aliases_by_module = _load_import_aliases(conn)
+    semantic_identity_lookup: dict[tuple[str, str], set[tuple[str, str, str]]] = {}
+    identity_rows = conn.execute(
+        "SELECT semantic_identity_namespace, semantic_identity_value, "
+        "module_name, name, stable_id FROM symbol_index "
+        "WHERE type IN ('function', 'method') "
+        "AND semantic_identity_namespace IS NOT NULL "
+        "AND semantic_identity_value IS NOT NULL"
+    ).fetchall()
+    for (
+        namespace,
+        identity_value,
+        module_name,
+        callable_name,
+        stable_id,
+    ) in identity_rows:
+        semantic_identity_lookup.setdefault(
+            (str(namespace), str(identity_value)), set()
+        ).add((str(module_name), str(callable_name), str(stable_id)))
 
     conn.execute("DELETE FROM call_edges")
     conn.execute("DELETE FROM callable_refs")
@@ -561,6 +622,8 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
             int,
             str,
             str,
+            str | None,
+            str | None,
             str | None,
             str | None,
             str,
@@ -588,9 +651,13 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
             file_id,
             owner_module,
             owner_name,
+            owner_stable_id,
             kind,
             base,
             target,
+            target_identity_namespace,
+            target_identity_value,
+            resolution_mode,
             external_target_kind,
             external_target_name,
             lineno,
@@ -610,9 +677,13 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
         file_id,
         owner_module,
         owner_name,
+        owner_stable_id,
         kind,
         base,
         target,
+        target_identity_namespace,
+        target_identity_value,
+        resolution_mode,
         external_target_kind,
         external_target_name,
         _lineno,
@@ -624,11 +695,21 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
                 "kind": str(kind),
                 "base": str(base),
                 "target": str(target),
+                "target_identity_namespace": ""
+                if target_identity_namespace is None
+                else str(target_identity_namespace),
+                "target_identity_value": ""
+                if target_identity_value is None
+                else str(target_identity_value),
+                "resolution_mode": ""
+                if resolution_mode is None
+                else str(resolution_mode),
             },
         )
         caller_module = str(owner_module)
         caller_name = str(owner_name)
-        callee_module, callee_name, resolved = _resolve_call_record(
+        caller_stable_id = str(owner_stable_id) if owner_stable_id is not None else None
+        callee_module, callee_name, callee_stable_id, resolved = _resolve_call_record(
             CallResolutionRequest(
                 call=record,
                 caller_module=caller_module,
@@ -636,6 +717,7 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
                 import_aliases=import_aliases_by_module.get(caller_module, {}),
                 module_functions=module_functions,
                 class_methods=class_methods,
+                semantic_identity_lookup=semantic_identity_lookup,
             )
         )
         edges.add(
@@ -643,8 +725,10 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
                 int(file_id),
                 caller_module,
                 caller_name,
+                caller_stable_id,
                 callee_module,
                 callee_name,
+                callee_stable_id,
                 _unresolved_identity(record, resolved=resolved),
                 None if resolved else external_target_kind,
                 None if resolved else external_target_name,
@@ -697,7 +781,7 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
         )
         caller_module = str(owner_module)
         caller_name = str(owner_name)
-        target_module, target_name, resolved = _resolve_call_record(
+        target_module, target_name, _target_stable_id, resolved = _resolve_call_record(
             CallResolutionRequest(
                 call=record,
                 caller_module=caller_module,
@@ -729,17 +813,20 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
             item[2],
             item[3] or "",
             item[4] or "",
-            item[5],
+            item[5] or "",
             item[6] or "",
-            item[7] or "",
-            item[8],
+            item[7],
+            item[8] or "",
+            item[9] or "",
+            item[10],
         ),
     ):
         conn.execute(
             "INSERT OR IGNORE INTO call_edges"
-            "(caller_file_id, caller_module, caller_name, callee_module, "
-            "callee_name, unresolved_identity, external_target_kind, "
-            "external_target_name, resolved) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(caller_file_id, caller_module, caller_name, caller_stable_id, "
+            "callee_module, callee_name, callee_stable_id, unresolved_identity, "
+            "external_target_kind, external_target_name, resolved) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             edge,
         )
 
@@ -770,6 +857,7 @@ def _record_tuple(
     file_id: int,
     owner_module: str,
     owner_name: str,
+    owner_stable_id: str,
     record: CallSite,
 ) -> CallRow:
     """
@@ -783,6 +871,8 @@ def _record_tuple(
         Owning module name.
     owner_name : str
         Logical owner name.
+    owner_stable_id : str
+        Analyzer-owned stable identity of the owning callable.
     record : codira.models.CallSite
         Normalized call-site record.
 
@@ -795,9 +885,14 @@ def _record_tuple(
         file_id,
         owner_module,
         owner_name,
+        owner_stable_id if record.resolution_mode == "exact" else None,
         record.kind,
         record.base,
         record.target,
+        None if record.target_identity is None else record.target_identity.namespace,
+        None if record.target_identity is None else record.target_identity.value,
+        record.resolution_mode,
+        record.origin,
         record.external_target_kind,
         record.external_target_name,
         record.lineno,
@@ -866,8 +961,10 @@ def _insert_symbol_index_row(
     """
     cur = conn.execute(
         "INSERT INTO symbol_index"
-        "(name, stable_id, type, module_name, file_id, lineno) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "(name, stable_id, type, module_name, file_id, lineno, "
+        "semantic_identity_namespace, semantic_identity_value, owner_name, "
+        "owner_stable_id, access, signature, type_text) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             request.name,
             request.stable_id,
@@ -875,6 +972,13 @@ def _insert_symbol_index_row(
             request.module_name,
             request.file_id,
             request.lineno,
+            request.semantic_identity_namespace,
+            request.semantic_identity_value,
+            request.owner_name,
+            request.owner_stable_id,
+            request.access,
+            request.signature,
+            request.type_text,
         ),
     )
     assert cur.lastrowid is not None
@@ -1279,6 +1383,16 @@ def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
                     module_name=module_name,
                     file_id=file_id,
                     lineno=method.lineno,
+                    semantic_identity_namespace=(
+                        None
+                        if method.semantic_identity is None
+                        else method.semantic_identity.namespace
+                    ),
+                    semantic_identity_value=(
+                        None
+                        if method.semantic_identity is None
+                        else method.semantic_identity.value
+                    ),
                 ),
             )
             _append_embedding_row(
@@ -1325,7 +1439,9 @@ def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
             )
             for call in method.calls:
                 call_rows.append(
-                    _record_tuple(file_id, module_name, logical_name, call)
+                    _record_tuple(
+                        file_id, module_name, logical_name, method.stable_id, call
+                    )
                 )
             for ref in method.callable_refs:
                 ref_rows.append(
@@ -1363,8 +1479,8 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
         cur = conn.execute(
             "INSERT INTO functions"
             "(module_id, class_id, name, lineno, end_lineno, signature, "
-            "docstring, has_docstring, is_method, is_public) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "docstring, has_docstring, is_method, is_public, owner_name, owner_stable_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 module_id,
                 None,
@@ -1376,6 +1492,8 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
                 fn.has_docstring,
                 fn.is_method,
                 fn.is_public,
+                fn.owner_name,
+                fn.owner_stable_id,
             ),
         )
         assert cur.lastrowid is not None
@@ -1385,10 +1503,18 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
             SymbolIndexInsertRequest(
                 name=fn.name,
                 stable_id=fn.stable_id,
-                symbol_type="function",
+                symbol_type="method" if fn.is_method else "function",
                 module_name=module_name,
                 file_id=file_id,
                 lineno=fn.lineno,
+                semantic_identity_namespace=(
+                    None
+                    if fn.semantic_identity is None
+                    else fn.semantic_identity.namespace
+                ),
+                semantic_identity_value=(
+                    None if fn.semantic_identity is None else fn.semantic_identity.value
+                ),
             ),
         )
         _append_embedding_row(
@@ -1397,8 +1523,8 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
                 symbol_row_id=symbol_row_id,
                 stable_id=fn.stable_id,
                 module_name=module_name,
-                symbol_name=fn.name,
-                symbol_type="function",
+                symbol_name=fn.logical_name(class_name=fn.owner_name),
+                symbol_type="method" if fn.is_method else "function",
                 signature=fn.signature,
                 docstring=fn.docstring,
                 extra_context=python_embedding_context or c_embedding_context,
@@ -1432,9 +1558,15 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
             overloads=fn.overloads,
         )
         for call in fn.calls:
-            call_rows.append(_record_tuple(file_id, module_name, fn.name, call))
+            call_rows.append(
+                _record_tuple(
+                    file_id, module_name, fn.logical_name(), fn.stable_id, call
+                )
+            )
         for ref in fn.callable_refs:
-            ref_rows.append(_reference_tuple(file_id, module_name, fn.name, ref))
+            ref_rows.append(
+                _reference_tuple(file_id, module_name, fn.logical_name(), ref)
+            )
 
 
 def _persist_overload_artifacts(
@@ -1545,6 +1677,11 @@ def _persist_declaration_artifacts(request: ArtifactPersistenceRequest) -> None:
                 module_name=module_name,
                 file_id=file_id,
                 lineno=decl.lineno,
+                owner_name=decl.owner_name,
+                owner_stable_id=decl.owner_stable_id,
+                access=decl.access,
+                signature=decl.signature,
+                type_text=decl.type_text,
             ),
         )
         _append_embedding_row(
@@ -1632,16 +1769,23 @@ def _flush_persisted_relationship_rows(
     None
         Relationship rows are inserted in deterministic order.
     """
-    for row in sorted(set(call_rows)):
+    for row in sorted(
+        set(call_rows),
+        key=lambda item: tuple((value is not None, str(value)) for value in item),
+    ):
         conn.execute(
             "INSERT INTO call_records"
-            "(file_id, owner_module, owner_name, kind, base, target, "
+            "(file_id, owner_module, owner_name, owner_stable_id, kind, base, target, "
+            "target_identity_namespace, target_identity_value, resolution_mode, origin, "
             "external_target_kind, external_target_name, lineno, col_offset) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             row,
         )
 
-    for ref_row in sorted(set(ref_rows)):
+    for ref_row in sorted(
+        set(ref_rows),
+        key=lambda item: tuple((value is not None, str(value)) for value in item),
+    ):
         conn.execute(
             "INSERT INTO callable_ref_records"
             "(file_id, owner_module, owner_name, kind, ref_kind, base, "

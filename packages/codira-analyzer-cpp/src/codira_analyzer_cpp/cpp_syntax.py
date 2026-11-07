@@ -24,7 +24,9 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
-from tree_sitter import Language, Node, Parser
+from tree_sitter import Language, Parser
+
+from .cpp_projection import SyntaxNode as Node
 from tree_sitter_cpp import language
 
 from codira.models import DeclarationKind
@@ -316,10 +318,99 @@ def _split_qualified_name(text: str) -> tuple[str, ...]:
     Returns
     -------
     tuple[str, ...]
-        Non-empty qualified-name components.
+        Non-empty qualified-name components. Lexical spaces inside a component,
+        including allocation operators and multiword template types, survive.
     """
-    normalized = text.replace(" ", "")
-    return tuple(part for part in normalized.split("::") if part)
+    return tuple(part.strip() for part in text.split("::") if part.strip())
+
+
+def _canonical_node_text(
+    node: Node,
+    source: bytes,
+    *,
+    excluded: frozenset[tuple[int, int]] = frozenset(),
+) -> str:
+    """Normalize syntax tokens without losing required lexical separators.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Source subtree to normalize.
+    source : bytes
+        Original source, including annotation tokens blanked in a parser buffer.
+    excluded : frozenset[tuple[int, int]], optional
+        Subtree byte spans to omit, such as parameter names and defaults.
+
+    Returns
+    -------
+    str
+        Comment-free token text preserving literals, word boundaries and distinct
+        punctuation tokens. Omitted subtrees cannot reappear through source gaps.
+    """
+    leaves: list[tuple[int, int, bytes]] = []
+    pending = [node]
+    while pending:
+        child = pending.pop()
+        span = (child.start_byte, child.end_byte)
+        if span in excluded or child.type == "comment":
+            leaves.append((*span, b""))
+        elif not child.children or child.type in {
+            "string_literal",
+            "raw_string_literal",
+            "char_literal",
+        }:
+            leaves.append((*span, source[child.start_byte : child.end_byte]))
+        else:
+            pending.extend(reversed(child.children))
+    tokens: list[bytes] = []
+    cursor = node.start_byte
+    for start, end, token in leaves:
+        tokens.extend(source[cursor:start].split())
+        if token:
+            tokens.append(token)
+        cursor = end
+    tokens.extend(source[cursor : node.end_byte].split())
+    pieces: list[str] = []
+    previous = ""
+    combined_operators = {
+        "++",
+        "--",
+        "&&",
+        "||",
+        "<<",
+        ">>",
+        "<=",
+        ">=",
+        "==",
+        "!=",
+        "+=",
+        "-=",
+        "*=",
+        "/=",
+        "%=",
+        "&=",
+        "|=",
+        "^=",
+        "->",
+        "::",
+        ".*",
+        "##",
+        "/*",
+        "//",
+    }
+    for raw in tokens:
+        text = _decode_source_text(raw)
+        if previous and (
+            (
+                (previous[-1].isalnum() or previous[-1] == "_")
+                and (text[0].isalnum() or text[0] == "_")
+            )
+            or previous[-1] + text[0] in combined_operators
+        ):
+            pieces.append(" ")
+        pieces.append(text)
+        previous = text
+    return "".join(pieces)
 
 
 def _cpp_external_target_kind(base: str, target: str) -> str:
@@ -338,7 +429,7 @@ def _cpp_external_target_kind(base: str, target: str) -> str:
     str
         Analyzer-owned external target classifier.
     """
-    if target in _CPP_MACROS or target.isupper():
+    if target in _CPP_MACROS:
         return "C++:<macro>"
     if base == "std" or base.startswith("std::") or target in _CPP_SYSTEM_FUNCTIONS:
         return "C++:<system-header>"

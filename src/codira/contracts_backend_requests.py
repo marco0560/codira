@@ -35,6 +35,9 @@ class BackendRelationQueryRequest:
         Repo-root-relative path prefix used to restrict owner files.
     conn : object | None, optional
         Existing backend connection to reuse.
+    stable_id : str | None, optional
+        Exact endpoint stable identity used to disambiguate overloaded callers
+        or callees.
     """
 
     root: Path
@@ -43,6 +46,7 @@ class BackendRelationQueryRequest:
     incoming: bool = False
     prefix: str | None = None
     conn: object | None = None
+    stable_id: str | None = None
 
 
 @dataclass(frozen=True)

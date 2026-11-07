@@ -8,6 +8,81 @@ from pathlib import Path
 from codira_analyzer_go import GoAnalyzer, build_analyzer
 
 
+def test_go_new_expression_preserves_source_artifacts(tmp_path: Path) -> None:
+    """Index Go 1.26 new expressions using original source coordinates.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        Complete coverage, original call names, and byte offsets are asserted.
+    """
+    source = tmp_path / "values.go"
+    text = (
+        "package values\n"
+        '// Build keeps new("comment") unchanged.\n'
+        "func Build() {\n"
+        '    label := "é new(\\"string\\")"; _ = new(label)\n'
+        "    _ = new(1); _ = new(factory()); _ = new(new(int))\n"
+        "    _ = new([]int); _ = new(map[string]int); _ = new(struct{ X int })\n"
+        "    _ = new([]int{1, 2}); _ = n_w(2)\n"
+        "}\n"
+    )
+    source.write_text(text, encoding="utf-8")
+
+    result = GoAnalyzer().analyze_file(source, tmp_path)
+
+    assert result.index_symbols
+    function = result.functions[0]
+    assert function.name == "Build"
+    assert function.docstring == 'Build keeps new("comment") unchanged.'
+    assert [call.target for call in function.calls] == [
+        "new",
+        "new",
+        "new",
+        "factory",
+        "new",
+        "new",
+        "new",
+        "new",
+        "new",
+        "new",
+        "n_w",
+    ]
+    call = function.calls[0]
+    assert call.lineno == 4
+    assert call.col_offset == text.splitlines()[3].encode("utf-8").index(b"new(label)")
+    assert source.read_text(encoding="utf-8") == text
+
+
+def test_go_new_expression_retains_unrelated_syntax_errors(tmp_path: Path) -> None:
+    """Keep malformed Go partial when a new-expression workaround is possible.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        Unrelated syntax damage still prevents complete symbol indexing.
+    """
+    source = tmp_path / "broken.go"
+    source.write_text(
+        "package broken\nfunc Build() { _ = new(1); value := }\n",
+        encoding="utf-8",
+    )
+    result = GoAnalyzer().analyze_file(source, tmp_path)
+    assert not result.index_symbols
+    assert result.status is not None
+    assert result.status.diagnostics
+
+
 def test_go_package_declares_expected_entry_point() -> None:
     """Keep Go package metadata aligned with analyzer discovery.
 
@@ -25,7 +100,7 @@ def test_go_package_declares_expected_entry_point() -> None:
             encoding="utf-8"
         )
     )
-    assert project["project"]["version"] == "2.0.2"
+    assert project["project"]["version"] == "2.0.3"
     assert "tree-sitter-go>=0.23.4" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "go": "codira_analyzer_go:build_analyzer"

@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from memory_backend_models import (
+    CallableRefRow,
     CallEdgeRow,
     _MemoryConnection,
     _MemoryDocIssue,
@@ -1509,6 +1510,7 @@ class MemoryIndexBackend(MemoryRelationBackendMixin):
         logical_name: str,
         *,
         prefix: str | None = None,
+        stable_id: str | None = None,
         conn: object | None = None,
     ) -> list[SymbolRow]:
         """
@@ -1524,6 +1526,8 @@ class MemoryIndexBackend(MemoryRelationBackendMixin):
             Logical symbol name.
         prefix : str | None, optional
             Optional repository-relative path prefix.
+        stable_id : str | None, optional
+            Optional exact analyzer-owned identity.
         conn : object | None, optional
             Optional backend connection.
 
@@ -1532,6 +1536,8 @@ class MemoryIndexBackend(MemoryRelationBackendMixin):
         list[codira.contracts.SymbolRow]
             Matching symbol rows.
         """
+        if stable_id is not None:
+            return []
         state = self._conn_state(root, conn)
         normalized_prefix = normalize_prefix(root, prefix)
         if "." in logical_name:
@@ -2081,8 +2087,22 @@ class MemoryIndexBackend(MemoryRelationBackendMixin):
             seen_identities.add(identity)
             symbols.append(row)
 
-        call_edges = self._derived_relations(state, state.call_records)
-        callable_refs = self._derived_relations(state, state.callable_ref_records)
+        call_edges = cast(
+            "list[CallEdgeRow]",
+            self._derived_relations(
+                state,
+                state.call_records,
+                include_endpoint_ids=True,
+            ),
+        )
+        callable_refs = cast(
+            "list[CallableRefRow]",
+            self._derived_relations(
+                state,
+                state.callable_ref_records,
+                include_endpoint_ids=False,
+            ),
+        )
         return [
             BackendSymbolInventoryItem(
                 symbol_type=symbol_type,
@@ -2096,13 +2116,15 @@ class MemoryIndexBackend(MemoryRelationBackendMixin):
                     symbol_name=symbol_name,
                     module_index=0,
                     name_index=1,
+                    resolution_index=8,
                 ),
                 calls_in=self._inventory_metric(
                     call_edges,
                     module_name=module_name,
                     symbol_name=symbol_name,
-                    module_index=2,
-                    name_index=3,
+                    module_index=3,
+                    name_index=4,
+                    resolution_index=8,
                 ),
                 refs_out=self._inventory_metric(
                     callable_refs,
@@ -2159,12 +2181,13 @@ class MemoryIndexBackend(MemoryRelationBackendMixin):
 
     def _inventory_metric(
         self,
-        rows: Sequence[CallEdgeRow],
+        rows: Sequence[tuple[object, ...]],
         *,
         module_name: str,
         symbol_name: str,
         module_index: int,
         name_index: int,
+        resolution_index: int = 6,
     ) -> BackendGraphMetric:
         """
         Count inventory graph edges for one symbol identity.
@@ -2181,6 +2204,8 @@ class MemoryIndexBackend(MemoryRelationBackendMixin):
             Relation tuple index containing the endpoint module.
         name_index : int
             Relation tuple index containing the endpoint name.
+        resolution_index : int, optional
+            Relation tuple index containing the resolved flag.
 
         Returns
         -------
@@ -2194,7 +2219,7 @@ class MemoryIndexBackend(MemoryRelationBackendMixin):
         ]
         return BackendGraphMetric(
             total=len(matched_rows),
-            unresolved=sum(1 for row in matched_rows if row[6] == 0),
+            unresolved=sum(1 for row in matched_rows if row[resolution_index] == 0),
         )
 
     def find_symbol_overloads(
@@ -2366,20 +2391,24 @@ class MemoryIndexBackend(MemoryRelationBackendMixin):
         list[codira.contracts.CallEdgeRow]
             Matching call edge rows.
         """
-        return self._find_relations(
-            request.root,
-            request.name,
-            records_attr="call_records",
-            module=request.module,
-            incoming=request.incoming,
-            prefix=request.prefix,
-            conn=request.conn,
+        return cast(
+            "list[CallEdgeRow]",
+            self._find_relations(
+                request.root,
+                request.name,
+                records_attr="call_records",
+                module=request.module,
+                incoming=request.incoming,
+                prefix=request.prefix,
+                conn=request.conn,
+                stable_id=request.stable_id,
+            ),
         )
 
     def find_callable_refs(
         self,
         request: BackendRelationQueryRequest,
-    ) -> list[CallEdgeRow]:
+    ) -> list[CallableRefRow]:
         """
         Find exact callable-reference edges by owner or target name.
 
@@ -2393,14 +2422,17 @@ class MemoryIndexBackend(MemoryRelationBackendMixin):
         list[codira.contracts.CallEdgeRow]
             Matching callable-reference edge rows.
         """
-        return self._find_relations(
-            request.root,
-            request.name,
-            records_attr="callable_ref_records",
-            module=request.module,
-            incoming=request.incoming,
-            prefix=request.prefix,
-            conn=request.conn,
+        return cast(
+            "list[CallableRefRow]",
+            self._find_relations(
+                request.root,
+                request.name,
+                records_attr="callable_ref_records",
+                module=request.module,
+                incoming=request.incoming,
+                prefix=request.prefix,
+                conn=request.conn,
+            ),
         )
 
     def _append_symbol(

@@ -21,6 +21,7 @@ from codira.query.context_models import (
     MainContextSectionsRequest,
     MergeDiagnostics,
     PromptRenderRequest,
+    SourceEvidence,
 )
 from codira.query.context_scoring import (
     _format_enriched_symbol,
@@ -87,7 +88,7 @@ def _render_agent_prompt(
     str
         Prompt-formatted query context.
     """
-    return build_prompt(
+    prompt = build_prompt(
         PromptBuildRequest(
             root=request.root,
             query=request.query,
@@ -102,6 +103,11 @@ def _render_agent_prompt(
             ),
         )
     )
+    lines = prompt.splitlines()
+    _append_source_evidence_section(
+        lines, request.source_evidence, request.source_evidence_truncated
+    )
+    return "\n".join(lines)
 
 
 def _approx_token_count(lines: list[str]) -> int:
@@ -166,6 +172,32 @@ def _context_blocks_payload(
         current_tokens += block_tokens
 
     return context_blocks
+
+
+def _source_evidence_payload(request: ContextJsonRenderRequest) -> dict[str, object]:
+    """Serialize exact indexed lexical evidence with its interpretation limit."""
+    return {
+        "items": [
+            {
+                "file": item.file,
+                "lineno": item.lineno,
+                "identifiers": list(item.identifiers),
+                "text": item.line_text,
+                "file_sha256": item.file_sha256,
+                "coverage_state": item.coverage_state,
+                "line_truncated": item.line_truncated,
+            }
+            for item in request.source_evidence
+        ],
+        "truncated": request.source_evidence_truncated,
+        "interpretation": (
+            "Exact indexed source lines containing query identifiers; matches "
+            "may occur in comments, strings, or conditional code and do not "
+            "establish symbol definitions or active compilation. Invalid UTF-8 "
+            "bytes are displayed with replacement characters. A null coverage "
+            "state means the analyzer did not report one."
+        ),
+    }
 
 
 def _top_matches_payload(
@@ -555,7 +587,7 @@ def _render_context_json(
     str
         JSON-encoded context payload.
     """
-    status = "ok" if request.top_matches else "no_matches"
+    status = "ok" if request.top_matches or request.source_evidence else "no_matches"
 
     result: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
@@ -581,6 +613,7 @@ def _render_context_json(
             max_source_file_bytes=request.max_source_file_bytes,
             complete_items=request.complete_context_items,
         ),
+        "source_evidence": _source_evidence_payload(request),
         "module_expansion": _module_expansion_payload(request.expanded),
         "references": [
             {"file": file_path, "lineno": lineno}
@@ -637,6 +670,8 @@ def _render_context(
                 doc_issues=request.doc_issues,
                 expanded=request.expanded,
                 unique_refs=request.unique_refs,
+                source_evidence=request.source_evidence,
+                source_evidence_truncated=request.source_evidence_truncated,
                 max_source_file_bytes=request.max_source_file_bytes,
                 confidence_map=request.confidence_map,
                 explain=request.explain,
@@ -669,6 +704,8 @@ def _render_context(
                 doc_issues=request.doc_issues,
                 expanded=request.expanded,
                 unique_refs=request.unique_refs,
+                source_evidence=request.source_evidence,
+                source_evidence_truncated=request.source_evidence_truncated,
                 max_source_file_bytes=request.max_source_file_bytes,
             )
         )
@@ -709,8 +746,43 @@ def _render_context(
             max_source_file_bytes=request.max_source_file_bytes,
         )
     )
+    _append_source_evidence_section(
+        lines, request.source_evidence, request.source_evidence_truncated
+    )
 
     return "\n".join(lines)
+
+
+def _append_source_evidence_section(
+    lines: list[str],
+    evidence: list[SourceEvidence],
+    truncated: bool,
+) -> None:
+    """Append separately labeled lexical evidence to text and prompt output."""
+    if not evidence:
+        return
+    lines.extend(
+        [
+            "",
+            "=== EXACT SOURCE TEXT (LEXICAL MATCHES) ===",
+            "These indexed lines may be comments, strings, or conditional code; "
+            "they do not establish a symbol definition or active compilation. "
+            "Invalid UTF-8 bytes are displayed with replacement characters.",
+        ]
+    )
+    for item in evidence:
+        identifiers = ", ".join(item.identifiers)
+        lines.append(
+            f"- {item.file}:{item.lineno} [{identifiers}] "
+            f"sha256={item.file_sha256} "
+            f"coverage={item.coverage_state or 'unknown'} {item.line_text}"
+        )
+        if item.line_truncated:
+            lines.append("  Source line excerpt truncated at 1000 characters.")
+    if truncated:
+        lines.append(
+            "Additional matching source lines were omitted by the result limit."
+        )
 
 
 def _append_explain_environment(

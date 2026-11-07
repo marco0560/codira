@@ -37,6 +37,7 @@ def _clear_index_tables(conn: _DuckDBPersistenceConnection) -> None:
         "functions",
         "classes",
         "modules",
+        "artifact_provenance",
         "files",
         "analysis_status",
     ):

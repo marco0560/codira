@@ -16,6 +16,7 @@ can consume configuration without circular imports.
 from __future__ import annotations
 
 import os
+import tomllib
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -215,6 +216,26 @@ def config_path(level: LevelName, *, root: Path | None = None) -> Path:
     raise ConfigError(msg)
 
 
+def _deep_copy_config_value(value: object) -> object:
+    """Copy configuration containers recursively, including nested TOML arrays.
+
+    Parameters
+    ----------
+    value : object
+        Configuration scalar, mapping or sequence.
+
+    Returns
+    -------
+    object
+        Independent built-in containers with scalar values preserved.
+    """
+    if isinstance(value, Mapping):
+        return _deep_copy_mapping(value)
+    if isinstance(value, (list, tuple)):
+        return [_deep_copy_config_value(item) for item in value if item != {}]
+    return value
+
+
 def _deep_copy_mapping(value: Mapping[str, object]) -> dict[str, object]:
     """
     Copy one nested config mapping into mutable built-in containers.
@@ -230,19 +251,7 @@ def _deep_copy_mapping(value: Mapping[str, object]) -> dict[str, object]:
         Deep copied mapping.
     """
 
-    copied: dict[str, object] = {}
-    for key, item in value.items():
-        if isinstance(item, (list, tuple)):
-            copied_items = [
-                _deep_copy_mapping(value) if isinstance(value, Mapping) else value
-                for value in item
-            ]
-            copied[key] = [value for value in copied_items if value != {}]
-        elif isinstance(item, Mapping):
-            copied[key] = _deep_copy_mapping(item)
-        else:
-            copied[key] = item
-    return copied
+    return {key: _deep_copy_config_value(item) for key, item in value.items()}
 
 
 def _leaf_keys(value: Mapping[str, object], *, prefix: str = "") -> list[str]:
@@ -354,13 +363,24 @@ def _read_config_file(path: Path) -> dict[str, object]:
     ------
     ConfigError
         If the file cannot be parsed or does not contain a TOML table.
+
+    Notes
+    -----
+    Runtime reads use the native parser to avoid constructing formatting trees
+    for large plugin configurations. Syntax unsupported by the native reader
+    retains the existing parser and error behavior. Editing uses its separate
+    comment-preserving path.
     """
 
+    text = path.read_text(encoding="utf-8")
     try:
-        parsed = tomlkit.parse(path.read_text(encoding="utf-8"))
-    except tomlkit.exceptions.ParseError as exc:
-        msg = f"Failed to parse config file {path}: {exc}"
-        raise ConfigError(msg) from exc
+        parsed: Mapping[str, object] = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        try:
+            parsed = tomlkit.parse(text)
+        except tomlkit.exceptions.ParseError as exc:
+            msg = f"Failed to parse config file {path}: {exc}"
+            raise ConfigError(msg) from exc
     return _deep_copy_mapping(parsed)
 
 

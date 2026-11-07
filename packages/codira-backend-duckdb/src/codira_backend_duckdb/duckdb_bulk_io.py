@@ -11,8 +11,17 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .duckdb_support import _DuckDBPersistenceConnection
 
+_CSV_READ_OPTIONS = """
+    auto_detect=false,
+    header=false,
+    delim=',',
+    quote='"',
+    escape='"',
+    nullstr=?
+"""
 
-def _temporary_csv_path_for_rows(rows: Sequence[Sequence[object]]) -> Path:
+
+def _temporary_csv_path_for_rows(rows: Sequence[Sequence[object]]) -> tuple[Path, str]:
     """
     Write Excel-dialect CSV rows for explicitly configured DuckDB bulk import.
 
@@ -23,9 +32,24 @@ def _temporary_csv_path_for_rows(rows: Sequence[Sequence[object]]) -> Path:
 
     Returns
     -------
-    pathlib.Path
-        Temporary CSV path owned by the caller.
+    tuple[pathlib.Path, str]
+        Temporary CSV path and the collision-free null token used to encode
+        ``None`` values.
+
+    Notes
+    -----
+    Python's CSV writer serializes ``None`` as an empty field. A per-batch token
+    preserves SQL NULL without conflating it with a legitimate empty string or
+    with input text equal to the default token.
     """
+    null_sentinel = "__CODIRA_NULL_SENTINEL__"
+    while any(
+        value is not None and str(value) == null_sentinel
+        for row in rows
+        for value in row
+    ):
+        null_sentinel += "_"
+
     with tempfile.NamedTemporaryFile(
         "w",
         encoding="utf-8",
@@ -35,8 +59,11 @@ def _temporary_csv_path_for_rows(rows: Sequence[Sequence[object]]) -> Path:
         delete=False,
     ) as handle:
         csv_path = Path(handle.name)
-        csv.writer(handle, dialect="excel").writerows(rows)
-    return csv_path
+        csv.writer(handle, dialect="excel").writerows(
+            tuple(null_sentinel if value is None else value for value in row)
+            for row in rows
+        )
+    return csv_path, null_sentinel
 
 
 def _flush_registered_arrow_table(

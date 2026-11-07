@@ -15,8 +15,10 @@ _ALLOWED_GRAPH_COLUMNS = frozenset(
     {
         "caller_module",
         "caller_name",
+        "caller_stable_id",
         "callee_module",
         "callee_name",
+        "callee_stable_id",
         "owner_module",
         "owner_name",
         "target_module",

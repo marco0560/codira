@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sys
 import tomllib
 from pathlib import Path
@@ -22,6 +23,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from codira.contracts import (
+    BackendRelationQueryRequest,
     BackendError,
     BackendPersistAnalysisRequest,
     BackendResolveDocumentationScoresRequest,
@@ -54,10 +56,14 @@ from codira_backend_duckdb import (
     build_backend,
 )
 from codira_backend_duckdb.duckdb_support import DocumentationArtifactRow
+from codira_backend_duckdb.duckdb_artifact_persistence import (
+    DuckDBStructuralRowBuffers,
+)
 from codira_backend_duckdb.duckdb_support import _delete_pending_embedding_rows
 from codira_backend_duckdb.duckdb_support import _flush_pending_embedding_rows
 from codira_backend_duckdb.duckdb_support import _flush_structural_documentation_rows
 from codira_backend_duckdb.duckdb_support import _store_pending_embedding_rows
+from codira_backend_duckdb.duckdb_support import _flush_pending_relationship_rows
 from codira_backend_duckdb.duckdb_reference_scan import (
     _flush_pending_reference_scan_rows,
 )
@@ -67,6 +73,12 @@ from codira_backend_duckdb.profiling import (
     duckdb_profile_path,
 )
 from codira_backend_duckdb import duckdb_support as duckdb_support_module
+from codira_backend_duckdb.duckdb_artifact_persistence import (
+    CallRow,
+    RefRow,
+    _flush_call_record_rows,
+    _flush_persisted_relationship_rows,
+)
 
 if TYPE_CHECKING:
     from codira_backend_duckdb.duckdb_support import _DuckDBPersistenceConnection
@@ -96,7 +108,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.5"
+    assert project["project"]["version"] == "2.0.13"
     assert project["project"]["dependencies"] == [
         "codira>=2.0.0,<3.0.0",
         "duckdb>=1.4,<2.0",
@@ -105,6 +117,87 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     assert project["project"]["entry-points"]["codira.backends"] == {
         "duckdb": "codira_backend_duckdb:build_backend"
     }
+
+
+def test_duckdb_persists_written_source_for_symbol_suppressed_analysis(
+    tmp_path: Path,
+) -> None:
+    """Persist exact source lines and neutral identifier lookup rows.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        Source evidence remains queryable and is removed with its file.
+    """
+    source = b"#if FLAG\n// cafe\xc3\xa9\nint value = call(value);\n#endif\n"
+    path = tmp_path / "src" / "partial.c"
+    backend = DuckDBIndexBackend()
+    backend.initialize(tmp_path)
+    backend.persist_analysis(
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=FileMetadataSnapshot(
+                path=path,
+                sha256=hashlib.sha256(source).hexdigest(),
+                mtime=1.0,
+                size=len(source),
+                analyzer_name="c",
+                analyzer_version="test",
+            ),
+            analysis=AnalysisResult(
+                source_path=path,
+                module=ModuleArtifact(
+                    name="partial",
+                    stable_id="c:module:partial",
+                    docstring=None,
+                    has_docstring=0,
+                ),
+                classes=(),
+                functions=(),
+                declarations=(),
+                imports=(),
+                index_symbols=False,
+                written_source=source,
+            ),
+            embedding_backend=EmbeddingBackendSpec(name="test", version="1", dim=2),
+        )
+    )
+    connection = backend.open_connection(tmp_path)
+    try:
+        assert connection.execute(
+            "SELECT lineno, line_text FROM written_source_lines ORDER BY lineno"
+        ).fetchall() == [
+            (1, "#if FLAG"),
+            (2, "// cafeé"),
+            (3, "int value = call(value);"),
+            (4, "#endif"),
+        ]
+        assert connection.execute(
+            "SELECT l.lineno, l.line_text FROM written_source_tokens t "
+            "JOIN written_source_lines l USING(file_id, lineno) "
+            "WHERE t.identifier = 'value' ORDER BY l.lineno"
+        ).fetchall() == [(3, "int value = call(value);")]
+        assert connection.execute(
+            "SELECT lineno FROM written_source_tokens WHERE identifier = 'cafeé'"
+        ).fetchall() == [(2,)]
+    finally:
+        connection.close()
+    backend.delete_paths(tmp_path, paths=[str(path)])
+    connection = backend.open_connection(tmp_path)
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM written_source_lines"
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM written_source_tokens"
+        ).fetchone() == (0,)
+    finally:
+        connection.close()
 
 
 def test_duckdb_backend_package_builds_expected_backend() -> None:
@@ -125,6 +218,26 @@ def test_duckdb_backend_package_builds_expected_backend() -> None:
     assert backend.__class__.__name__ == "DuckDBIndexBackend"
     assert backend.__class__.__module__ == "codira_backend_duckdb"
     assert backend.name == "duckdb"
+
+
+def test_duckdb_structural_buffer_counts_written_source_rows() -> None:
+    """Include source evidence in structural flush threshold accounting.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Source lines and token rows contribute to the buffered row count.
+    """
+    buffers = DuckDBStructuralRowBuffers(
+        written_source_lines=[(1, 1, "int value;"), (1, 2, "value = 1;")],
+        written_source_tokens=[("int", 1, 1), ("value", 1, 1), ("value", 1, 2)],
+    )
+
+    assert buffers.row_count == 5
 
 
 def test_duckdb_backend_exposes_configuration_schema() -> None:
@@ -1177,6 +1290,100 @@ def test_duckdb_backend_rebuild_keeps_distinct_unresolved_call_edges(
     ]
 
 
+def test_duckdb_call_edge_query_preserves_absent_optional_targets(
+    tmp_path: Path,
+) -> None:
+    """Return absent call target metadata as ``None`` through the public query.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts DuckDB round-trips nullable call metadata through
+        persistence, graph rebuild, and ``find_call_edges``.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    db_path = _duckdb_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    raw = duckdb.connect(str(db_path))
+    try:
+        for statement in _duckdb_schema_ddl():
+            raw.execute(statement)
+        raw.execute(
+            """
+            INSERT INTO files(
+                id,
+                path,
+                hash,
+                mtime,
+                size,
+                analyzer_name,
+                analyzer_version
+            ) VALUES (1, ?, 'seed-hash', 1.0, 1, 'c', '21')
+            """,
+            (str(tmp_path / "sample.c"),),
+        )
+        _flush_call_record_rows(
+            cast("_DuckDBPersistenceConnection", raw),
+            [
+                (
+                    1,
+                    "pkg.sample",
+                    "caller",
+                    None,
+                    "name",
+                    "",
+                    "missing_a",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    1,
+                    0,
+                ),
+                (
+                    1,
+                    "pkg.sample",
+                    "caller",
+                    None,
+                    "name",
+                    "",
+                    "missing_b",
+                    None,
+                    None,
+                    None,
+                    None,
+                    "",
+                    "",
+                    2,
+                    0,
+                ),
+            ],
+        )
+        raw.commit()
+    finally:
+        raw.close()
+
+    backend = DuckDBIndexBackend()
+    backend.rebuild_derived_indexes(tmp_path)
+    rows = backend.find_call_edges(
+        BackendRelationQueryRequest(
+            root=tmp_path,
+            name="caller",
+            module="pkg.sample",
+        )
+    )
+
+    assert len(rows) == 2
+    assert {row[6:8] for row in rows} == {(None, None), ("", "")}
+
+
 def test_duckdb_backend_rebuild_replaces_existing_resolved_edges(
     tmp_path: Path,
 ) -> None:
@@ -1674,6 +1881,100 @@ def test_duckdb_pending_embeddings_replace_duplicate_documentation_keys(
         "latest-hash",
     )
     assert cast("object", stored_rows[0][5]) is None
+
+
+def test_duckdb_relationship_persistence_sorts_nullable_values_and_deduplicates(
+    tmp_path: Path,
+) -> None:
+    """Persist distinct nullable and empty relationship fields in DuckDB.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts artifact collection and session flushing preserve
+        nullable values and deduplicate both relationship types.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    db_path = _duckdb_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = duckdb.connect(str(db_path))
+    try:
+        for statement in _duckdb_schema_ddl():
+            connection.execute(statement)
+        connection.execute(
+            """INSERT INTO files(
+                id, path, hash, mtime, size, analyzer_name, analyzer_version
+            ) VALUES (1, 'sample.py', 'hash', 1.0, 1, 'python', '1')"""
+        )
+        call_rows = [
+            (
+                1,
+                "pkg",
+                "caller",
+                None,
+                "name",
+                "",
+                "target",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                1,
+                0,
+            ),
+            (
+                1,
+                "pkg",
+                "caller",
+                "",
+                "name",
+                "",
+                "target",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                1,
+                0,
+            ),
+        ]
+        ref_rows = [
+            (1, "pkg", "caller", "name", "attribute", "", "target", None, None, 2, 0),
+            (1, "pkg", "caller", "name", "attribute", "", "target", "", None, 2, 0),
+        ]
+        pending_calls: list[CallRow] = []
+        pending_refs: list[RefRow] = []
+        _flush_persisted_relationship_rows(
+            cast("_DuckDBPersistenceConnection", connection),
+            call_rows=[*call_rows, call_rows[0]],
+            ref_rows=[*ref_rows, ref_rows[0]],
+            pending_call_rows=pending_calls,
+            pending_ref_rows=pending_refs,
+        )
+        _flush_pending_relationship_rows(
+            cast("_DuckDBPersistenceConnection", connection),
+            pending_call_rows=[*pending_calls, pending_calls[0]],
+            pending_ref_rows=[*pending_refs, pending_refs[0]],
+        )
+
+        assert connection.execute(
+            "SELECT owner_stable_id FROM call_records ORDER BY owner_stable_id IS NOT NULL"
+        ).fetchall() == [(None,), ("",)]
+        assert connection.execute(
+            "SELECT external_target_kind FROM callable_ref_records "
+            "ORDER BY external_target_kind IS NOT NULL"
+        ).fetchall() == [(None,), ("",)]
+    finally:
+        connection.close()
 
 
 def test_duckdb_pending_embedding_flush_respects_work_batch_size(

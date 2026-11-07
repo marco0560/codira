@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
-from pathlib import Path
+import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock
@@ -32,7 +33,8 @@ from codira.indexer import index_repo
 from codira.registry import active_index_backend
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Callable, Iterator, Sequence
+    from pathlib import Path
 
     from codira.contracts import BackendQueryConnection, BackendQueryCursor
 
@@ -283,7 +285,10 @@ def test_deep_architecture_cycle_does_not_use_python_recursion() -> None:
 
 @pytest.mark.parametrize("timeout", [0.2, 0.3])
 def test_svg_timeout_retains_mandatory_artifacts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timeout: float
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    timeout: float,
+    assert_process_terminated: Callable[[int], None],
 ) -> None:
     """Reap a stalled owned renderer and preserve a complete report manifest.
 
@@ -295,6 +300,8 @@ def test_svg_timeout_retains_mandatory_artifacts(
         Selects a dummy owned renderer rather than real Graphviz.
     timeout : float
         Bounded renderer deadline.
+    assert_process_terminated : collections.abc.Callable[[int], None]
+        Bounded observer of owned descendant termination.
 
     Returns
     -------
@@ -312,6 +319,41 @@ def test_svg_timeout_retains_mandatory_artifacts(
     )
     executable.chmod(0o755)
     monkeypatch.setattr(shutil, "which", lambda _name: str(executable))
+    communicate = subprocess.Popen.communicate
+    pid_path = tmp_path / "report" / "architecture.svg.pids"
+
+    def communicate_after_fixture_ready(
+        process: subprocess.Popen[str],
+        input: str | None = None,
+        timeout: float | None = None,
+    ) -> tuple[str, str]:
+        """Start the renderer deadline after the dummy has spawned its child.
+
+        Parameters
+        ----------
+        process : subprocess.Popen[str]
+            Actual renderer process with captured text streams.
+        input : str or None, optional
+            Input forwarded to the original communicate method.
+        timeout : float or None, optional
+            Unchanged renderer deadline; cleanup calls omit it.
+
+        Returns
+        -------
+        tuple[str, str]
+            Actual renderer output after fixture readiness.
+        """
+        if timeout is not None:
+            ready_deadline = time.monotonic() + 5
+            while not pid_path.exists():
+                assert process.poll() is None, "dummy renderer exited before readiness"
+                assert time.monotonic() < ready_deadline, "dummy renderer did not start"
+                time.sleep(0.01)
+        return communicate(process, input=input, timeout=timeout)
+
+    monkeypatch.setattr(
+        subprocess.Popen, "communicate", communicate_after_fixture_ready
+    )
     model = ARCH.build_architecture_model((), ())
     policy = ARCH.analyze_architecture_policy(model, ARCH.ArchitecturePolicy((), ()))
     result = write_architecture_artifacts(
@@ -331,9 +373,7 @@ def test_svg_timeout_retains_mandatory_artifacts(
     assert not (result.output_dir / "architecture.svg").exists()
     assert all((result.output_dir / name).exists() for name in manifest["artifacts"])
     for pid in json.loads((result.output_dir / "architecture.svg.pids").read_text()):
-        process_state = Path(f"/proc/{pid}/stat")
-        if process_state.exists():
-            assert process_state.read_text().split(")", 1)[1].split()[0] == "Z"
+        assert_process_terminated(pid)
     monkeypatch.setattr(
         shutil, "which", Mock(side_effect=AssertionError("unexpected renderer"))
     )

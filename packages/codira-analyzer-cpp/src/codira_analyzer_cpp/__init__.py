@@ -1,4 +1,4 @@
-"""C++ language analyzer backed by tree-sitter.
+"""C++ language analyzer with Tree-sitter default and optional Clang frontend.
 
 Responsibilities
 ----------------
@@ -10,8 +10,13 @@ Responsibilities
 
 Design principles
 -----------------
-The analyzer keeps C++-specific parsing isolated to this package so the core
-runtime continues to own orchestration, storage, and query behavior.
+Tree-sitter is the source-first default and needs no build files or compile
+profiles. It retains written declarations from every conditional branch with
+their original source positions. Calls without an exact compiler-proven target
+remain unresolved. An explicitly selected shared Clang frontend can supply
+source-written declarations and calls plus source-invoked variable and constant
+declarations with compiler-observed provenance when its exact compile profile
+and dependency closure are complete.
 
 Architectural role
 ------------------
@@ -29,19 +34,53 @@ None
 
 from __future__ import annotations
 
+import re
+
 import hashlib
-from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING
+import json
+from bisect import bisect_right
+from dataclasses import asdict, dataclass, field, replace
+from importlib.metadata import version as distribution_version
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING, Literal, cast
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
-    from pathlib import Path
 
+    from codira_clang_frontend import (
+        ClangFrontend,
+        CompilationContext,
+        CompileProfile,
+        FrontendCallable,
+        FrontendDeclaration,
+        FrontendPreprocessorEvent,
+        FrontendResult,
+        HeaderProjectionResolution,
+        SourcePoint,
+        SourcePosition,
+        SourceSpan,
+    )
     from codira.contracts import LanguageAnalyzer
+    from .cpp_macro_expansion import _MacroDefinition
+    from .cpp_macro_context import MacroSelection
 
-from tree_sitter import Node
+from .cpp_namespace_bindings import (
+    _namespace_bindings_from_config,
+    _parse_with_namespace_bindings,
+)
+from .cpp_projection import SyntaxNode as Node, _ProjectedNode
+from .cpp_preprocessor_queries import (
+    FeatureAnswers,
+    HeaderQuerySet,
+    feature_answers,
+    header_query_sets,
+    header_queries_schema,
+)
 
+from .cpp_typedefs import _typedef_name_nodes
 from .cpp_syntax import (
+    _canonical_node_text,
     _class_stable_id,
     _conditional_children,
     _cpp_external_target_kind,
@@ -60,28 +99,58 @@ from .cpp_syntax import (
 )
 
 from .cpp_comments import (
+    CommentMaps,
     _attached_comment_map,
     _attached_doxygen_comment_map,
     _leading_module_comment,
     _leading_module_doxygen,
+    source_comment_maps,
 )
 
 from .cpp_documentation import _documentation_artifacts
 from .cpp_imports import _extract_imports
+from .cpp_headers import has_named_template_parameters
+from .cpp_include_context import (
+    IncludeContext,
+    include_identity_matches,
+    read_include_context,
+)
+from .cpp_preprocessing import (
+    _is_complex_operator_call,
+    _original_declaration_start,
+    _parse_cpp_source,
+)
 
+from codira.analysis_inputs import validate_analysis_input_fingerprint
 from codira.contracts import (
     AnalyzerCapabilityDeclaration,
     AnalyzerConcurrencyDeclaration,
 )
+from codira.generated import (
+    CompilerObservedCallableProvenance,
+    CompilerObservedCallableProvenanceV3,
+    CompilerObservedDeclarationProvenance,
+    CompilerObservedMacroInvocation,
+    CompilerObservedSourceCoordinate,
+    GeneratedCallableEvidence,
+)
 from codira.models import (
     AnalysisResult,
+    AnalysisDiagnostic,
+    AnalysisStatus,
+    AnalysisCoverageState,
     CallSite,
+    CallKind,
     ClassArtifact,
     DeclarationArtifact,
     DeclarationKind,
+    DocumentationArtifact,
     EnumMemberArtifact,
     FunctionArtifact,
+    ImportArtifact,
     ModuleArtifact,
+    OverloadArtifact,
+    SemanticIdentity,
     tree_sitter_recovery_status,
 )
 from codira.plugin_config import (
@@ -94,7 +163,2588 @@ from codira.plugin_config import (
 )
 
 _CPP_SUFFIXES = {".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".ipp", ".h"}
+_CPP_HEADER_SUFFIXES = {".hpp", ".hh", ".hxx", ".ipp", ".h"}
 __all__ = ["CppAnalyzer", "_disambiguate_callable_stable_ids", "build_analyzer"]
+
+
+def _clang_header_owner_profiles_from_config(value: object) -> dict[str, str]:
+    """Validate explicit repository-relative Clang header owner selections.
+
+    Parameters
+    ----------
+    value : object
+        Mapping from normalized repository-relative header paths to captured
+        profile identities.
+
+    Returns
+    -------
+    dict[str, str]
+        Validated header-to-profile selection map.
+
+    Raises
+    ------
+    ValueError
+        If a path or profile identity is empty or not normalized.
+    """
+    if not isinstance(value, dict):
+        raise ValueError("clang_header_owner_profiles must be an object")
+    result: dict[str, str] = {}
+    for header, identity in value.items():
+        if (
+            not isinstance(header, str)
+            or not header
+            or "\\" in header
+            or not isinstance(identity, str)
+            or not identity
+        ):
+            raise ValueError(
+                "clang_header_owner_profiles requires relative paths and "
+                "nonempty profile identities"
+            )
+        path = PurePosixPath(header)
+        if (
+            path.is_absolute()
+            or str(path) != header
+            or any(part in {"", ".", ".."} for part in path.parts)
+        ):
+            raise ValueError(
+                "clang_header_owner_profiles keys must be normalized "
+                "repository-relative paths"
+            )
+        result[header] = identity
+    return result
+
+
+def _clang_profile_and_frontend(
+    *,
+    path: Path,
+    root: Path,
+    compile_commands: str | None,
+    captured_profiles: str | None,
+    helper_path: str | None,
+    build_receipt_path: str | None,
+) -> tuple[ClangFrontend, CompileProfile]:
+    """Load a profile through the optional shared frontend package.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Translation unit selected by the indexer.
+    root : pathlib.Path
+        Repository containing the translation unit.
+    compile_commands, captured_profiles : str or None
+        Mutually exclusive exact profile evidence sources.
+    helper_path, build_receipt_path : str or None
+        Explicit frontend helper and build receipt paths.
+
+    Returns
+    -------
+    tuple[codira_clang_frontend.ClangFrontend, codira_clang_frontend.CompileProfile]
+        Validated frontend and source-bound profile.
+
+    Raises
+    ------
+    ImportError
+        If the optional frontend package is not installed.
+    ValueError
+        If profile or toolchain configuration is missing or invalid.
+    OSError
+        If an explicitly configured profile or toolchain input is unavailable.
+    """
+    if helper_path is None or build_receipt_path is None:
+        raise ValueError("Clang helper and build receipt paths must be configured")
+    if compile_commands is None and captured_profiles is None:
+        raise ValueError("a compile database or captured profile file is required")
+    from codira_clang_frontend import create_frontend_profile
+
+    def configured_path(value: str) -> Path:
+        candidate = Path(value)
+        return (candidate if candidate.is_absolute() else root / candidate).resolve()
+
+    return create_frontend_profile(
+        path=path,
+        root=root,
+        language="cpp",
+        compile_commands=(
+            configured_path(compile_commands) if compile_commands is not None else None
+        ),
+        captured_profiles=(
+            configured_path(captured_profiles)
+            if captured_profiles is not None
+            else None
+        ),
+        helper_path=configured_path(helper_path),
+        build_receipt_path=configured_path(build_receipt_path),
+    )
+
+
+def _clang_fallback_fingerprint(
+    *,
+    path: Path,
+    root: Path,
+    frontend_options: tuple[str | None, ...],
+) -> str:
+    """Hash unavailable Clang inputs so profile appearance invalidates reuse.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Translation unit whose current bytes are always included.
+    root : pathlib.Path
+        Repository root used to resolve relative explicit inputs.
+    frontend_options : tuple[str or None, ...]
+        Explicit profile, helper, receipt, and attempt-root settings.
+
+    Returns
+    -------
+    str
+        Deterministic unavailable-frontend identity without exposing command text.
+    """
+    captured_profiles, helper_path, build_receipt_path = frontend_options[1:4]
+    if (
+        captured_profiles is not None
+        and helper_path is not None
+        and build_receipt_path is not None
+    ):
+        try:
+            from codira_clang_frontend import captured_profile_fingerprint
+
+            def configured_path(value: str) -> Path:
+                candidate = Path(value)
+                return (
+                    candidate if candidate.is_absolute() else root / candidate
+                ).resolve()
+
+            return captured_profile_fingerprint(
+                configured_path(captured_profiles),
+                path,
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+                helper_path=configured_path(helper_path),
+                build_receipt_path=configured_path(build_receipt_path),
+            )
+        except (ImportError, OSError, ValueError):
+            pass
+    identities: list[dict[str, str | None]] = []
+    for configured in frontend_options:
+        if configured is None:
+            identities.append({"path": None, "sha256": None})
+            continue
+        candidate = Path(configured)
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        try:
+            digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        except OSError:
+            digest = None
+        identities.append({"path": str(candidate.resolve()), "sha256": digest})
+    payload = {
+        "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "inputs": identities,
+        "package_version": _clang_package_version(),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _clang_package_version() -> str | None:
+    """Return the installed optional frontend version when available.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    str or None
+        Installed distribution version, or ``None`` when unavailable.
+    """
+    try:
+        return distribution_version("codira-clang-frontend")
+    except ImportError:
+        return None
+
+
+def _clang_source_position(
+    point: SourcePoint | None,
+    source_path: Path,
+    *,
+    prefer_expansion: bool = False,
+) -> tuple[int, int] | None:
+    """Return a verified physical source line and zero-based column.
+
+    Parameters
+    ----------
+    point : codira_clang_frontend.SourcePoint or None
+        Clang spelling/expansion position for a source entity.
+    source_path : pathlib.Path
+        Translation unit whose physical coordinates are accepted.
+
+    Returns
+    -------
+    tuple[int, int] or None
+        One-based source line and zero-based column only when Clang names the
+        exact translation unit.
+    """
+    if point is None:
+        return None
+    positions = (
+        (point.expansion, point.spelling)
+        if prefer_expansion
+        else (point.spelling, point.expansion)
+    )
+    for position in positions:
+        if position is None or position.path is None or position.line is None:
+            continue
+        try:
+            matches_source = Path(position.path).resolve() == source_path.resolve()
+        except OSError:
+            matches_source = False
+        if matches_source and position.column is not None:
+            return position.line, max(0, position.column - 1)
+    return None
+
+
+def _clang_source_anchor(
+    point: SourcePoint | None,
+    source_path: Path,
+    *,
+    prefer_expansion: bool = False,
+) -> str | None:
+    """Return a deterministic byte or line anchor in the requested source.
+
+    Parameters
+    ----------
+    point : codira_clang_frontend.SourcePoint or None
+        Compiler coordinate whose physical source occurrence is needed.
+    source_path : pathlib.Path
+        Translation unit that owns the source coordinate.
+    prefer_expansion : bool, optional
+        Prefer the expansion coordinate for macro-generated entities.
+
+    Returns
+    -------
+    str or None
+        Byte offset when available, otherwise a line and column anchor, only
+        when the coordinate names the requested source file.
+    """
+    if point is None:
+        return None
+    positions = (
+        (point.expansion, point.spelling)
+        if prefer_expansion
+        else (point.spelling, point.expansion)
+    )
+    for position in positions:
+        if position is None or position.path is None or position.line is None:
+            continue
+        try:
+            if Path(position.path).resolve() != source_path.resolve():
+                continue
+        except OSError:
+            continue
+        if position.offset is not None:
+            return f"offset-{position.offset}"
+        if position.column is not None:
+            return f"line-{position.line}-column-{position.column}"
+    return None
+
+
+def _verified_source_position_offset(
+    position: SourcePosition | None,
+    source_path: Path,
+    source_bytes: bytes,
+) -> int | None:
+    """Return a byte offset only when Clang coordinates match source bytes.
+
+    Parameters
+    ----------
+    position : codira_clang_frontend.SourcePosition or None
+        Physical source coordinate reported by Clang.
+    source_path : pathlib.Path
+        Translation unit that must own the coordinate.
+    source_bytes : bytes
+        Captured translation-unit bytes used to verify the coordinates.
+
+    Returns
+    -------
+    int or None
+        The verified zero-based byte offset, or ``None`` when path, range, line,
+        or column evidence is absent or inconsistent.
+    """
+    if (
+        position is None
+        or position.path is None
+        or position.offset is None
+        or position.line is None
+        or position.column is None
+    ):
+        return None
+    try:
+        if Path(position.path).resolve() != source_path.resolve():
+            return None
+    except OSError:
+        return None
+    offset = position.offset
+    if not 0 <= offset < len(source_bytes):
+        return None
+    line = source_bytes.count(b"\n", 0, offset) + 1
+    line_start = source_bytes.rfind(b"\n", 0, offset) + 1
+    column = offset - line_start + 1
+    if position.line != line or position.column != column:
+        return None
+    return offset
+
+
+def _sourcewritten_definition_identifier_offset(
+    declaration: FrontendDeclaration,
+    source_path: Path,
+    source_bytes: bytes,
+) -> int | None:
+    """Verify a source-written declaration site names its exact identifier.
+
+    Parameters
+    ----------
+    declaration : codira_clang_frontend.FrontendDeclaration
+        Source-written definition whose identifier location is being checked.
+    source_path : pathlib.Path
+        Translation unit that must own the definition site.
+    source_bytes : bytes
+        Captured translation-unit bytes used to verify the identifier token.
+
+    Returns
+    -------
+    int or None
+        Verified byte offset of the declaration name, or ``None`` if any path,
+        coordinate, or source-token check fails.
+    """
+    if declaration.location is None or declaration.location.is_macro:
+        return None
+    position = declaration.location.spelling
+    offset = _verified_source_position_offset(position, source_path, source_bytes)
+    if offset is None:
+        return None
+    identifier = declaration.name.encode("utf-8")
+    end = offset + len(identifier)
+    if not identifier or source_bytes[offset:end] != identifier:
+        return None
+
+    def is_identifier_byte(value: int) -> bool:
+        """Return whether one UTF-8 byte can continue an identifier token.
+
+        Parameters
+        ----------
+        value : int
+            Byte value adjacent to the candidate identifier.
+
+        Returns
+        -------
+        bool
+            Whether the byte is an ASCII identifier byte or UTF-8 continuation
+            byte sequence member.
+        """
+        return (
+            value >= 0x80
+            or value in {0x24, 0x5C}
+            or value == 0x5F
+            or 0x30 <= value <= 0x39
+            or 0x41 <= value <= 0x5A
+            or 0x61 <= value <= 0x7A
+        )
+
+    if offset > 0 and is_identifier_byte(source_bytes[offset - 1]):
+        return None
+    if end < len(source_bytes) and is_identifier_byte(source_bytes[end]):
+        return None
+    return offset
+
+
+def _declaration_occurrence_suffix(
+    declaration: FrontendDeclaration, source_path: Path
+) -> str:
+    """Build a deterministic identity suffix for distinct same-name rows.
+
+    Parameters
+    ----------
+    declaration : codira_clang_frontend.FrontendDeclaration
+        Compiler declaration that shares a legacy stable ID with another row.
+    source_path : pathlib.Path
+        Translation unit containing the projected declaration.
+
+    Returns
+    -------
+    str
+        Stable suffix bound to the compiler USR, lexical owner, and physical
+        declaration anchor.
+    """
+    anchor = _clang_source_anchor(
+        declaration.location,
+        source_path,
+        prefer_expansion=declaration.provenance
+        in {"macro_argument", "macro_replacement", "unknown"},
+    )
+    identity = "\0".join(
+        (
+            declaration.usr or "",
+            declaration.owner_usr or "",
+            declaration.owner_kind or "",
+            declaration.owner_name or "",
+            anchor or "unlocated",
+            declaration.kind,
+            declaration.decl_kind,
+            declaration.qualified_name or declaration.name,
+            declaration.type_text or "",
+            declaration.signature or "",
+            declaration.source_text or "",
+            str(declaration.is_definition),
+        )
+    )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+
+
+def _proven_macro_static_definition_pairs(
+    declarations: Sequence[FrontendDeclaration],
+    source_path: Path,
+    source_bytes: bytes,
+) -> dict[int, int]:
+    """Find exact macro static-member declarations paired with definitions.
+
+    Parameters
+    ----------
+    declarations : collections.abc.Sequence[FrontendDeclaration]
+        Compiler declaration rows for the translation unit.
+    source_path : pathlib.Path
+        Translation unit that must own both declaration sites and their class.
+    source_bytes : bytes
+        Captured source bytes used to verify the physical definition token.
+
+    Returns
+    -------
+    dict[int, int]
+        Object-identity mapping from a proven macro declaration row to its
+        unique source-written out-of-line definition row.
+
+    Notes
+    -----
+    Only a two-row same-USR group is eligible. The macro row must be a
+    source-located, non-defining C++ record variable with known type, access,
+    and owner; its partner must be the matching source-written definition at a
+    distinct source site. Any additional redeclaration remains held.
+    """
+    declarations_by_usr: dict[str, list[FrontendDeclaration]] = {}
+    identity_counts: dict[tuple[str, str], int] = {}
+    for declaration in declarations:
+        if declaration.usr:
+            declarations_by_usr.setdefault(declaration.usr, []).append(declaration)
+        identity = (declaration.kind, declaration.qualified_name or declaration.name)
+        identity_counts[identity] = identity_counts.get(identity, 0) + 1
+
+    pairs: dict[int, int] = {}
+    for group in declarations_by_usr.values():
+        if len(group) != 2:
+            continue
+        macro_rows = [
+            item
+            for item in group
+            if item.provenance in {"macro_argument", "macro_replacement"}
+        ]
+        definition_rows = [
+            item for item in group if item.provenance == "source_written"
+        ]
+        if len(macro_rows) != 1 or len(definition_rows) != 1:
+            continue
+        macro_row = macro_rows[0]
+        definition_row = definition_rows[0]
+        identity = (
+            macro_row.kind,
+            macro_row.qualified_name or macro_row.name,
+        )
+        if (
+            identity_counts.get(identity) != 2
+            or definition_row.usr != macro_row.usr
+            or (
+                definition_row.kind,
+                definition_row.qualified_name or definition_row.name,
+            )
+            != identity
+            or macro_row.kind != "variable"
+            or macro_row.decl_kind != "Var"
+            or definition_row.decl_kind != "Var"
+            or macro_row.is_definition is not False
+            or definition_row.is_definition is not True
+            or macro_row.is_file_scope is not False
+            or definition_row.is_file_scope is not False
+            or macro_row.location is None
+            or not macro_row.location.is_macro
+            or definition_row.location is None
+            or definition_row.location.is_macro
+            or macro_row.owner_kind != "CXXRecord"
+            or definition_row.owner_kind != "CXXRecord"
+            or not macro_row.name
+            or macro_row.name != definition_row.name
+            or not macro_row.qualified_name
+            or macro_row.qualified_name != definition_row.qualified_name
+            or not macro_row.type_text
+            or macro_row.type_text != definition_row.type_text
+            or not macro_row.access
+            or macro_row.access != definition_row.access
+            or not macro_row.owner_usr
+            or macro_row.owner_usr != definition_row.owner_usr
+            or not macro_row.owner_name
+            or macro_row.owner_name != definition_row.owner_name
+        ):
+            continue
+        macro_site = (
+            _verified_source_position_offset(
+                macro_row.location.expansion, source_path, source_bytes
+            )
+            if macro_row.location is not None
+            else None
+        )
+        definition_site = _sourcewritten_definition_identifier_offset(
+            definition_row, source_path, source_bytes
+        )
+        macro_owner = _clang_source_anchor(macro_row.owner_location, source_path)
+        definition_owner = _clang_source_anchor(
+            definition_row.owner_location, source_path
+        )
+        if (
+            macro_site is None
+            or definition_site is None
+            or macro_site == definition_site
+            or macro_owner is None
+            or macro_owner != definition_owner
+        ):
+            continue
+        pairs[id(macro_row)] = id(definition_row)
+    return pairs
+
+
+def _disambiguate_documentation_stable_ids(
+    documentation: tuple[DocumentationArtifact, ...],
+    anchors: dict[int, str],
+) -> tuple[DocumentationArtifact, ...]:
+    """Give distinct comments owned by one entity distinct stable IDs.
+
+    Parameters
+    ----------
+    documentation : tuple[codira.models.DocumentationArtifact, ...]
+        Documentation artifacts after semantic owners have their final IDs.
+
+    Returns
+    -------
+    tuple[codira.models.DocumentationArtifact, ...]
+        Original IDs for unique comments and anchor-qualified IDs for collisions.
+    """
+    counts: dict[str, int] = {}
+    for artifact in documentation:
+        counts[artifact.stable_id] = counts.get(artifact.stable_id, 0) + 1
+    if all(count == 1 for count in counts.values()):
+        return documentation
+    output: list[DocumentationArtifact] = []
+    for artifact in documentation:
+        if counts[artifact.stable_id] == 1:
+            output.append(artifact)
+            continue
+        anchor = "\0".join(
+            (
+                str(artifact.source_path),
+                anchors.get(id(artifact), f"line-{artifact.lineno}"),
+                str(artifact.end_lineno),
+                artifact.title,
+                artifact.text or "",
+            )
+        )
+        digest = hashlib.sha256(anchor.encode("utf-8")).hexdigest()[:16]
+        output.append(
+            replace(artifact, stable_id=f"{artifact.stable_id}:anchor:{digest}")
+        )
+    return tuple(output)
+
+
+def _clang_fallback_result(
+    result: AnalysisResult,
+    reason: str,
+    *,
+    language: str,
+    frontend_result: FrontendResult | None = None,
+) -> AnalysisResult:
+    """Mark Tree-sitter fallback when the selected Clang path is incomplete.
+
+    Parameters
+    ----------
+    result : codira.models.AnalysisResult
+        Existing Tree-sitter result to retain as the sole analyzer output.
+    reason : str
+        Stable frontend fallback reason, without raw command or output text.
+    language : str
+        Language name used for the fallback grammar identity.
+    frontend_result : codira_clang_frontend.FrontendResult or None, optional
+        Retained result metadata, including raw attempt paths and digests.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        Original artifacts with explicit partial Clang fallback status.
+    """
+    prior = result.status or AnalysisStatus(
+        grammar=f"tree-sitter-{language}",
+        target_contract={"language": language},
+    )
+    return replace(
+        result,
+        status=replace(
+            prior,
+            target_contract={
+                **prior.target_contract,
+                "requested_frontend": "clang",
+                "selected_frontend": "tree-sitter",
+                "clang_attempt": (
+                    _clang_result_evidence(frontend_result)
+                    if frontend_result is not None
+                    else None
+                ),
+            },
+            diagnostics=(
+                *prior.diagnostics,
+                AnalysisDiagnostic("clang_frontend_fallback", reason),
+            ),
+            coverage_state=AnalysisCoverageState.PARTIAL,
+        ),
+    )
+
+
+def _clang_result_evidence(result: FrontendResult) -> dict[str, object]:
+    """Serialize provenance references for one retained Clang attempt.
+
+    Parameters
+    ----------
+    result : codira_clang_frontend.FrontendResult
+        Frontend response whose outputs remain in its immutable attempt folder.
+
+    Returns
+    -------
+    dict[str, object]
+        Stable status, cache, profile, raw-output, and dependency references.
+    """
+    return {
+        "status": result.status,
+        "coverage_state": result.coverage_state,
+        "reasons": result.reasons,
+        "profile_identity": result.profile_identity,
+        "cache_fingerprint": result.cache_fingerprint,
+        "compilation_context": _clang_compilation_context_payload(
+            result.compilation_context
+        ),
+        "stdout_path": str(result.stdout_path) if result.stdout_path else None,
+        "stdout_sha256": result.stdout_sha256,
+        "stderr_path": str(result.stderr_path) if result.stderr_path else None,
+        "stderr_sha256": result.stderr_sha256,
+        "dependency_closure_sha256": (
+            result.dependency_closure.sha256
+            if result.dependency_closure is not None
+            else None
+        ),
+    }
+
+
+def _clang_compilation_context_payload(
+    context: CompilationContext | None,
+) -> dict[str, str | None] | None:
+    """Serialize compiler-derived target and sysroot identity for status.
+
+    Parameters
+    ----------
+    context : codira_clang_frontend.CompilationContext or None
+        Actual target and sysroot emitted by the Clang invocation.
+
+    Returns
+    -------
+    dict[str, str or None] or None
+        Persistable context values, or ``None`` when the helper supplied none.
+    """
+    if context is None:
+        return None
+    return {
+        "target_triple": context.target_triple,
+        "sysroot": context.sysroot,
+        "sysroot_path": (
+            str(context.sysroot_path) if context.sysroot_path is not None else None
+        ),
+    }
+
+
+def _clang_owner_stable_id(
+    owner_location: SourcePoint | None,
+    owner_name: str,
+    owner_kind: str,
+    root: Path,
+) -> str | None:
+    """Derive an external C++ owner identity from its physical declaration.
+
+    Parameters
+    ----------
+    owner_location : codira_clang_frontend.SourcePoint or None
+        Physical location of the owner declaration returned by Clang.
+    owner_name : str
+        Fully qualified C++ owner name.
+    owner_kind : str
+        Native owner declaration kind.
+    root : pathlib.Path
+        Repository root used to reject out-of-repository owner identities.
+
+    Returns
+    -------
+    str or None
+        Same stable identity used when the owning header is indexed, or ``None``
+        when the location is unavailable or outside the repository.
+    """
+    if owner_location is None:
+        return None
+    for position in (owner_location.spelling, owner_location.expansion):
+        if position is None or position.path is None:
+            continue
+        try:
+            owner_path = Path(position.path).resolve()
+            relative = owner_path.relative_to(root.resolve())
+        except (OSError, ValueError):
+            continue
+        if not owner_path.is_file():
+            continue
+        owner_id = relative.as_posix()
+        if owner_kind in {"Record", "CXXRecord"}:
+            return _class_stable_id(owner_id, owner_name)
+        if owner_kind in {"Namespace", "NamespaceAlias"}:
+            return _declaration_stable_id(owner_id, "namespace", owner_name)
+        return None
+    return None
+
+
+def _clang_compiler_source_coordinate(
+    position: SourcePosition | None, root: Path
+) -> CompilerObservedSourceCoordinate | None:
+    """Convert one compiler byte coordinate to a contained repository path.
+
+    Parameters
+    ----------
+    position : codira_clang_frontend.SourcePosition or None
+        Compiler-reported coordinate to preserve.
+    root : pathlib.Path
+        Repository boundary used to make the coordinate portable and safe.
+
+    Returns
+    -------
+    codira.generated.CompilerObservedSourceCoordinate or None
+        Repository-relative compiler coordinate, or ``None`` when it cannot be
+        represented without reconstructing a path or byte offset.
+    """
+    if (
+        position is None
+        or position.path is None
+        or position.offset is None
+        or position.offset < 0
+    ):
+        return None
+    try:
+        relative_path = Path(position.path).resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return None
+    return CompilerObservedSourceCoordinate(
+        path=relative_path.as_posix(), byte_offset=position.offset
+    )
+
+
+def _clang_macro_invocation_for_callable(
+    callable_item: FrontendCallable,
+    result: FrontendResult,
+    *,
+    path: Path,
+    root: Path,
+    source_bytes: bytes,
+    source_sha256: str,
+    context_identity: str | None,
+) -> (
+    tuple[
+        CompilerObservedCallableProvenance,
+        FrontendPreprocessorEvent,
+        int,
+        int,
+    ]
+    | None
+):
+    """Build compiler-observed provenance for one matched source macro.
+
+    Parameters
+    ----------
+    callable_item : codira_clang_frontend.FrontendCallable
+        Compiler callable with macro spelling and expansion locations.
+    result : codira_clang_frontend.FrontendResult
+        Profile, helper receipt, and preprocessor observations for the TU.
+    path : pathlib.Path
+        Translation unit whose source bytes were captured by Clang.
+    root : pathlib.Path
+        Repository root for safe persisted source coordinates.
+    source_bytes : bytes
+        Current translation-unit bytes, verified against the captured digest.
+    source_sha256 : str
+        Source digest from the frontend dependency closure.
+    context_identity : str or None
+        Exact outer analyzer input identity persisted on the indexed file.
+
+    Returns
+    -------
+    tuple[CompilerObservedCallableProvenance, FrontendPreprocessorEvent, int, int] or None
+        Validated callable evidence, matched invocation event, and its half-open
+        byte range; ``None`` means the evidence was incomplete or ambiguous.
+    """
+    origin = callable_item.provenance
+    if origin != "macro_argument" and origin != "macro_replacement":
+        return None
+    location = callable_item.location
+    expansion = location.expansion if location is not None else None
+    expansion_coordinate = _clang_compiler_source_coordinate(expansion, root)
+    if (
+        expansion is None
+        or expansion_coordinate is None
+        or Path(expansion.path or "").resolve() != path.resolve()
+        or not context_identity
+        or hashlib.sha256(source_bytes).hexdigest() != source_sha256
+    ):
+        return None
+
+    matching_events: list[FrontendPreprocessorEvent] = []
+    for event in result.preprocessing:
+        begin = event.span.begin if event.span is not None else None
+        begin_position = (
+            begin.expansion or begin.spelling if begin is not None else None
+        )
+        if (
+            event.kind == "macro_expansion"
+            and event.name
+            and event.invocation
+            and begin_position is not None
+            and begin_position.path is not None
+            and begin_position.offset == expansion.offset
+            and Path(begin_position.path).resolve() == path.resolve()
+        ):
+            matching_events.append(event)
+    if len(matching_events) != 1:
+        return None
+    event = matching_events[0]
+    if event.name is None or event.invocation is None:
+        return None
+    if event.span is None or event.span.begin is None or event.span.end is None:
+        return None
+    begin_position = event.span.begin.expansion or event.span.begin.spelling
+    end_position = event.span.end.expansion or event.span.end.spelling
+    if (
+        begin_position is None
+        or end_position is None
+        or begin_position.offset is None
+        or end_position.offset is None
+        or begin_position.offset < 0
+        or end_position.offset < begin_position.offset
+        or begin_position.path is None
+        or end_position.path is None
+        or Path(begin_position.path).resolve() != path.resolve()
+        or Path(end_position.path).resolve() != path.resolve()
+    ):
+        return None
+    start = begin_position.offset
+    inclusive_end = end_position.offset
+    try:
+        invocation_bytes = event.invocation.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    half_open_end = start + len(invocation_bytes)
+    if (
+        not invocation_bytes
+        or half_open_end - 1 != inclusive_end
+        or source_bytes[start:half_open_end] != invocation_bytes
+    ):
+        return None
+
+    spelling_coordinate = _clang_compiler_source_coordinate(
+        location.spelling if location is not None else None, root
+    )
+    owner_location = (
+        _clang_compiler_source_coordinate(
+            callable_item.owner_location.expansion
+            or callable_item.owner_location.spelling,
+            root,
+        )
+        if callable_item.owner_location is not None
+        else None
+    )
+    event_range = (start, half_open_end)
+    invocation = CompilerObservedMacroInvocation(
+        name=event.name,
+        path=expansion_coordinate.path,
+        byte_range=event_range,
+        text=event.invocation,
+    )
+    receipt = {
+        "schema": "clang.frontend.callable-observation.v1",
+        "context": {
+            "profile_identity": result.profile_identity,
+            "cache_fingerprint": result.cache_fingerprint,
+            "analyzer_context_identity": context_identity,
+            "source_sha256": source_sha256,
+            "stdout_sha256": result.stdout_sha256,
+        },
+        "callable": {
+            "usr": callable_item.usr,
+            "kind": callable_item.kind,
+            "name": callable_item.name,
+            "qualified_name": callable_item.qualified_name,
+            "decl_kind": callable_item.decl_kind,
+            "signature": callable_item.signature,
+            "signature_kind": callable_item.signature_kind,
+            "function_type": callable_item.function_type,
+            "provenance": callable_item.provenance,
+            "is_definition": callable_item.is_definition,
+            "span": asdict(callable_item.span)
+            if callable_item.span is not None
+            else None,
+            "spelling_location": asdict(spelling_coordinate)
+            if spelling_coordinate is not None
+            else None,
+            "expansion_location": asdict(expansion_coordinate),
+            "owner_usr": callable_item.owner_usr,
+            "owner_location": asdict(owner_location)
+            if owner_location is not None
+            else None,
+            "native_observation": _clang_callable_native_observation(callable_item),
+        },
+        "macro_expansion": {
+            "name": event.name,
+            "invocation": event.invocation,
+            "byte_range": event_range,
+        },
+    }
+    try:
+        receipt_json = json.dumps(
+            receipt,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        if len(receipt_json.encode("utf-8")) > 64 * 1024:
+            return None
+    except (TypeError, ValueError, UnicodeEncodeError):
+        return None
+    return (
+        CompilerObservedCallableProvenance(
+            origin=origin,
+            role="definition" if callable_item.is_definition else "prototype",
+            source_sha256=source_sha256,
+            context_identity=context_identity,
+            spelling_location=spelling_coordinate,
+            expansion_location=expansion_coordinate,
+            invocation=invocation,
+            receipt_namespace="clang.frontend.callable-observation.v1",
+            receipt_json=receipt_json,
+        ),
+        event,
+        start,
+        half_open_end,
+    )
+
+
+def _clang_alias_or_prototype_evidence(
+    callable_item: FrontendCallable,
+    base_evidence: CompilerObservedCallableProvenance,
+    *,
+    role: Literal["alias", "prototype"],
+) -> CompilerObservedCallableProvenanceV3 | None:
+    """Build V3 provenance from explicit native alias or redeclaration facts.
+
+    Parameters
+    ----------
+    callable_item : codira_clang_frontend.FrontendCallable
+        Native callable row carrying the observed alias, linkage, and body facts.
+    base_evidence : codira.generated.CompilerObservedCallableProvenance
+        Source-bound macro evidence already validated for this callable.
+    role : str
+        One of ``alias`` or ``prototype``.
+
+    Returns
+    -------
+    codira.generated.CompilerObservedCallableProvenanceV3 or None
+        Compiler-observed V3 provenance, or ``None`` when the source facts are
+        insufficient to make a complete bounded receipt.
+    """
+    try:
+        receipt = json.loads(base_evidence.receipt_json)
+        if not isinstance(receipt, dict):
+            return None
+        callable_receipt = receipt.get("callable")
+        if not isinstance(callable_receipt, dict):
+            return None
+        callable_receipt["native_observation"] = _clang_callable_native_observation(
+            callable_item
+        )
+        receipt_json = json.dumps(
+            receipt,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        if len(receipt_json.encode("utf-8")) > 64 * 1024:
+            return None
+        return CompilerObservedCallableProvenanceV3(
+            origin=base_evidence.origin,
+            role=role,
+            source_sha256=base_evidence.source_sha256,
+            context_identity=base_evidence.context_identity,
+            spelling_location=base_evidence.spelling_location,
+            expansion_location=base_evidence.expansion_location,
+            invocation=base_evidence.invocation,
+            alias_target_identity=(
+                SemanticIdentity(
+                    namespace="clang.usr.v1", value=callable_item.alias_target_usr
+                )
+                if role == "alias"
+                and callable_item.alias_binding_status == "resolved"
+                and callable_item.alias_target_usr is not None
+                else None
+            ),
+            linkage_name=(
+                callable_item.explicit_linkage_label if role == "alias" else None
+            ),
+            receipt_namespace="clang.frontend.callable-observation.v1",
+            receipt_json=receipt_json,
+        )
+    except (TypeError, ValueError, UnicodeEncodeError):
+        return None
+
+
+def _clang_callable_native_observation(
+    callable_item: FrontendCallable,
+) -> dict[str, object]:
+    """Return compiler-reported callable distinctions for a bounded receipt.
+
+    Parameters
+    ----------
+    callable_item : codira_clang_frontend.FrontendCallable
+        Native callable DTO carrying compiler-derived display and linkage data.
+
+    Returns
+    -------
+    dict[str, object]
+        Exact observed DTO values without reconstructing source spellings.
+    """
+    return {
+        "has_body": callable_item.has_body,
+        "linkage_kind": callable_item.linkage_kind,
+        "signature_kind": callable_item.signature_kind,
+        "linker_symbol": callable_item.linker_symbol,
+        "explicit_linkage_label": callable_item.explicit_linkage_label,
+        "linkage_label_inherited": callable_item.linkage_label_inherited,
+        "alias_target_symbol": callable_item.alias_target_symbol,
+        "alias_target_usr": callable_item.alias_target_usr,
+        "alias_binding_status": callable_item.alias_binding_status,
+    }
+
+
+def _clang_distinct_prototype_rows(
+    canonical_callable: FrontendCallable,
+    candidates: tuple[
+        tuple[
+            FrontendCallable,
+            CompilerObservedCallableProvenance,
+            FrontendPreprocessorEvent,
+        ],
+        ...,
+    ],
+) -> tuple[
+    tuple[
+        FrontendCallable,
+        CompilerObservedCallableProvenance,
+        FrontendPreprocessorEvent,
+    ],
+    ...,
+]:
+    """Exclude the canonical prototype from its own overload list.
+
+    Parameters
+    ----------
+    canonical_callable : codira_clang_frontend.FrontendCallable
+        Declaration selected as the function record when no body definition
+        exists in this translation unit.
+    candidates : tuple[tuple[FrontendCallable, CompilerObservedCallableProvenance, FrontendPreprocessorEvent], ...]
+        Same-USR generated prototype rows observed from the translation unit.
+
+    Returns
+    -------
+    tuple[tuple[FrontendCallable, CompilerObservedCallableProvenance, FrontendPreprocessorEvent], ...]
+        Separate redeclarations eligible for OverloadArtifact persistence.
+    """
+    return tuple(row for row in candidates if row[0] is not canonical_callable)
+
+
+def _clang_macro_invocation_for_declaration(
+    declaration: FrontendDeclaration,
+    result: FrontendResult,
+    *,
+    path: Path,
+    root: Path,
+    source_bytes: bytes,
+    source_sha256: str,
+    context_identity: str | None,
+) -> tuple[CompilerObservedDeclarationProvenance, FrontendPreprocessorEvent] | None:
+    """Build bounded evidence for one source-invoked C++ variable or constant declaration.
+
+    Parameters
+    ----------
+    declaration : codira_clang_frontend.FrontendDeclaration
+        Eligible file-scope, namespace, or record variable or constant emitted by Clang.
+    result : codira_clang_frontend.FrontendResult
+        Native preprocessing events and their captured output identity.
+    path : pathlib.Path
+        Translation unit whose bytes were captured by Clang.
+    root : pathlib.Path
+        Repository root used to make evidence coordinates portable.
+    source_bytes : bytes
+        Current translation-unit bytes verified against the dependency closure.
+    source_sha256 : str
+        Captured digest of the translation unit.
+    context_identity : str or None
+        Analyzer input fingerprint binding the native result.
+
+    Returns
+    -------
+    tuple[CompilerObservedDeclarationProvenance, FrontendPreprocessorEvent] or None
+        Complete declaration evidence and its unique invocation event, or ``None``
+        when any source, identity, or event join is incomplete or ambiguous.
+    """
+    origin = declaration.provenance
+    supported_decl_kind = declaration.decl_kind == "Var" or (
+        declaration.decl_kind == "Field"
+        and declaration.owner_usr is not None
+        and declaration.owner_name is not None
+        and declaration.owner_kind in {"Record", "CXXRecord"}
+        and declaration.owner_location is not None
+    )
+    if (
+        (origin != "macro_argument" and origin != "macro_replacement")
+        or (declaration.kind != "variable" and declaration.kind != "constant")
+        or not supported_decl_kind
+        or declaration.usr is None
+        or not context_identity
+        or hashlib.sha256(source_bytes).hexdigest() != source_sha256
+    ):
+        return None
+    location = declaration.location
+    expansion = location.expansion if location is not None else None
+    expansion_coordinate = _clang_compiler_source_coordinate(expansion, root)
+    if (
+        expansion is None
+        or expansion_coordinate is None
+        or expansion.path is None
+        or Path(expansion.path).resolve() != path.resolve()
+    ):
+        return None
+
+    matching_events: list[FrontendPreprocessorEvent] = []
+    for event in result.preprocessing:
+        begin = event.span.begin if event.span is not None else None
+        begin_position = (
+            begin.expansion or begin.spelling if begin is not None else None
+        )
+        if (
+            event.kind == "macro_expansion"
+            and event.name
+            and event.invocation
+            and begin_position is not None
+            and begin_position.path is not None
+            and begin_position.offset == expansion.offset
+            and Path(begin_position.path).resolve() == path.resolve()
+        ):
+            matching_events.append(event)
+    if len(matching_events) != 1:
+        return None
+    event = matching_events[0]
+    if event.name is None or event.invocation is None or event.span is None:
+        return None
+    begin = event.span.begin
+    end = event.span.end
+    if begin is None or end is None:
+        return None
+    begin_position = begin.expansion or begin.spelling
+    end_position = end.expansion or end.spelling
+    if (
+        begin_position is None
+        or end_position is None
+        or begin_position.path is None
+        or end_position.path is None
+        or begin_position.offset is None
+        or end_position.offset is None
+        or begin_position.offset < 0
+        or end_position.offset < begin_position.offset
+        or Path(begin_position.path).resolve() != path.resolve()
+        or Path(end_position.path).resolve() != path.resolve()
+    ):
+        return None
+    start = begin_position.offset
+    try:
+        source_invocation = event.invocation.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    half_open_end = start + len(source_invocation)
+    if (
+        not source_invocation
+        or not start <= end_position.offset < half_open_end
+        or source_bytes[start:half_open_end] != source_invocation
+    ):
+        return None
+    spelling_coordinate = _clang_compiler_source_coordinate(
+        location.spelling if location is not None else None, root
+    )
+    invocation = CompilerObservedMacroInvocation(
+        name=event.name,
+        path=expansion_coordinate.path,
+        byte_range=(start, half_open_end),
+        text=event.invocation,
+    )
+
+    def observed_point(point: SourcePoint | None) -> dict[str, object] | None:
+        """Serialize compiler spelling and expansion points without absolutes.
+
+        Parameters
+        ----------
+        point : codira_clang_frontend.SourcePoint or None
+            Native point to retain in the opaque receipt.
+
+        Returns
+        -------
+        dict[str, object] or None
+            Portable coordinates and the native macro-location flag.
+        """
+        if point is None:
+            return None
+        spelling = _clang_compiler_source_coordinate(point.spelling, root)
+        expansion_point = _clang_compiler_source_coordinate(point.expansion, root)
+        return {
+            "spelling": asdict(spelling) if spelling is not None else None,
+            "expansion": (
+                asdict(expansion_point) if expansion_point is not None else None
+            ),
+            "is_macro": point.is_macro,
+        }
+
+    owner_location = observed_point(declaration.owner_location)
+    source_span = None
+    if declaration.span is not None:
+        source_span = {
+            "begin": observed_point(declaration.span.begin),
+            "end": observed_point(declaration.span.end),
+        }
+    receipt = {
+        "schema": "clang.frontend.declaration-observation.v1",
+        "context": {
+            "profile_identity": result.profile_identity,
+            "cache_fingerprint": result.cache_fingerprint,
+            "analyzer_context_identity": context_identity,
+            "source_sha256": source_sha256,
+            "stdout_sha256": result.stdout_sha256,
+        },
+        "declaration": {
+            "usr": declaration.usr,
+            "entity_kind": declaration.kind,
+            "name": declaration.name,
+            "qualified_name": declaration.qualified_name,
+            "decl_kind": declaration.decl_kind,
+            "type_text": declaration.type_text,
+            "provenance": declaration.provenance,
+            "is_definition": declaration.is_definition,
+            "is_file_scope": declaration.is_file_scope,
+            "owner_usr": declaration.owner_usr,
+            "owner_name": declaration.owner_name,
+            "owner_kind": declaration.owner_kind,
+            "owner_location": owner_location,
+            "access": declaration.access,
+            "location": observed_point(declaration.location),
+            "range": source_span,
+        },
+        "macro_expansion": {
+            "name": event.name,
+            "invocation": event.invocation,
+            "byte_range": (start, half_open_end),
+        },
+    }
+    try:
+        receipt_json = json.dumps(
+            receipt,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        if len(receipt_json.encode("utf-8")) > 64 * 1024:
+            return None
+    except (TypeError, ValueError, UnicodeEncodeError):
+        return None
+    return (
+        CompilerObservedDeclarationProvenance(
+            origin=origin,
+            declaration_kind=cast("Literal['variable', 'constant']", declaration.kind),
+            source_sha256=source_sha256,
+            context_identity=context_identity,
+            receipt_namespace="clang.frontend.declaration-observation.v1",
+            receipt_json=receipt_json,
+            spelling_location=spelling_coordinate,
+            expansion_location=expansion_coordinate,
+            invocation=invocation,
+        ),
+        event,
+    )
+
+
+def _clang_captured_source(
+    path: Path, result: FrontendResult
+) -> tuple[str, bytes] | None:
+    """Return translation-unit bytes bound by the frontend dependency closure.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Translation unit whose digest is required.
+    result : codira_clang_frontend.FrontendResult
+        Frontend result carrying hashed dependency inputs.
+
+    Returns
+    -------
+    tuple[str, bytes] or None
+        Captured source digest and matching current bytes.
+    """
+    closure = result.dependency_closure
+    if closure is None:
+        return None
+    expected = next(
+        (
+            item.sha256
+            for item in closure.files
+            if item.path.resolve() == path.resolve()
+        ),
+        None,
+    )
+    if expected is None:
+        return None
+    try:
+        source_bytes = path.read_bytes()
+    except OSError:
+        return None
+    if hashlib.sha256(source_bytes).hexdigest() != expected:
+        return None
+    return expected, source_bytes
+
+
+def _analysis_from_clang_result(
+    path: Path,
+    root: Path,
+    result: FrontendResult,
+    *,
+    context_identity: str | None = None,
+) -> AnalysisResult | None:
+    """Map supported C++ declarations and calls into analyzer DTOs.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Original C++ translation unit.
+    root : pathlib.Path
+        Repository root used for durable analyzer identities.
+    result : codira_clang_frontend.FrontendResult
+        Complete frontend result with verified source coordinates.
+    context_identity : str or None, optional
+        Outer C++ analyzer input fingerprint that binds frontend results to the
+        complete configuration and dependency context.
+
+    Returns
+    -------
+    codira.models.AnalysisResult or None
+        Clang-backed output, or ``None`` when required ownership, visibility,
+        or physical source coordinates cannot be represented faithfully.
+        Eligible macro variables and constants carry bounded compiler-observed
+        provenance.
+
+    Notes
+    -----
+    Compatible same-USR declaration chains use their unique definition as the
+    artifact anchor. Incomplete or conflicting identity facts decline the
+    Clang projection rather than being merged by name.
+    """
+    if result.status != "parsed" or result.coverage_state != "complete":
+        return None
+    owner_id = _symbol_owner_id(path, root)
+    module_name = _module_name_for_path(path, root)
+    module_stable_id = _module_stable_id(path, root)
+    documentation: list[DocumentationArtifact] = []
+    documentation_anchors: dict[int, str] = {}
+    documentation_identity_ambiguous = False
+    documented_comment_anchors: set[tuple[str, str, str, int | None, str, str]] = set()
+
+    def add_documentation(
+        stable_id: str,
+        owner_kind: str,
+        title: str,
+        text: str | None,
+        location: SourcePoint | None,
+        span: SourceSpan | None,
+    ) -> None:
+        """Attach one Clang comment at its physical spelling location.
+
+        Parameters
+        ----------
+        stable_id : str
+            Identity of the function, declaration, or module owner.
+        owner_kind : str
+            Canonical kind of the documented owner.
+        title : str
+            Human-readable owner name.
+        text : str or None
+            Clang-formatted Doxygen text.
+        location : codira_clang_frontend.SourcePoint or None
+            Comment start coordinate.
+        span : codira_clang_frontend.SourceSpan or None
+            Comment source range.
+
+        Returns
+        -------
+        None
+            A documentation artifact is appended when a physical comment path
+            and line are available.
+
+        Notes
+        -----
+        Repeated compiler rows for the same owner and physical comment anchor
+        emit one documentation artifact.
+        """
+        nonlocal documentation_identity_ambiguous
+        if not text or location is None:
+            return
+        point = next(
+            (
+                item
+                for item in (location.spelling, location.expansion)
+                if item is not None and item.path is not None and item.line is not None
+            ),
+            None,
+        )
+        if point is None or point.line is None:
+            return
+        source_path = Path(point.path or "")
+        try:
+            source_path = source_path.resolve()
+        except OSError:
+            return
+        end_line = None
+        if span is not None and span.end is not None:
+            end_point = next(
+                (
+                    item
+                    for item in (span.end.spelling, span.end.expansion)
+                    if item is not None
+                    and item.path is not None
+                    and item.line is not None
+                    and Path(item.path).resolve() == source_path
+                ),
+                None,
+            )
+            end_line = end_point.line if end_point is not None else None
+        physical_anchor = _clang_source_anchor(location, source_path)
+        if physical_anchor is None:
+            documentation_identity_ambiguous = True
+            physical_anchor = f"line-{point.line}"
+        comment_anchor = (
+            stable_id,
+            str(source_path),
+            physical_anchor,
+            end_line,
+            title,
+            text,
+        )
+        if comment_anchor in documented_comment_anchors:
+            return
+        documented_comment_anchors.add(comment_anchor)
+        artifact = DocumentationArtifact(
+            stable_id=(
+                f"doc:{'module' if owner_kind == 'module' else 'declaration'}:{stable_id}:doxygen"
+            ),
+            kind="declaration" if owner_kind != "module" else "module",
+            source_format="doxygen",
+            source_path=source_path,
+            lineno=point.line,
+            end_lineno=end_line,
+            title=title,
+            heading_path=(),
+            text=text,
+            owner_stable_id=stable_id,
+            owner_kind=owner_kind,
+            attachment_confidence="explicit",
+        )
+        documentation.append(artifact)
+        documentation_anchors[id(artifact)] = physical_anchor
+
+    module_comment = next(
+        (
+            comment
+            for comment in getattr(result, "documentation_comments", ())
+            if any(
+                line.lstrip().startswith(("\\file", "@file"))
+                for line in comment.text.splitlines()
+            )
+        ),
+        None,
+    )
+    if module_comment is not None:
+        add_documentation(
+            module_stable_id,
+            "module",
+            module_name,
+            module_comment.text,
+            module_comment.location,
+            module_comment.span,
+        )
+    class_declarations = {
+        item.qualified_name: item
+        for item in result.declarations
+        if item.provenance == "source_written"
+        and item.kind in {"class", "struct", "union"}
+    }
+    class_rows: dict[str, ClassArtifact] = {}
+    for qualified_name, declaration in class_declarations.items():
+        position = _clang_source_position(declaration.location, path)
+        if position is None:
+            return None
+        end_position = _clang_source_position(
+            declaration.span.end if declaration.span is not None else None, path
+        )
+        class_rows[qualified_name] = ClassArtifact(
+            name=qualified_name,
+            stable_id=_class_stable_id(owner_id, qualified_name),
+            lineno=position[0],
+            end_lineno=end_position[0] if end_position is not None else None,
+            docstring=declaration.documentation,
+            has_docstring=int(declaration.documentation is not None),
+            methods=(),
+        )
+        add_documentation(
+            _class_stable_id(owner_id, qualified_name),
+            "type",
+            qualified_name,
+            declaration.documentation,
+            declaration.documentation_location,
+            declaration.documentation_span,
+        )
+    functions: list[FunctionArtifact] = []
+    methods: dict[str, list[FunctionArtifact]] = {name: [] for name in class_rows}
+    captured_source = (
+        _clang_captured_source(path, result)
+        if any(
+            item.provenance in {"macro_argument", "macro_replacement"}
+            for item in result.callables
+        )
+        or any(
+            item.provenance in {"macro_argument", "macro_replacement"}
+            for item in result.declarations
+        )
+        else None
+    )
+    callable_rows: dict[
+        str,
+        tuple[
+            FrontendCallable,
+            CompilerObservedCallableProvenance | None,
+            FrontendPreprocessorEvent | None,
+        ],
+    ] = {}
+    generated_prototypes: dict[
+        str,
+        list[
+            tuple[
+                FrontendCallable,
+                CompilerObservedCallableProvenance,
+                FrontendPreprocessorEvent,
+            ]
+        ],
+    ] = {}
+    omitted_generated_callable = False
+    for callable_item in result.callables:
+        has_body = (
+            callable_item.has_body
+            if callable_item.has_body is not None
+            else callable_item.is_definition
+        )
+        if callable_item.provenance in {"implicit", "template_instantiation"}:
+            continue
+        generated_provenance: CompilerObservedCallableProvenance | None = None
+        generated_event: FrontendPreprocessorEvent | None = None
+        if callable_item.provenance in {"macro_argument", "macro_replacement"}:
+            evidence = (
+                _clang_macro_invocation_for_callable(
+                    callable_item,
+                    result,
+                    path=path,
+                    root=root,
+                    source_bytes=captured_source[1],
+                    source_sha256=captured_source[0],
+                    context_identity=context_identity,
+                )
+                if captured_source is not None
+                else None
+            )
+            if evidence is None:
+                omitted_generated_callable = True
+                continue
+            generated_provenance, generated_event, _, _ = evidence
+            if callable_item.alias_target_symbol is not None:
+                if callable_item.alias_binding_status != "resolved":
+                    omitted_generated_callable = True
+            elif not has_body and callable_item.usr is not None:
+                generated_prototypes.setdefault(callable_item.usr, []).append(
+                    (callable_item, generated_provenance, generated_event)
+                )
+        elif callable_item.provenance != "source_written":
+            omitted_generated_callable = True
+            continue
+        identity_key = callable_item.usr or (
+            f"{callable_item.qualified_name}:{callable_item.signature}:"
+            f"{callable_item.location!r}"
+        )
+        current = callable_rows.get(identity_key)
+        if current is None or callable_item.is_definition:
+            callable_rows[identity_key] = (
+                callable_item,
+                generated_provenance,
+                generated_event,
+            )
+    for callable_item, generated_provenance, generated_event in callable_rows.values():
+        has_body = (
+            callable_item.has_body
+            if callable_item.has_body is not None
+            else callable_item.is_definition
+        )
+        if (
+            callable_item.kind
+            not in {
+                "function",
+                "method",
+                "constructor",
+                "destructor",
+                "conversion",
+            }
+            or callable_item.is_public is None
+        ):
+            return None
+        position = _clang_source_position(
+            callable_item.location,
+            path,
+            prefer_expansion=generated_provenance is not None,
+        )
+        if position is None:
+            return None
+        class_name = (
+            callable_item.lexical_owner
+            if callable_item.kind
+            in {"method", "constructor", "destructor", "conversion"}
+            else None
+        )
+        if (
+            callable_item.kind
+            in {
+                "method",
+                "constructor",
+                "destructor",
+                "conversion",
+            }
+            and class_name is None
+        ):
+            return None
+        class_stable_id = (
+            class_rows[class_name].stable_id
+            if class_name in class_rows
+            else _clang_owner_stable_id(
+                callable_item.owner_location, class_name, "CXXRecord", root
+            )
+            if class_name is not None
+            else None
+        )
+        end_position = (
+            _clang_source_position(
+                generated_event.span.end
+                if generated_event is not None and generated_event.span is not None
+                else None,
+                path,
+                prefer_expansion=True,
+            )
+            if generated_event is not None
+            else _clang_source_position(
+                callable_item.span.end if callable_item.span is not None else None,
+                path,
+            )
+        )
+        alias_role = callable_item.alias_target_symbol is not None
+        persisted_generated: GeneratedCallableEvidence | None = generated_provenance
+        if alias_role and generated_provenance is not None:
+            persisted_generated = _clang_alias_or_prototype_evidence(
+                callable_item, generated_provenance, role="alias"
+            )
+            if persisted_generated is None:
+                omitted_generated_callable = True
+        overloads: list[OverloadArtifact] = []
+        prototype_rows = _clang_distinct_prototype_rows(
+            callable_item, tuple(generated_prototypes.get(callable_item.usr or "", ()))
+        )
+        for prototype_index, (prototype, prototype_evidence, _) in enumerate(
+            prototype_rows, start=1
+        ):
+            prototype_position = _clang_source_position(
+                prototype.location, path, prefer_expansion=True
+            )
+            prototype_generated = _clang_alias_or_prototype_evidence(
+                prototype, prototype_evidence, role="prototype"
+            )
+            if prototype_position is None or prototype_generated is None:
+                omitted_generated_callable = True
+                continue
+            overloads.append(
+                OverloadArtifact(
+                    stable_id=(
+                        f"{_function_stable_id(owner_id, prototype.qualified_name)}"
+                        f":prototype:{prototype_position[0]}:{prototype_index}"
+                    ),
+                    parent_stable_id=_function_stable_id(
+                        owner_id,
+                        callable_item.name
+                        if class_name is not None
+                        else callable_item.qualified_name or callable_item.name,
+                        class_name=class_name,
+                    ),
+                    ordinal=prototype_index,
+                    signature=prototype.signature,
+                    lineno=prototype_position[0],
+                    end_lineno=None,
+                    docstring=prototype.documentation,
+                    generated=prototype_generated,
+                )
+            )
+        calls: list[CallSite] = []
+        for call in callable_item.calls:
+            if not call.target:
+                return None
+            call_position = _clang_source_position(
+                call.location,
+                path,
+                prefer_expansion=call.origin == "macro_replacement",
+            )
+            if call_position is None:
+                return None
+            qualified_target = call.qualified_target or call.target
+            if call.target_usr is None:
+                call_kind = "unresolved"
+                base = ""
+                target = call.target
+            elif "::" in qualified_target:
+                base, target = qualified_target.rsplit("::", 1)
+                call_kind = "attribute"
+            else:
+                base, target, call_kind = "", call.target, "name"
+            calls.append(
+                CallSite(
+                    kind=cast("CallKind", call_kind),
+                    target=target,
+                    base=base,
+                    lineno=call_position[0],
+                    col_offset=call_position[1],
+                    external_target_kind=_cpp_external_target_kind(base, target),
+                    external_target_name=qualified_target,
+                    target_identity=(
+                        SemanticIdentity(
+                            namespace="clang.usr.v1", value=call.target_usr
+                        )
+                        if call.target_usr is not None
+                        else None
+                    ),
+                    resolution_mode="exact",
+                    origin=call.origin,
+                )
+            )
+        function = FunctionArtifact(
+            name=(
+                callable_item.name
+                if class_name is not None
+                else callable_item.qualified_name or callable_item.name
+            ),
+            stable_id=_function_stable_id(
+                owner_id,
+                (
+                    callable_item.name
+                    if class_name is not None
+                    else callable_item.qualified_name or callable_item.name
+                ),
+                class_name=class_name,
+            ),
+            lineno=position[0],
+            end_lineno=(
+                end_position[0]
+                if end_position is not None and has_body and not alias_role
+                else None
+            ),
+            signature=(
+                (
+                    "explicit "
+                    if getattr(
+                        getattr(callable_item, "qualifiers", None), "is_explicit", False
+                    )
+                    else ""
+                )
+                + (
+                    "virtual "
+                    if getattr(
+                        getattr(callable_item, "qualifiers", None), "is_virtual", False
+                    )
+                    else ""
+                )
+                + (
+                    "static "
+                    if getattr(
+                        getattr(callable_item, "qualifiers", None), "is_static", False
+                    )
+                    else ""
+                )
+                + callable_item.signature
+            ),
+            docstring=getattr(callable_item, "documentation", None),
+            has_docstring=int(
+                getattr(callable_item, "documentation", None) is not None
+            ),
+            is_method=int(class_name is not None),
+            is_public=int(callable_item.is_public),
+            parameters=tuple(name for name, _ in callable_item.parameters if name),
+            returns_value=(
+                int(getattr(callable_item, "returns_value", False))
+                if has_body and not alias_role
+                else 0
+            ),
+            yields_value=0,
+            raises=0,
+            has_asserts=0,
+            decorators=(),
+            calls=(
+                tuple(sorted(calls, key=lambda item: (item.lineno, item.col_offset)))
+                if has_body and not alias_role
+                else ()
+            ),
+            callable_refs=(),
+            overloads=tuple(overloads),
+            owner_name=class_name,
+            owner_stable_id=class_stable_id,
+            semantic_identity=(
+                SemanticIdentity(namespace="clang.usr.v1", value=callable_item.usr)
+                if callable_item.is_definition and callable_item.usr is not None
+                else None
+            ),
+            generated=persisted_generated,
+        )
+        if class_name is None or class_name not in class_rows:
+            functions.append(function)
+        else:
+            methods[class_name].append(function)
+    classes = tuple(
+        replace(
+            class_rows[name],
+            methods=_disambiguate_callable_stable_ids(
+                tuple(
+                    sorted(
+                        methods[name],
+                        key=lambda item: (item.lineno, item.name, item.signature),
+                    )
+                )
+            ),
+        )
+        for name in sorted(class_rows, key=lambda key: (class_rows[key].lineno, key))
+    )
+    functions = list(
+        _disambiguate_callable_stable_ids(
+            tuple(
+                sorted(
+                    functions,
+                    key=lambda item: (item.lineno, item.name, item.signature),
+                )
+            )
+        )
+    )
+    for function in (
+        *functions,
+        *(method for class_artifact in classes for method in class_artifact.methods),
+    ):
+        matched_callable = next(
+            (
+                item
+                for item, _, _ in callable_rows.values()
+                if (
+                    item.usr is not None
+                    and function.semantic_identity is not None
+                    and item.usr == function.semantic_identity.value
+                )
+                or (
+                    (item.name == function.name or item.qualified_name == function.name)
+                    and (
+                        item_position := _clang_source_position(
+                            item.location,
+                            path,
+                            prefer_expansion=item.provenance
+                            in {"macro_argument", "macro_replacement"},
+                        )
+                    )
+                    is not None
+                    and item_position[0] == function.lineno
+                )
+            ),
+            None,
+        )
+        if matched_callable is not None:
+            add_documentation(
+                function.stable_id,
+                "function",
+                function.name,
+                getattr(matched_callable, "documentation", None),
+                getattr(matched_callable, "documentation_location", None),
+                getattr(matched_callable, "documentation_span", None),
+            )
+    declaration_kinds = {
+        "constant",
+        "enum",
+        "macro",
+        "namespace",
+        "type_alias",
+        "typedef",
+        "variable",
+    }
+    enum_members: dict[str, list[EnumMemberArtifact]] = {}
+    enum_names = {
+        item.usr: item.qualified_name or item.name
+        for item in result.declarations
+        if getattr(item, "usr", None) is not None and item.kind == "enum"
+    }
+
+    def declaration_scope_is_projected(
+        declaration: FrontendDeclaration,
+    ) -> bool:
+        """Check whether the existing C++ declaration projection includes scope.
+
+        Parameters
+        ----------
+        declaration : codira_clang_frontend.FrontendDeclaration
+            Compiler declaration to classify before applying provenance policy.
+
+        Returns
+        -------
+        bool
+            Whether the current C++ artifact projection includes this declaration
+            scope when its provenance is source-written.
+        """
+        if declaration.decl_kind == "Field" or declaration.kind == "field":
+            return (
+                _clang_source_position(
+                    declaration.location,
+                    path,
+                    prefer_expansion=declaration.provenance
+                    in {"macro_argument", "macro_replacement", "unknown"},
+                )
+                is not None
+            )
+        if declaration.kind not in {"class", "struct", "union"} | declaration_kinds:
+            return (
+                declaration.is_file_scope
+                or declaration.owner_kind in {"CXXRecord", "Record"}
+                or declaration.owner_kind in {"Namespace", "NamespaceAlias"}
+            ) and _clang_source_position(
+                declaration.location,
+                path,
+                prefer_expansion=declaration.provenance
+                in {"macro_argument", "macro_replacement", "unknown"},
+            ) is not None
+        if declaration.kind == "constant" and declaration.owner_usr in enum_names:
+            return (
+                _clang_source_position(
+                    declaration.location,
+                    path,
+                    prefer_expansion=declaration.provenance
+                    in {"macro_argument", "macro_replacement", "unknown"},
+                )
+                is not None
+            )
+        if declaration.kind in {"variable", "constant"} and not (
+            declaration.is_file_scope
+            or declaration.owner_kind in {"CXXRecord", "Record"}
+            or declaration.owner_kind in {"Namespace", "NamespaceAlias"}
+        ):
+            return False
+        return (
+            _clang_source_position(
+                declaration.location,
+                path,
+                prefer_expansion=declaration.provenance
+                in {"macro_argument", "macro_replacement", "unknown"},
+            )
+            is not None
+        )
+
+    usr_counts: dict[str, int] = {}
+    artifact_identity_counts: dict[tuple[str, str], int] = {}
+    for item in result.declarations:
+        item_usr = getattr(item, "usr", None)
+        if item_usr is not None:
+            usr_counts[item_usr] = usr_counts.get(item_usr, 0) + 1
+        if item.kind in {"class", "struct", "union"}:
+            artifact_kind = "type"
+        else:
+            artifact_kind = item.kind
+        artifact_name = item.qualified_name or item.name
+        identity = (artifact_kind, artifact_name)
+        artifact_identity_counts[identity] = (
+            artifact_identity_counts.get(identity, 0) + 1
+        )
+
+    macro_static_definition_pairs = (
+        _proven_macro_static_definition_pairs(
+            result.declarations, path, captured_source[1]
+        )
+        if captured_source is not None
+        else {}
+    )
+    declaration_evidence_by_id: dict[int, CompilerObservedDeclarationProvenance] = {}
+    omitted_generated_declaration = False
+    for declaration in result.declarations:
+        if declaration.provenance not in {
+            "macro_argument",
+            "macro_replacement",
+            "unknown",
+        }:
+            continue
+        if not declaration_scope_is_projected(declaration):
+            continue
+        is_enum_member = declaration.decl_kind in {
+            "EnumConstant",
+            "EnumConstantDecl",
+        } or (declaration.kind == "constant" and declaration.owner_usr in enum_names)
+        is_owned_field = (
+            declaration.decl_kind == "Field"
+            and declaration.kind == "variable"
+            and declaration.owner_usr is not None
+            and declaration.owner_name is not None
+            and declaration.owner_kind in {"CXXRecord", "Record"}
+            and declaration.owner_location is not None
+        )
+        supported_kind = (
+            declaration.kind in {"variable", "constant"}
+            and declaration.decl_kind == "Var"
+            or is_owned_field
+        ) and not is_enum_member
+        identity = (declaration.kind, declaration.qualified_name or declaration.name)
+        unique_identity = (
+            declaration.usr is not None
+            and usr_counts.get(declaration.usr) == 1
+            and artifact_identity_counts.get(identity) == 1
+        ) or id(declaration) in macro_static_definition_pairs
+        declaration_observation = (
+            _clang_macro_invocation_for_declaration(
+                declaration,
+                result,
+                path=path,
+                root=root,
+                source_bytes=captured_source[1],
+                source_sha256=captured_source[0],
+                context_identity=context_identity,
+            )
+            if supported_kind and unique_identity and captured_source is not None
+            else None
+        )
+        if declaration_observation is None:
+            omitted_generated_declaration = True
+            continue
+        declaration_evidence_by_id[id(declaration)] = declaration_observation[0]
+        paired_definition_id = macro_static_definition_pairs.get(id(declaration))
+        if paired_definition_id is not None:
+            declaration_evidence_by_id[paired_definition_id] = declaration_observation[
+                0
+            ]
+
+    for member in result.declarations:
+        if (
+            member.kind != "constant"
+            or member.owner_usr not in enum_names
+            or member.enum_ordinal is None
+        ):
+            continue
+        enum_name = enum_names[cast("str", member.owner_usr)]
+        enum_stable_id = _declaration_stable_id(owner_id, "enum", enum_name)
+        member_stable_id = _enum_member_stable_id(
+            owner_id, enum_name, member.enum_ordinal
+        )
+        position = _clang_source_position(member.location, path)
+        if position is None:
+            return None
+        enum_members.setdefault(cast("str", member.owner_usr), []).append(
+            EnumMemberArtifact(
+                stable_id=member_stable_id,
+                parent_stable_id=enum_stable_id,
+                ordinal=member.enum_ordinal,
+                name=member.name,
+                signature=member.source_text or member.type_text or member.name,
+                lineno=position[0],
+            )
+        )
+        add_documentation(
+            member_stable_id,
+            "enum_member",
+            member.name,
+            member.documentation,
+            member.documentation_location,
+            member.documentation_span,
+        )
+
+    declaration_rows: list[
+        tuple[FrontendDeclaration, tuple[FrontendDeclaration, ...]]
+    ] = []
+    eligible_declarations: list[FrontendDeclaration] = []
+    for declaration in result.declarations:
+        if id(declaration) in macro_static_definition_pairs:
+            continue
+        declaration_evidence = declaration_evidence_by_id.get(id(declaration))
+        if declaration.provenance != "source_written" and declaration_evidence is None:
+            continue
+        if declaration.kind in {"class", "struct", "union"}:
+            continue
+        if declaration.kind not in declaration_kinds:
+            continue
+        if declaration.kind == "constant" and declaration.owner_usr in enum_names:
+            continue
+        if declaration.kind in {"variable", "constant"} and not (
+            declaration.is_file_scope
+            or declaration.owner_kind in {"CXXRecord", "Record"}
+            or declaration.owner_kind in {"Namespace", "NamespaceAlias"}
+        ):
+            continue
+        eligible_declarations.append(declaration)
+
+    candidate_groups: dict[str, list[FrontendDeclaration]] = {}
+    for declaration in eligible_declarations:
+        declaration_usr = getattr(declaration, "usr", None)
+        if declaration_usr and declaration.kind != "namespace":
+            candidate_groups.setdefault(declaration_usr, []).append(declaration)
+
+    coalesced_rows: dict[int, tuple[FrontendDeclaration, ...]] = {}
+    skipped_row_ids: set[int] = set()
+    ambiguous_declaration_identity = False
+    for group in candidate_groups.values():
+        if len(group) < 2:
+            continue
+        facts = {
+            (
+                item.kind,
+                item.decl_kind,
+                item.name,
+                item.qualified_name,
+                item.type_text,
+                item.owner_usr,
+                item.owner_name,
+                item.owner_kind,
+                item.access,
+                item.is_file_scope,
+                item.provenance,
+            )
+            for item in group
+        }
+        definitions = [item for item in group if item.is_definition is True]
+        definition_flags_known = all(item.is_definition is not None for item in group)
+        if (
+            len(facts) == 1
+            and all(item.type_text for item in group)
+            and all(
+                item.is_file_scope or (item.owner_usr and item.owner_kind)
+                for item in group
+            )
+            and definition_flags_known
+            and len(definitions) == 1
+            and all(item.provenance == "source_written" for item in group)
+        ):
+            canonical = definitions[0]
+            coalesced_rows[id(canonical)] = tuple(group)
+            skipped_row_ids.update(id(item) for item in group if item is not canonical)
+        elif all(item.provenance == "source_written" for item in group):
+            ambiguous_declaration_identity = True
+
+    if ambiguous_declaration_identity:
+        return None
+
+    for declaration in eligible_declarations:
+        if id(declaration) in skipped_row_ids:
+            continue
+        declaration_rows.append(
+            (declaration, coalesced_rows.get(id(declaration), (declaration,)))
+        )
+
+    stable_id_counts: dict[str, int] = {}
+    for declaration, _ in declaration_rows:
+        qualified_name = declaration.qualified_name or declaration.name
+        stable_id = _declaration_stable_id(
+            owner_id,
+            cast("DeclarationKind", declaration.kind),
+            qualified_name,
+        )
+        stable_id_counts[stable_id] = stable_id_counts.get(stable_id, 0) + 1
+
+    declarations: list[DeclarationArtifact] = []
+    used_declaration_stable_ids: set[str] = set()
+    namespace_rows_by_usr: dict[
+        str, tuple[str, str, int, str | None, SourcePoint | None, SourceSpan | None]
+    ] = {}
+    namespace_usrs_by_stable_id: dict[str, str] = {}
+    for declaration, documentation_rows in declaration_rows:
+        declaration_evidence = declaration_evidence_by_id.get(id(declaration))
+        position = _clang_source_position(
+            declaration.location,
+            path,
+            prefer_expansion=declaration_evidence is not None,
+        )
+        if position is None:
+            return None
+        qualified_name = declaration.qualified_name or declaration.name
+        signature = (
+            declaration.type_text or declaration.name
+            if declaration_evidence is not None
+            and declaration.provenance != "source_written"
+            else declaration.signature
+            or (declaration.source_text if declaration.kind != "namespace" else None)
+            or declaration.type_text
+            or declaration.name
+        )
+        owner_stable_id = None
+        owner_name = getattr(declaration, "owner_name", None)
+        owner_location = getattr(declaration, "owner_location", None)
+        if owner_name is not None and owner_location is not None:
+            owner_stable_id = _clang_owner_stable_id(
+                owner_location,
+                owner_name,
+                getattr(declaration, "owner_kind", "") or "",
+                root,
+            )
+        enum_members_for_declaration = (
+            tuple(
+                sorted(
+                    enum_members.get(declaration.usr or "", ()),
+                    key=lambda item: item.ordinal,
+                )
+            )
+            if declaration.kind == "enum"
+            else ()
+        )
+        stable_id = _declaration_stable_id(
+            owner_id,
+            cast("DeclarationKind", declaration.kind),
+            qualified_name,
+        )
+        if stable_id_counts[stable_id] > 1 and declaration.kind != "namespace":
+            stable_id = f"{stable_id}:native:{_declaration_occurrence_suffix(declaration, path)}"
+        if declaration.kind != "namespace" and stable_id in used_declaration_stable_ids:
+            return None
+        used_declaration_stable_ids.add(stable_id)
+        artifact = DeclarationArtifact(
+            name=qualified_name,
+            stable_id=stable_id,
+            kind=cast("DeclarationKind", declaration.kind),
+            lineno=position[0],
+            signature=signature,
+            docstring=getattr(declaration, "documentation", None),
+            enum_members=enum_members_for_declaration,
+            type_text=declaration.type_text,
+            owner_name=getattr(declaration, "owner_name", None),
+            owner_stable_id=owner_stable_id,
+            access=getattr(declaration, "access", None),
+            generated=declaration_evidence,
+        )
+        if declaration.kind == "namespace":
+            namespace_usr = declaration.usr
+            if not namespace_usr or not qualified_name:
+                return None
+            prior_namespace = namespace_rows_by_usr.get(namespace_usr)
+            if prior_namespace is not None:
+                prior_name, prior_stable_id, prior_index, _, _, _ = prior_namespace
+                if prior_name != qualified_name or prior_stable_id != stable_id:
+                    return None
+                declarations[prior_index] = artifact
+                namespace_rows_by_usr[namespace_usr] = (
+                    qualified_name,
+                    stable_id,
+                    prior_index,
+                    getattr(declaration, "documentation", None),
+                    getattr(declaration, "documentation_location", None),
+                    getattr(declaration, "documentation_span", None),
+                )
+                continue
+            prior_usr = namespace_usrs_by_stable_id.get(stable_id)
+            if prior_usr is not None and prior_usr != namespace_usr:
+                return None
+            namespace_rows_by_usr[namespace_usr] = (
+                qualified_name,
+                stable_id,
+                len(declarations),
+                getattr(declaration, "documentation", None),
+                getattr(declaration, "documentation_location", None),
+                getattr(declaration, "documentation_span", None),
+            )
+            namespace_usrs_by_stable_id[stable_id] = namespace_usr
+            declarations.append(artifact)
+            continue
+        declarations.append(artifact)
+        for documentation_row in documentation_rows:
+            add_documentation(
+                stable_id,
+                "variable" if declaration.kind == "variable" else declaration.kind,
+                qualified_name,
+                getattr(documentation_row, "documentation", None),
+                getattr(documentation_row, "documentation_location", None),
+                getattr(documentation_row, "documentation_span", None),
+            )
+    for (
+        namespace_name,
+        stable_id,
+        _,
+        docstring,
+        documentation_location,
+        documentation_span,
+    ) in namespace_rows_by_usr.values():
+        add_documentation(
+            stable_id,
+            "namespace",
+            namespace_name,
+            docstring,
+            documentation_location,
+            documentation_span,
+        )
+    macro_events: list[
+        tuple[FrontendPreprocessorEvent, str, tuple[int, int], str, str]
+    ] = []
+    seen_macro_occurrences: set[tuple[str, str, str, tuple[int, int]]] = set()
+    for event in getattr(result, "preprocessing", ()):
+        if event.kind != "macro_definition" or not event.name:
+            continue
+        macro_position = _clang_source_position(event.location, path)
+        macro_anchor = _clang_source_anchor(event.location, path)
+        if macro_position is None or macro_anchor is None:
+            continue
+        macro_signature = event.source_text or " ".join(
+            ("#define", event.name, *event.parameters, *event.replacement)
+        )
+        occurrence = (event.name, macro_anchor, macro_signature, macro_position)
+        if occurrence in seen_macro_occurrences:
+            continue
+        seen_macro_occurrences.add(occurrence)
+        macro_events.append(
+            (event, event.name, macro_position, macro_anchor, macro_signature)
+        )
+
+    macro_base_counts: dict[str, int] = {}
+    macro_anchor_counts: dict[tuple[str, str], int] = {}
+    for _, macro_name, _, _, _ in macro_events:
+        stable_id = _declaration_stable_id(owner_id, "macro", macro_name)
+        macro_base_counts[stable_id] = macro_base_counts.get(stable_id, 0) + 1
+    for _, macro_name, _, macro_anchor, _ in macro_events:
+        key = (macro_name, macro_anchor)
+        macro_anchor_counts[key] = macro_anchor_counts.get(key, 0) + 1
+
+    macro_declarations: list[DeclarationArtifact] = []
+    for _, macro_name, macro_position, macro_anchor, macro_signature in macro_events:
+        stable_id = _declaration_stable_id(owner_id, "macro", macro_name)
+        if macro_base_counts[stable_id] > 1:
+            signature_suffix = hashlib.sha256(
+                macro_signature.encode("utf-8")
+            ).hexdigest()[:12]
+            if macro_anchor_counts[(macro_name, macro_anchor)] > 1:
+                stable_id = f"{stable_id}:at:{macro_anchor}:{signature_suffix}"
+            else:
+                stable_id = f"{stable_id}:at:{macro_anchor}"
+        if stable_id in used_declaration_stable_ids:
+            return None
+        used_declaration_stable_ids.add(stable_id)
+        macro_declarations.append(
+            DeclarationArtifact(
+                name=macro_name,
+                stable_id=stable_id,
+                kind="macro",
+                lineno=macro_position[0],
+                signature=macro_signature,
+            )
+        )
+    declarations.extend(macro_declarations)
+    imports = tuple(
+        ImportArtifact(
+            name=item.spelled_path,
+            alias=None,
+            lineno=position[0],
+            kind="include_system" if item.angled else "include_local",
+        )
+        for item in getattr(result, "includes", ())
+        if (position := _clang_source_position(item.location, path)) is not None
+    )
+    status_diagnostics = tuple(
+        AnalysisDiagnostic(
+            category="clang_diagnostic",
+            message=diagnostic.message,
+            line=diagnostic.location.line if diagnostic.location else None,
+            column=(diagnostic.location.column - 1)
+            if diagnostic.location and diagnostic.location.column is not None
+            else None,
+        )
+        for diagnostic in result.diagnostics
+    )
+    if omitted_generated_callable:
+        status_diagnostics += (
+            AnalysisDiagnostic(
+                category="clang_generated_provenance",
+                message=(
+                    "compiler-observed macro callable evidence was ambiguous, "
+                    "incomplete, or exceeded the receipt bound"
+                ),
+            ),
+        )
+    if omitted_generated_declaration:
+        status_diagnostics += (
+            AnalysisDiagnostic(
+                category="clang_generated_provenance",
+                message=(
+                    "compiler-observed macro declaration evidence was ambiguous, "
+                    "unsupported, or exceeded the receipt bound"
+                ),
+            ),
+        )
+    omitted_generated = omitted_generated_declaration or omitted_generated_callable
+    omitted_categories: list[str] = []
+    if omitted_generated:
+        omitted_categories.append("generated_declaration")
+    if any(
+        function.is_method and function.owner_stable_id is None
+        for function in (
+            *functions,
+            *(method for cls in classes for method in cls.methods),
+        )
+    ):
+        omitted_categories.append("method_owner_identity")
+    coverage_state = (
+        AnalysisCoverageState.PARTIAL
+        if omitted_categories
+        else AnalysisCoverageState.COMPLETE
+    )
+    toolchain = result.toolchain_identity
+    dependency_closure = result.dependency_closure
+    if documentation_identity_ambiguous:
+        return None
+    analysis = AnalysisResult(
+        source_path=path,
+        module=ModuleArtifact(
+            name=module_name,
+            stable_id=module_stable_id,
+            docstring=module_comment.text if module_comment is not None else None,
+            has_docstring=int(module_comment is not None),
+        ),
+        classes=classes,
+        functions=tuple(functions),
+        declarations=tuple(
+            sorted(declarations, key=lambda item: (item.lineno, item.name, item.kind))
+        ),
+        imports=imports,
+        documentation=tuple(
+            sorted(
+                _disambiguate_documentation_stable_ids(
+                    tuple(documentation), documentation_anchors
+                ),
+                key=lambda item: (item.lineno, item.stable_id),
+            )
+        ),
+        index_symbols=True,
+        status=AnalysisStatus(
+            grammar="clang-cpp-frontend",
+            target_contract={
+                "language": "cpp",
+                "frontend": "clang",
+                "callable_signature_kind": "derived_display_only",
+                "requested_source_path": (
+                    str(result.requested_source_path)
+                    if getattr(result, "requested_source_path", None) is not None
+                    else None
+                ),
+                "requested_source_sha256": getattr(
+                    result, "requested_source_sha256", None
+                ),
+                "translation_unit_path": (
+                    str(result.translation_unit_path)
+                    if getattr(result, "translation_unit_path", None) is not None
+                    else None
+                ),
+                "header_projection_identity": getattr(
+                    result, "header_projection_identity", None
+                ),
+                "profile_identity": result.profile_identity,
+                "cache_fingerprint": result.cache_fingerprint,
+                "compilation_context": _clang_compilation_context_payload(
+                    result.compilation_context
+                ),
+                "attempt_evidence": _clang_result_evidence(result),
+                "toolchain_identity": (
+                    {
+                        "compiler_path": str(toolchain.compiler_path),
+                        "compiler_sha256": toolchain.compiler_sha256,
+                        "compiler_version": toolchain.compiler_version,
+                        "resource_dir": str(toolchain.resource_dir),
+                        "resource_probe_sha256": toolchain.resource_probe_sha256,
+                        "helper_path": str(toolchain.helper_path),
+                        "helper_sha256": toolchain.helper_sha256,
+                        "build_receipt_sha256": toolchain.build_receipt_sha256,
+                        "package_version": toolchain.package_version,
+                        "runtime_shared_library_identity": toolchain.runtime_shared_library_identity,
+                    }
+                    if toolchain is not None
+                    else None
+                ),
+                "dependency_closure": (
+                    {
+                        "status": dependency_closure.status,
+                        "sha256": dependency_closure.sha256,
+                        "file_count": len(dependency_closure.files),
+                    }
+                    if dependency_closure is not None
+                    else None
+                ),
+            },
+            diagnostics=status_diagnostics,
+            reliable_categories=(
+                "module",
+                "class",
+                "function",
+                "declaration",
+                "import",
+                "documentation",
+            ),
+            omitted_categories=tuple(omitted_categories),
+            coverage_state=coverage_state,
+        ),
+    )
+    stable_ids = [analysis.module.stable_id]
+    stable_ids.extend(item.stable_id for item in analysis.classes)
+    for class_artifact in analysis.classes:
+        stable_ids.extend(method.stable_id for method in class_artifact.methods)
+    stable_ids.extend(function.stable_id for function in analysis.functions)
+    stable_ids.extend(item.stable_id for item in analysis.declarations)
+    stable_ids.extend(item.stable_id for item in analysis.documentation)
+    stable_ids.extend(item.stable_id for item in analysis.iter_overloads())
+    if len(stable_ids) != len(set(stable_ids)):
+        return None
+    return analysis
+
+
 _TYPE_LIKE_NAMES = {
     "auto",
     "bool",
@@ -125,16 +2775,60 @@ _TYPE_LIKE_NAMES = {
 
 @dataclass(frozen=True)
 class _PendingFunction:
-    """Function candidate awaiting final ownership resolution."""
+    """Hold a callable candidate awaiting ownership and redeclaration merging.
+
+    Parameters
+    ----------
+    artifact : codira.models.FunctionArtifact
+        Original-source callable artifacts.
+    class_name : str | None
+        Known class-like owner, if any.
+    is_definition : bool
+        Whether the candidate has a body or an explicit default/delete definition.
+    binding_key : tuple[str, ...]
+        Source-syntax parameter types and cv/ref/constraint qualifiers. Parameter
+        names and default values do not distinguish redeclarations. Conditional
+        branch identity keeps alternative source definitions separate.
+
+    Returns
+    -------
+    None
+        Initializes an immutable candidate.
+    """
 
     artifact: FunctionArtifact
     class_name: str | None
     is_definition: bool
+    binding_key: tuple[str, ...]
+    class_branch_identity: tuple[int, ...] | None = None
 
 
 @dataclass
 class _ClassBuilder:
-    """Mutable accumulator for one class artifact before finalization."""
+    """Accumulate one logical record with coherent primary-source metadata.
+
+    Parameters
+    ----------
+    qualified_name, stable_id : str
+        Logical name and source-offset-independent identity.
+    lineno : int
+        Starting line of the represented definition, declaration or owner.
+    end_lineno : int or None
+        Matching ending line, absent for synthesized method owners.
+    docstring : str or None
+        Attached documentation when available.
+    has_docstring : int
+        Whether documentation is present.
+    has_definition : bool, optional
+        Whether the represented source range belongs to a complete record.
+    methods_by_key : dict, optional
+        Source methods grouped by semantic identity and declarator binding.
+
+    Returns
+    -------
+    None
+        Creates a mutable accumulator before immutable artifact finalization.
+    """
 
     qualified_name: str
     stable_id: str
@@ -142,6 +2836,7 @@ class _ClassBuilder:
     end_lineno: int | None
     docstring: str | None
     has_docstring: int
+    has_definition: bool = False
     methods_by_key: dict[tuple[str, tuple[str, ...]], _PendingFunction] = field(
         default_factory=dict
     )
@@ -152,9 +2847,10 @@ class _ClassBuilder:
         lineno: int,
         end_lineno: int | None,
         docstring: str | None,
+        is_definition: bool = False,
     ) -> None:
         """
-        Merge class metadata from a declaration or synthesized owner.
+        Select coherent metadata from definitions, declarations or owners.
 
         Parameters
         ----------
@@ -164,17 +2860,26 @@ class _ClassBuilder:
             Candidate ending line for the class artifact.
         docstring : str | None
             Candidate class docstring from an attached comment.
+        is_definition : bool, optional
+            Whether the candidate range contains a complete record body.
 
         Returns
         -------
         None
-            The stored class metadata is updated in place when the new values are
-            richer.
+            Definitions take precedence over forward declarations and synthesized
+            owners. Equal source roles retain the earliest complete range.
         """
-        if lineno < self.lineno:
+        candidate_role = (is_definition, end_lineno is not None)
+        current_role = (self.has_definition, self.end_lineno is not None)
+        if candidate_role > current_role or (
+            candidate_role == current_role and lineno < self.lineno
+        ):
             self.lineno = lineno
-        if self.end_lineno is None and end_lineno is not None:
             self.end_lineno = end_lineno
+            self.has_definition = is_definition
+            if docstring is not None:
+                self.docstring = docstring
+                self.has_docstring = 1
         if self.docstring is None and docstring is not None:
             self.docstring = docstring
             self.has_docstring = 1
@@ -193,10 +2898,11 @@ class _ClassBuilder:
         None
             The method map is updated in place.
         """
-        key = (pending.artifact.stable_id, pending.artifact.parameters)
+        key = (pending.artifact.stable_id, pending.binding_key)
         current = self.methods_by_key.get(key)
-        if current is None or _prefer_pending_function(current, pending) is pending:
-            self.methods_by_key[key] = pending
+        self.methods_by_key[key] = (
+            pending if current is None else _prefer_pending_function(current, pending)
+        )
 
     def build(self) -> ClassArtifact:
         """
@@ -234,6 +2940,38 @@ class _ClassBuilder:
         )
 
 
+def _conditional_branch_identity(node: Node) -> tuple[int, ...]:
+    """Return source anchors for the conditional branches containing a node.
+
+    Parameters
+    ----------
+    node : SyntaxNode
+        Class specifier whose branch context is being identified.
+
+    Returns
+    -------
+    tuple[int, ...]
+        Ordered byte offsets of enclosing preprocessor alternatives.
+    """
+    branch_types = {"preproc_if", "preproc_ifdef", "preproc_elif", "preproc_else"}
+    branches: list[int] = []
+    parent = node.parent
+    while parent is not None:
+        if parent.type in branch_types:
+            entered_later_alternative = parent.type in {
+                "preproc_if",
+                "preproc_ifdef",
+            } and any(
+                child.type in {"preproc_elif", "preproc_else"}
+                and child.start_byte <= node.start_byte
+                for child in parent.named_children
+            )
+            if not entered_later_alternative:
+                branches.append(parent.start_byte)
+        parent = parent.parent
+    return tuple(reversed(branches))
+
+
 def _named_descendants(node: Node) -> list[Node]:
     """
     Collect named descendants of one syntax node in source order.
@@ -249,7 +2987,8 @@ def _named_descendants(node: Node) -> list[Node]:
         Named descendant nodes in deterministic source order.
     """
     descendants: list[Node] = []
-    stack = list(reversed(node.named_children))
+    stack: list[Node] = [*node.named_children]
+    stack.reverse()
     while stack:
         current = stack.pop()
         descendants.append(current)
@@ -271,7 +3010,8 @@ def _template_inner_node(node: Node) -> Node | None:
     tree_sitter.Node | None
         Wrapped declaration node when present.
     """
-    for child in reversed(node.named_children):
+    children: list[Node] = [*node.named_children]
+    for child in reversed(children):
         if child.type != "template_parameter_list":
             return child
     return None
@@ -291,12 +3031,17 @@ def _namespace_parts(node: Node, source: bytes) -> tuple[str, ...]:
     Returns
     -------
     tuple[str, ...]
-        Namespace path components in declaration order.
+        Namespace path components in declaration order. An unnamed namespace
+        uses an explicit component to avoid collisions with its enclosing scope.
     """
     for child in node.named_children:
         if child.type in {"namespace_identifier", "nested_namespace_specifier"}:
-            return _split_qualified_name(_node_text(child, source))
-    return ()
+            return _split_qualified_name(
+                child.syntax_text.decode("utf-8", errors="replace")
+                if isinstance(child, _ProjectedNode)
+                else _node_text(child, source)
+            )
+    return ("(anonymous namespace)",)
 
 
 def _find_parameter_list(node: Node | None) -> Node | None:
@@ -464,7 +3209,7 @@ def _annotated_function_call_name(node: Node, source: bytes) -> str | None:
     str | None
         Callable identifier text when the annotation pattern is present.
     """
-    for named_child in reversed(node.named_children):
+    for named_child in reversed([*node.named_children]):
         if named_child.type != "call_expression":
             continue
         arguments = named_child.child_by_field_name("arguments")
@@ -476,6 +3221,105 @@ def _annotated_function_call_name(node: Node, source: bytes) -> str | None:
         name = _unwrap_declarator_name(function_node, source)
         if name is not None:
             return name
+    return None
+
+
+def _missing_scope_annotation_name(node: Node, source: bytes) -> str | None:
+    """Recover a written name after a return type mistaken for a namespace.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Function declarator in the original parse tree.
+    source : bytes
+        Original source bytes.
+
+    Returns
+    -------
+    str or None
+        The written identifier only for the bounded missing-scope pattern.
+    """
+    parent = node.parent
+    if parent is None or parent.type not in {
+        "function_definition",
+        "declaration",
+        "field_declaration",
+    }:
+        return None
+    declared_type = parent.child_by_field_name("type")
+    qualified = node.child_by_field_name("declarator")
+    parameters = node.child_by_field_name("parameters")
+    if (
+        declared_type is None
+        or re.fullmatch(
+            rb"[A-Z][A-Z_0-9]*",
+            source[declared_type.start_byte : declared_type.end_byte],
+        )
+        is None
+        or qualified is None
+        or qualified.type != "qualified_identifier"
+        or parameters is None
+        or parameters.has_error
+    ):
+        return None
+    nested = qualified
+    while True:
+        nested_name = nested.child_by_field_name("name")
+        if nested_name is None or nested_name.type != "qualified_identifier":
+            break
+        nested = nested_name
+    if nested is not qualified:
+        nested_scope = nested.child_by_field_name("scope")
+        nested_name = nested.child_by_field_name("name")
+        nested_children = nested.children
+        if (
+            nested_scope is not None
+            and nested_scope.type == "namespace_identifier"
+            and nested_name is not None
+            and nested_name.type == "identifier"
+            and not nested_scope.has_error
+            and not nested_name.has_error
+            and len(nested_children) == 3
+            and nested_children[1].is_missing
+            and nested_children[1].type == "::"
+            and source[nested_scope.end_byte : nested_name.start_byte].isspace()
+            and not source[nested_name.end_byte : parameters.start_byte].strip()
+        ):
+            return _node_text(nested_name, source)
+    scope = qualified.child_by_field_name("scope")
+    name = qualified.child_by_field_name("name")
+    if (
+        scope is None
+        or scope.type != "namespace_identifier"
+        or name is None
+        or name.type != "identifier"
+        or scope.has_error
+        or name.has_error
+    ):
+        return None
+    children = qualified.children
+    if (
+        len(children) == 3
+        and children[1].is_missing
+        and children[1].type == "::"
+        and source[scope.end_byte : name.start_byte].isspace()
+    ):
+        return _node_text(name, source)
+    if len(children) == 4 and children[1].type == "ERROR":
+        error = children[1]
+        if (
+            len(error.named_children) == 1
+            and error.named_children[0].type == "identifier"
+            and source[scope.end_byte : error.start_byte].isspace()
+            and re.fullmatch(
+                rb"[A-Za-z_][A-Za-z_0-9]*\s*::\s*[A-Za-z_][A-Za-z_0-9]*",
+                source[error.start_byte : name.end_byte],
+            )
+            is not None
+        ):
+            return _normalize_signature(
+                source[error.start_byte : name.end_byte].decode("utf-8")
+            ).replace(" ", "")
     return None
 
 
@@ -495,14 +3339,18 @@ def _function_declarator_name(node: Node, source: bytes) -> str | None:
     str | None
         Callable identifier text when resolvable.
     """
+    recovered_name = _missing_scope_annotation_name(node, source)
+    if recovered_name is not None:
+        return recovered_name
     direct_declarator = node.child_by_field_name("declarator")
     if direct_declarator is not None and direct_declarator.type in {
         "identifier",
         "field_identifier",
         "qualified_identifier",
         "destructor_name",
+        "operator_name",
     }:
-        direct_name = _node_text(direct_declarator, source)
+        direct_name = _canonical_node_text(direct_declarator, source)
         error_name = _error_identifier_name(node, source)
         if error_name is not None and _looks_like_macro_or_type_name(direct_name):
             return error_name
@@ -547,8 +3395,9 @@ def _unwrap_declarator_name(node: Node, source: bytes) -> str | None:
         "namespace_identifier",
         "qualified_identifier",
         "destructor_name",
+        "operator_name",
     }:
-        return _node_text(node, source)
+        return _canonical_node_text(node, source)
 
     child = node.child_by_field_name("declarator")
     if child is not None:
@@ -585,15 +3434,185 @@ def _extract_parameter_names(
 
     parameters: list[str] = []
     for child in parameter_list.named_children:
-        if child.type != "parameter_declaration":
+        if child.type not in {
+            "parameter_declaration",
+            "optional_parameter_declaration",
+            "variadic_parameter_declaration",
+        }:
             continue
         declarator = child.child_by_field_name("declarator")
         if declarator is None:
             continue
-        name = _unwrap_declarator_name(declarator, source)
+        name = _parameter_name_node(declarator)
         if name is not None:
-            parameters.append(name.split("::")[-1])
+            parameters.append(_node_text(name, source))
     return tuple(parameters)
+
+
+def _parameter_name_node(declarator: Node) -> Node | None:
+    """Follow the declarator chain to an explicitly named parameter.
+
+    Parameters
+    ----------
+    declarator : tree_sitter.Node
+        Parameter declarator, possibly a pointer, array or callback signature.
+
+    Returns
+    -------
+    tree_sitter.Node | None
+        Declared parameter identifier, excluding type and nested parameter names.
+    """
+    current: Node | None = declarator
+    while current is not None:
+        if current.type in {"identifier", "field_identifier"}:
+            return current
+        nested = current.child_by_field_name("declarator")
+        if nested is None and current.type in {
+            "parenthesized_declarator",
+            "reference_declarator",
+            "variadic_declarator",
+        }:
+            nested = next(
+                (
+                    child
+                    for child in current.named_children
+                    if child.type.endswith("_declarator")
+                    or child.type in {"identifier", "field_identifier"}
+                ),
+                None,
+            )
+        current = nested
+    return None
+
+
+def _callable_binding_key(declarator: Node, source: bytes) -> tuple[str, ...]:
+    """Distinguish written overload types while merging named redeclarations.
+
+    Parameters
+    ----------
+    declarator : tree_sitter.Node
+        Function declarator selected by declared-name binding.
+    source : bytes
+        Original source used to retain explicit annotation/type spelling.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Parameter, cv/ref, return-SFINAE and lexical conditional-branch syntax.
+        This does not resolve type aliases or compiler-dependent type equivalence.
+    """
+    parameters = declarator.child_by_field_name("parameters")
+    if parameters is None:
+        return ()
+    types: list[str] = []
+    for parameter in parameters.named_children:
+        if parameter.type == "comment":
+            continue
+        excluded: set[tuple[int, int]] = set()
+        pending = [parameter]
+        while pending:
+            child = pending.pop()
+            if child.type == "parameter_list":
+                written = [
+                    item for item in child.named_children if item.type != "comment"
+                ]
+                if (
+                    len(written) == 1
+                    and written[0].type == "parameter_declaration"
+                    and _canonical_node_text(written[0], source) == "void"
+                ):
+                    excluded.add((written[0].start_byte, written[0].end_byte))
+            if child.type in {
+                "parameter_declaration",
+                "optional_parameter_declaration",
+                "variadic_parameter_declaration",
+            }:
+                named = child.child_by_field_name("declarator")
+                name = _parameter_name_node(named) if named is not None else None
+                if name is not None:
+                    excluded.add((name.start_byte, name.end_byte))
+                default = child.child_by_field_name("default_value")
+                if default is not None:
+                    excluded.add((default.start_byte, default.end_byte))
+                    excluded.update(
+                        (item.start_byte, item.end_byte)
+                        for item in child.children
+                        if item.type == "="
+                    )
+            pending.extend(child.named_children)
+        types.append(
+            _canonical_node_text(parameter, source, excluded=frozenset(excluded))
+        )
+    if types == ["void"]:
+        types.clear()
+    if any(child.type == "..." for child in parameters.children):
+        types.append("...")
+    qualifiers = " ".join(
+        _canonical_node_text(child, source)
+        for child in declarator.named_children
+        if child.type in {"type_qualifier", "ref_qualifier", "requires_clause"}
+    )
+    conditions: list[str] = []
+    parent = declarator.parent
+    while parent is not None:
+        if parent.type in {
+            "preproc_if",
+            "preproc_ifdef",
+            "preproc_else",
+            "preproc_elif",
+        }:
+            conditions.append(f"{parent.type}:{parent.start_byte}")
+        parent = parent.parent
+    return_constraints: set[str] = set()
+    name_node = declarator.child_by_field_name("declarator")
+    pending = [name_node] if name_node is not None else []
+    declared_type = (
+        declarator.parent.child_by_field_name("type")
+        if declarator.parent is not None
+        else None
+    )
+    if declared_type is not None:
+        pending.append(declared_type)
+    while pending:
+        child = pending.pop()
+        name = child.child_by_field_name("name")
+        if (
+            child.type == "template_type"
+            and name is not None
+            and _node_text(name, source) in {"enable_if", "enable_if_t"}
+        ):
+            return_constraints.add(_canonical_node_text(child, source))
+        pending.extend(child.named_children)
+    return (*types, qualifiers, "/".join(conditions), *sorted(return_constraints))
+
+
+def _qualified_call_parts(node: Node, source: bytes) -> tuple[str, ...]:
+    """Read qualified call components without splitting template arguments.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Qualified function expression, including nested scope components.
+    source : bytes
+        Original source buffer used for target and template argument spelling.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Ordered scope components and final target, preserving argument text.
+    """
+    parts: list[str] = []
+    current = node
+    while current.type == "qualified_identifier":
+        scope = current.child_by_field_name("scope")
+        if scope is not None:
+            parts.append(_node_text(scope, source).strip())
+        name = current.child_by_field_name("name")
+        if name is None:
+            return ()
+        current = name
+    parts.append(_node_text(current, source).strip())
+    return tuple(part for part in parts if part)
 
 
 def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
@@ -610,13 +3629,55 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
     Returns
     -------
     codira.models.CallSite | None
-        Normalized call record, or ``None`` when no supported target exists.
+        Normalized call record, excluding primitive conversions, named casts,
+        noexcept expressions and unsupported operators.
+        Calls inside their operands are collected separately by body traversal.
     """
+    if _is_complex_operator_call(node, source):
+        return None
     function_node = node.child_by_field_name("function")
     if function_node is None:
         return None
+    function_text = (
+        _decode_source_text(function_node.syntax_text)
+        if isinstance(function_node, _ProjectedNode)
+        else _node_text(function_node, source)
+    )
+    if function_node.type == "identifier" and function_text == "noexcept":
+        return None
+    type_operator_text = (
+        _node_text(function_node, source).encode()
+        if isinstance(function_node, _ProjectedNode)
+        else function_text.encode()
+    )
+    if _may_be_type_operator_expression(type_operator_text) and (
+        _is_type_operator_expression(type_operator_text)
+    ):
+        return None
+    if function_node.type == "primitive_type" or (
+        function_node.type == "identifier"
+        and function_text in {"short", "long", "signed", "unsigned", "wchar_t"}
+    ):
+        return None
 
-    if function_node.type == "identifier":
+    if function_node.type == "template_function":
+        name = function_node.child_by_field_name("name")
+        name_text = (
+            _decode_source_text(name.syntax_text)
+            if isinstance(name, _ProjectedNode)
+            else _node_text(name, source)
+            if name is not None
+            else ""
+        )
+        if name is not None and name_text in {
+            "static_cast",
+            "reinterpret_cast",
+            "const_cast",
+            "dynamic_cast",
+        }:
+            return None
+
+    if function_node.type in {"identifier", "template_function"}:
         target = _node_text(function_node, source)
         return CallSite(
             kind="name",
@@ -628,7 +3689,7 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
         )
 
     if function_node.type == "qualified_identifier":
-        target_parts = _split_qualified_name(_node_text(function_node, source))
+        target_parts = _qualified_call_parts(function_node, source)
         if not target_parts:
             return None
         base = "::".join(target_parts[:-1])
@@ -667,7 +3728,934 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
     )
 
 
-def _extract_calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
+def _initializer_argument_calls(
+    body: Node,
+    source: bytes,
+    parameter_names: tuple[str, ...],
+    initializer_value_bindings: Mapping[str, tuple[int, ...]],
+) -> tuple[CallSite, ...]:
+    """Recover nested expression calls after a visible value binding proves initialization.
+
+    Parameters
+    ----------
+    body : Node
+        Function compound statement whose nested lexical scopes are inspected.
+    source : bytes
+        Coordinate-aligned original source.
+    parameter_names : tuple[str, ...]
+        Explicit value parameters belonging to this function.
+    initializer_value_bindings : collections.abc.Mapping[str, tuple[int, ...]]
+        Captured source/header value names and the offsets at which they are available.
+
+    Returns
+    -------
+    tuple[CallSite, ...]
+        Nested argument calls at original byte positions. Unknown or shadowed
+        first arguments remain conservative; declared variables and synthetic
+        expression wrappers never acquire call records.
+    """
+    recovered: list[CallSite] = []
+    original_lines: list[int] | None = None
+    prefix = b"void __codira_probe() { __codira_probe"
+    for declaration in _initializer_candidate_declarations(body):
+        declarator = declaration.child_by_field_name("declarator")
+        if declarator is None or declarator.type != "function_declarator":
+            continue
+        parameters = declarator.child_by_field_name("parameters")
+        if parameters is None:
+            continue
+        arguments = [n for n in parameters.named_children if n.type != "comment"]
+        if len(arguments) < 2 or arguments[0].type != "parameter_declaration":
+            continue
+        first = arguments[0]
+        written = [n for n in first.named_children if n.type != "comment"]
+        value = first.child_by_field_name("type")
+        if value is None:
+            continue
+        first_name = _node_text(value, source).strip()
+        values, types = _initializer_visible_bindings(
+            body, declaration, source, parameter_names
+        )
+        if value.type not in {"type_identifier", "qualified_identifier"}:
+            continue
+        qualified_value = (
+            value.type == "qualified_identifier"
+            and declaration.start_byte in initializer_value_bindings.get(first_name, ())
+        )
+        if len(written) != 1 and not (
+            qualified_value
+            and _initializer_parenthesized_call_shape(first, value, source)
+        ):
+            continue
+        if (first_name not in values or first_name in types) and not (qualified_value):
+            continue
+        # Reparse only the proven initializer arguments, excluding its variable.
+        fragment = prefix + source[parameters.start_byte : parameters.end_byte]
+        fragment += b"; }"
+        root = _new_parser().parse(fragment).root_node
+        if root.has_error:
+            continue
+        fragment_lines = [0, *(i + 1 for i, byte in enumerate(fragment) if byte == 10)]
+        for node in _named_descendants(root):
+            if node.type != "call_expression" or node.start_byte < len(prefix):
+                continue
+            call = _call_site_from_expression(node, fragment)
+            if call is None:
+                continue
+            offset = (
+                parameters.start_byte
+                + fragment_lines[call.lineno - 1]
+                + call.col_offset
+                - len(prefix)
+            )
+            if not parameters.start_byte <= offset < parameters.end_byte:
+                continue
+            if original_lines is None:
+                original_lines = [
+                    0,
+                    *(i + 1 for i, byte in enumerate(source) if byte == 10),
+                ]
+            line = bisect_right(original_lines, offset)
+            recovered.append(
+                replace(call, lineno=line, col_offset=offset - original_lines[line - 1])
+            )
+    return tuple(recovered)
+
+
+def _initializer_parenthesized_call_shape(
+    declaration: Node,
+    value: Node,
+    source: bytes,
+) -> bool:
+    """Recognize a qualified call-shaped node misparsed as a declarator.
+
+    Parameters
+    ----------
+    declaration : tree_sitter.Node
+        First parameter-like node inside a declaration-shaped initializer.
+    value : tree_sitter.Node
+        Qualified function name parsed as the parameter type.
+    source : bytes
+        Coordinate-aligned original source.
+
+    Returns
+    -------
+    bool
+        Whether the qualified name has the specific abstract-function shape
+        produced by a call expression; a separately captured declaration proof
+        is still required before this shape can license call extraction.
+    """
+    if value.type != "qualified_identifier":
+        return False
+    declarator = declaration.child_by_field_name("declarator")
+    if declarator is None or declarator.type != "abstract_function_declarator":
+        return False
+    parameters = declarator.child_by_field_name("parameters")
+    if parameters is None:
+        return False
+    arguments = [node for node in parameters.named_children if node.type != "comment"]
+    if len(arguments) != 1 or arguments[0].type != "parameter_declaration":
+        return False
+    argument_type = arguments[0].child_by_field_name("type")
+    argument_declarator = arguments[0].child_by_field_name("declarator")
+    if (
+        argument_type is None
+        or argument_type.type != "type_identifier"
+        or argument_declarator is not None
+    ):
+        return False
+    return bool(_node_text(argument_type, source).strip())
+
+
+def _initializer_candidate_declarations(body: Node) -> tuple[Node, ...]:
+    """Find declaration-shaped candidates in executable lexical blocks.
+
+    Parameters
+    ----------
+    body : tree_sitter.Node
+        Function body to inspect without entering nested lambdas or functions.
+
+    Returns
+    -------
+    tuple[tree_sitter.Node, ...]
+        Source-ordered declaration nodes that may represent direct initialization.
+    """
+    candidates: list[Node] = []
+    pending: list[tuple[Node, bool]] = [(body, True)]
+    while pending:
+        node, is_root = pending.pop()
+        if not is_root and node.type in {"lambda_expression", "function_definition"}:
+            continue
+        if node.type == "declaration":
+            if any(
+                child.type == "function_declarator" for child in node.named_children
+            ):
+                candidates.append(node)
+            continue
+        pending.extend(
+            (cast("Node", child), False) for child in reversed(node.named_children)
+        )
+
+    return tuple(candidates)
+
+
+def _initializer_visible_bindings(
+    body: Node,
+    candidate: Node,
+    source: bytes,
+    parameter_names: tuple[str, ...],
+) -> tuple[set[str], set[str]]:
+    """Resolve simple value and type names visible before one candidate.
+
+    Parameters
+    ----------
+    body : tree_sitter.Node
+        Owning function compound statement.
+    candidate : tree_sitter.Node
+        Declaration whose first parameter-like argument is being checked.
+    source : bytes
+        Original coordinate-aligned translation unit.
+    parameter_names : tuple[str, ...]
+        Value parameters belonging to the owning function.
+
+    Returns
+    -------
+    tuple[set[str], set[str]]
+        Visible value and type names after lexical shadowing.
+
+    Notes
+    -----
+    Only declarations in the candidate's enclosing compound scopes and before
+    the candidate are considered. Preprocessor branches and nested lambdas are
+    not used as binding evidence.
+    """
+    values = set(parameter_names)
+    types: set[str] = set()
+    scopes: list[Node] = []
+    current: Node | None = candidate.parent
+    while current is not None:
+        if current.type == "compound_statement":
+            scopes.append(current)
+        if current == body:
+            break
+        current = current.parent
+    if not scopes or scopes[-1] != body:
+        return values, types
+
+    for scope in reversed(scopes):
+        direct_child: Node = candidate
+        while direct_child.parent is not None and direct_child.parent != scope:
+            direct_child = direct_child.parent
+        for sibling in scope.named_children:
+            if sibling.start_byte >= direct_child.start_byte:
+                break
+            if sibling.type == "preproc_if":
+                continue
+            _update_initializer_bindings(sibling, source, values, types)
+    return values, types
+
+
+def _update_initializer_bindings(
+    node: Node,
+    source: bytes,
+    values: set[str],
+    types: set[str],
+) -> None:
+    """Apply one preceding declaration to the visible local name sets.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Declaration or type declaration in the current lexical scope.
+    source : bytes
+        Original translation-unit bytes.
+    values : set[str]
+        Mutable visible value names.
+    types : set[str]
+        Mutable visible type names.
+
+    Returns
+    -------
+    None
+        The visible bindings are updated in place.
+    """
+    if node.type == "alias_declaration":
+        name = node.child_by_field_name("name")
+        if name is not None:
+            identifier = _node_text(name, source).strip()
+            values.discard(identifier)
+            types.add(identifier)
+        return
+    if node.type == "type_definition":
+        for name in _typedef_name_nodes(node):
+            identifier = _node_text(name, source).strip()
+            values.discard(identifier)
+            types.add(identifier)
+        return
+    if node.type in {
+        "class_specifier",
+        "struct_specifier",
+        "union_specifier",
+        "enum_specifier",
+    }:
+        name = node.child_by_field_name("name")
+        if name is not None:
+            identifier = _node_text(name, source).strip()
+            values.discard(identifier)
+            types.add(identifier)
+        return
+    if node.type != "declaration":
+        return
+    declarator = node.child_by_field_name("declarator")
+    if declarator is None or _find_function_declarator(node) is not None:
+        return
+    names = _initializer_declarator_names(declarator, source)
+    for identifier in names:
+        types.discard(identifier)
+        values.add(identifier)
+
+
+def _initializer_declarator_names(node: Node, source: bytes) -> tuple[str, ...]:
+    """Collect written variable names from declarator structure only.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Declarator or initialized declarator node.
+    source : bytes
+        Original source bytes.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Written identifier names, excluding names nested in types or expressions.
+    """
+    if node.type in {"identifier", "field_identifier"}:
+        return (_node_text(node, source).strip(),)
+    child = node.child_by_field_name("declarator")
+    if child is not None:
+        return _initializer_declarator_names(child, source)
+    for child in node.named_children:
+        if child.type.endswith("_declarator") or child.type in {
+            "identifier",
+            "field_identifier",
+        }:
+            names = _initializer_declarator_names(child, source)
+            if names:
+                return names
+    return ()
+
+
+@dataclass(frozen=True)
+class _InitializerHeaderValuePlan:
+    """Bounded syntax queries needed for qualified initializer value proof."""
+
+    root_offsets: tuple[int, ...]
+    root_spans: Mapping[int, int]
+    header_query_offsets: Mapping[str, tuple[int, ...]]
+    requested_by_leaf: Mapping[bytes, frozenset[str]]
+    declarations_by_header: Mapping[str, tuple[tuple[Node, str, bytes, bool], ...]]
+    macro_offsets_by_header: Mapping[str, tuple[int, ...]]
+
+
+def _initializer_header_value_query_plan(
+    analyzer: CppAnalyzer,
+    source_root: Node,
+    source: bytes,
+    context: IncludeContext,
+    root: Path,
+) -> _InitializerHeaderValuePlan:
+    """Collect bounded declaration and wrapper queries for one captured TU.
+
+    Parameters
+    ----------
+    source_root : tree_sitter.Node
+        Parsed translation unit used to discover qualified first arguments.
+    source : bytes
+        Original translation-unit bytes.
+    context : IncludeContext
+        Immutable source and contained header snapshots with resolution identity.
+    root : pathlib.Path
+        Repository boundary for relative paths in the include identity.
+    analyzer : CppAnalyzer
+        Profile owner whose configured macro and pure-query state drives the
+        same captured primary translation-unit traversal.
+
+    Returns
+    -------
+    _InitializerHeaderValuePlan
+        Original-source candidate offsets and captured header queries.
+    """
+    requested: set[str] = set()
+    root_queries: set[int] = set()
+    root_spans: dict[int, int] = {}
+    for node in _named_descendants(source_root):
+        if node.type != "function_definition":
+            continue
+        body = node.child_by_field_name("body")
+        if body is None:
+            continue
+        for declaration in _initializer_candidate_declarations(body):
+            declarator = declaration.child_by_field_name("declarator")
+            parameters = (
+                declarator.child_by_field_name("parameters")
+                if declarator is not None
+                else None
+            )
+            arguments = (
+                [item for item in parameters.named_children if item.type != "comment"]
+                if parameters is not None
+                else []
+            )
+            first = arguments[0] if arguments else None
+            value = first.child_by_field_name("type") if first is not None else None
+            if value is not None and value.type == "qualified_identifier":
+                requested.add(_node_text(value, source).strip())
+                root_queries.add(declaration.start_byte)
+                root_spans[declaration.start_byte] = declaration.end_byte
+    requested_by_leaf: dict[bytes, set[str]] = {}
+    for name in requested:
+        requested_by_leaf.setdefault(name.split("::")[-1].encode(), set()).add(name)
+
+    declarations_by_header: dict[str, tuple[tuple[Node, str, bytes, bool], ...]] = {}
+    header_queries: dict[str, set[int]] = {}
+    macro_offsets_by_header: dict[str, tuple[int, ...]] = {}
+    for header in context.headers:
+        raw = header.source
+        leaves = [
+            leaf for leaf in requested_by_leaf if re.search(rb"\b" + leaf + rb"\b", raw)
+        ]
+        if not leaves:
+            continue
+        relative = header.path.resolve().relative_to(root.resolve()).as_posix()
+        header_root = _parse_with_namespace_bindings(
+            raw, bindings=analyzer._namespace_macro_definitions
+        )
+        declarations: list[tuple[Node, str, bool]] = []
+        for node in _named_descendants(header_root):
+            if (
+                node.type != "declaration"
+                or not _initializer_namespace_visible_declaration(node)
+            ):
+                continue
+            function_declaration = _find_function_declarator(node) is not None
+            if not function_declaration and any(
+                child.type == "storage_class_specifier"
+                and _node_text(child, raw).strip() == "typedef"
+                for child in node.named_children
+            ):
+                continue
+            declarator = node.child_by_field_name("declarator")
+            if declarator is None:
+                continue
+            for name in _initializer_declarator_names(declarator, raw):
+                encoded = name.encode()
+                if encoded in requested_by_leaf:
+                    declarations.append((node, name, function_declaration))
+        if not declarations:
+            continue
+        declarations_by_header[relative] = tuple(
+            (node, leaf_name, raw, function_declaration)
+            for node, leaf_name, function_declaration in declarations
+        )
+        macros = _initializer_macro_line_offsets(header_root, raw)
+        macro_offsets_by_header[relative] = macros
+        header_queries[relative] = {
+            *(node.start_byte for node, _leaf_name, _is_function in declarations),
+            *macros,
+        }
+    return _InitializerHeaderValuePlan(
+        root_offsets=tuple(sorted(root_queries)),
+        root_spans=root_spans,
+        header_query_offsets={
+            owner: tuple(sorted(offsets)) for owner, offsets in header_queries.items()
+        },
+        requested_by_leaf={
+            leaf: frozenset(values) for leaf, values in requested_by_leaf.items()
+        },
+        declarations_by_header=declarations_by_header,
+        macro_offsets_by_header=macro_offsets_by_header,
+    )
+
+
+def _initializer_namespace_visible_declaration(node: Node) -> bool:
+    """Require a declaration to occur at namespace or translation-unit scope.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Declaration candidate from a captured header.
+
+    Returns
+    -------
+    bool
+        Whether only namespace-level wrappers enclose the declaration.
+    """
+    parent = node.parent
+    while parent is not None:
+        if parent.type == "translation_unit":
+            return True
+        if parent.type not in {
+            "declaration_list",
+            "namespace_definition",
+            "linkage_specification",
+            "template_declaration",
+            "export_declaration",
+            "preproc_if",
+            "preproc_ifdef",
+            "preproc_ifndef",
+            "preproc_elif",
+            "preproc_elifdef",
+            "preproc_elifndef",
+            "preproc_else",
+        }:
+            return False
+        parent = parent.parent
+    return False
+
+
+def _initializer_header_value_bindings_from_walk(
+    analyzer: CppAnalyzer,
+    source_root: Node,
+    source: bytes,
+    context: IncludeContext,
+    root: Path,
+    captures: Mapping[str, bytes],
+    walk: object,
+    plan: _InitializerHeaderValuePlan,
+) -> dict[str, tuple[int, ...]]:
+    """Prove qualified values from per-visit state in the primary TU walk.
+
+    Parameters
+    ----------
+    analyzer : CppAnalyzer
+        Configured profile owner.
+    source_root : tree_sitter.Node
+        Parsed primary translation unit.
+    source : bytes
+        Original primary translation-unit bytes.
+    context : IncludeContext
+        Immutable source and contained header snapshots.
+    root : pathlib.Path
+        Trusted repository boundary.
+    captures : collections.abc.Mapping[str, bytes]
+        Exact captured bytes supplied to the primary include walk.
+    walk : object
+        The one primary translation-unit ``_ContextWalk``.
+    plan : _InitializerHeaderValuePlan
+        Declaration offsets requested from that walk.
+
+    Returns
+    -------
+    dict[str, tuple[int, ...]]
+        Qualified values mapped to exact root declaration offsets proven by an
+        active prior header visit. Conflicting and unknown visits are omitted.
+    """
+    from .cpp_macro_context import _ContextWalk
+
+    if not isinstance(walk, _ContextWalk) or not plan.root_offsets:
+        return {}
+    identity = json.loads(context.identity)
+    root_key = identity["source_path"]
+    available: dict[str, set[int]] = {}
+
+    for relative, declarations in plan.declarations_by_header.items():
+        macro_offsets = set(plan.macro_offsets_by_header[relative])
+        for declaration, leaf_name, raw, _function_declaration in declarations:
+            selections = walk.file_results.get((relative, declaration.start_byte), ())
+            events = walk.query_events.get((relative, declaration.start_byte), ())
+            if len(selections) != 1 or len(selections) != len(events):
+                continue
+            if any(selection.active is None for selection in selections):
+                continue
+            for selected, event in zip(selections, events, strict=True):
+                if selected.active is not True:
+                    continue
+                scopes = _initializer_namespace_scopes(declaration, raw)
+                macro_namespaces = _initializer_header_macro_namespaces_for_event(
+                    declaration.start_byte,
+                    raw,
+                    macro_offsets,
+                    event,
+                    walk,
+                    relative,
+                )
+                if macro_namespaces is None:
+                    continue
+                for qualified in plan.requested_by_leaf[leaf_name.encode()]:
+                    requested_scope = tuple(qualified.split("::")[:-1])
+                    if not _initializer_namespace_matches(
+                        (*macro_namespaces, *scopes), requested_scope
+                    ):
+                        continue
+                    for root_offset in plan.root_offsets:
+                        if not _initializer_namespace_aliases_allow(
+                            source_root,
+                            source,
+                            root_offset,
+                            requested_scope,
+                        ):
+                            continue
+                        root_events = walk.query_events.get((root_key, root_offset), ())
+                        if not root_events or event >= root_events[0]:
+                            continue
+                        available.setdefault(qualified, set()).add(root_offset)
+    return {
+        name: tuple(sorted(offsets)) for name, offsets in available.items() if offsets
+    }
+
+
+def _initializer_header_macro_namespaces_for_event(
+    declaration_offset: int,
+    source: bytes,
+    macro_offsets: set[int],
+    declaration_event: int,
+    walk: object,
+    path: str,
+) -> tuple[tuple[str, bool], ...] | None:
+    """Resolve namespace wrapper macros from the same header visit as a declaration.
+
+    Parameters
+    ----------
+    declaration_offset : int
+        Original byte offset of the declaration query.
+    source : bytes
+        Exact captured header bytes.
+    macro_offsets : set[int]
+        Standalone namespace-wrapper macro offsets in the header.
+    declaration_event : int
+        Primary-walk query sequence number for this declaration visit.
+    walk : object
+        The primary translation-unit ``_ContextWalk`` retaining query events.
+    path : str
+        Captured repository-relative header key.
+
+    Returns
+    -------
+    tuple[tuple[str, bool], ...] | None
+        Namespace wrappers proven at this visit, or ``None`` when a required
+        query is absent or uncertain.
+    """
+    from .cpp_macro_context import _ContextWalk
+
+    if not isinstance(walk, _ContextWalk):
+        return None
+    selections: dict[int, MacroSelection] = {}
+    for offset in macro_offsets:
+        if offset >= declaration_offset:
+            continue
+        events = walk.query_events.get((path, offset), ())
+        visits = walk.file_results.get((path, offset), ())
+        preceding = [
+            (event, selection)
+            for event, selection in zip(events, visits, strict=True)
+            if event < declaration_event
+        ]
+        if not preceding:
+            continue
+        event, selection = max(preceding, key=lambda item: item[0])
+        del event
+        selections[offset] = selection
+    return _initializer_header_macro_namespaces(
+        declaration_offset, source, macro_offsets, selections
+    )
+
+
+def _initializer_namespace_aliases_allow(
+    root: Node, source: bytes, declaration_offset: int, requested_scope: tuple[str, ...]
+) -> bool:
+    """Reject qualified header proofs shadowed by a visible namespace alias.
+
+    Parameters
+    ----------
+    root : tree_sitter.Node
+        Primary translation-unit syntax tree.
+    source : bytes
+        Original primary translation-unit bytes.
+    declaration_offset : int
+        Original byte offset of the candidate call declaration.
+    requested_scope : tuple[str, ...]
+        Namespace components written before the qualified value leaf.
+
+    Returns
+    -------
+    bool
+        Whether no visible namespace alias rebinds the qualified root names.
+    """
+    ancestors: set[tuple[str, int, int]] = set()
+    node: Node | _ProjectedNode | None = max(
+        (
+            candidate
+            for candidate in _named_descendants(root)
+            if candidate.start_byte <= declaration_offset < candidate.end_byte
+        ),
+        key=lambda candidate: (candidate.start_byte, -candidate.end_byte),
+        default=root,
+    )
+    while node is not None:
+        ancestors.add((node.type, node.start_byte, node.end_byte))
+        node = node.parent
+    for candidate in _named_descendants(root):
+        if candidate.type != "namespace_alias_definition":
+            continue
+        name = candidate.child_by_field_name("name")
+        if name is None or _node_text(name, source).strip() not in requested_scope:
+            continue
+        if candidate.start_byte >= declaration_offset:
+            continue
+        parent = candidate.parent
+        if (
+            parent is not None
+            and (
+                parent.type,
+                parent.start_byte,
+                parent.end_byte,
+            )
+            in ancestors
+        ):
+            return False
+    return True
+
+
+def _select_initializer_macro_environments(
+    path: str,
+    offsets: tuple[int, ...],
+    captures: Mapping[str, bytes],
+    resolutions: Mapping[tuple[str, str, bool], str | None],
+    initial: Mapping[bytes, _MacroDefinition | None],
+) -> Mapping[int, MacroSelection]:
+    """Use the shared source macro walker for captured declaration locations.
+
+    Parameters
+    ----------
+    path : str
+        Repository-relative captured header path.
+    offsets : tuple[int, ...]
+        Declaration and macro invocation offsets to resolve.
+    captures : collections.abc.Mapping[str, bytes]
+        Exact source/header snapshots from the include context.
+    resolutions : collections.abc.Mapping[tuple[str, str, bool | None], str | None]
+        Captured include resolution outcomes.
+    initial : collections.abc.Mapping[bytes, _MacroDefinition | None]
+        Explicit initial macro environment.
+
+    Returns
+    -------
+    collections.abc.Mapping[int, MacroSelection]
+        Macro selections at the requested original offsets.
+    """
+    from .cpp_macro_context import select_macro_environments
+
+    return select_macro_environments(path, offsets, captures, resolutions, initial)
+
+
+def _initializer_macro_line_offsets(root: Node, source: bytes) -> tuple[int, ...]:
+    """Find standalone macro invocation lines before declaration parsing.
+
+    Parameters
+    ----------
+    root : tree_sitter.Node
+        Parsed captured header.
+    source : bytes
+        Exact captured header bytes.
+
+    Returns
+    -------
+    tuple[int, ...]
+        Source offsets of standalone identifier invocations outside comments.
+    """
+    from bisect import bisect_right
+
+    comments = sorted(
+        (node.start_byte, node.end_byte)
+        for node in _named_descendants(root)
+        if node.type == "comment"
+    )
+    comment_starts = [start for start, _end in comments]
+    offsets: set[int] = set()
+    for match in re.finditer(rb"(?m)^[ \t]*([A-Za-z_][A-Za-z_0-9]*)[ \t]*\r?$", source):
+        start = match.start(1)
+        comment_index = bisect_right(comment_starts, start) - 1
+        in_comment = comment_index >= 0 and start < comments[comment_index][1]
+        if not in_comment:
+            offsets.add(start)
+    return tuple(sorted(offsets))
+
+
+def _initializer_namespace_scopes(
+    node: Node, source: bytes
+) -> tuple[tuple[str, bool], ...]:
+    """Return explicit namespace ancestors for a captured declaration.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Declaration whose qualified owner is needed.
+    source : bytes
+        Captured source bytes.
+
+    Returns
+    -------
+    tuple[tuple[str, bool], ...]
+        Namespace names and whether each is inline, ordered outermost first.
+    """
+    scopes: list[tuple[str, bool]] = []
+    parent = node.parent
+    while parent is not None:
+        if parent.type == "namespace_definition":
+            name = parent.child_by_field_name("name")
+            if name is not None:
+                prefix = source[parent.start_byte : name.start_byte]
+                scopes.append((_node_text(name, source).strip(), b"inline" in prefix))
+        parent = parent.parent
+    scopes.reverse()
+    return tuple(scopes)
+
+
+def _initializer_header_macro_namespaces(
+    declaration_offset: int,
+    source: bytes,
+    macro_offsets: set[int],
+    selections: Mapping[int, MacroSelection],
+) -> tuple[tuple[str, bool], ...] | None:
+    """Expand active namespace wrapper macros before one captured declaration.
+
+    Parameters
+    ----------
+    declaration_offset : int
+        Original byte offset of the declaration.
+    source : bytes
+        Captured header bytes.
+    macro_offsets : set[int]
+        Candidate standalone macro invocation locations.
+    selections : collections.abc.Mapping[int, object]
+        Source-based activity and macro selections at those locations.
+
+    Returns
+    -------
+    tuple[tuple[str, bool], ...] | None
+        Proven macro namespace stack, or ``None`` when expansion is uncertain.
+    """
+    from .cpp_macro_expansion import _MacroExpander, _macro_tokens
+
+    scopes: list[tuple[str, bool]] = []
+    for offset in sorted(item for item in macro_offsets if item < declaration_offset):
+        selected = selections.get(offset)
+        if selected is None or selected.active is None:
+            return None
+        if selected.active is False:
+            continue
+        line_end = source.find(b"\n", offset)
+        if line_end < 0:
+            line_end = len(source)
+        macro = source[offset:line_end].strip()
+        bindings = dict(selected.bindings)
+        binding = bindings.get(macro)
+        if binding is None or binding.definition is None:
+            continue
+        definitions = {
+            name: item.definition
+            for name, item in selected.bindings
+            if item.definition is not None
+        }
+        try:
+            tokens = _MacroExpander(definitions).expand(
+                _macro_tokens(macro, offset=offset)
+            )
+        except ValueError:
+            return None
+        spellings = tuple(token.spelling for token in tokens)
+        if b"namespace" in spellings:
+            position = 0
+            while position < len(spellings):
+                if spellings[position] != b"namespace":
+                    position += 1
+                    continue
+                cursor = position + 1
+                while cursor < len(spellings) and spellings[cursor] in {
+                    b"__attribute__",
+                    b"__declspec",
+                }:
+                    cursor += 1
+                    if cursor >= len(spellings) or spellings[cursor] != b"(":
+                        return None
+                    depth = 0
+                    while cursor < len(spellings):
+                        if spellings[cursor] == b"(":
+                            depth += 1
+                        elif spellings[cursor] == b")":
+                            depth -= 1
+                            if depth == 0:
+                                cursor += 1
+                                break
+                        cursor += 1
+                    else:
+                        return None
+                names: list[bytes] = []
+                if cursor >= len(spellings) or not re.fullmatch(
+                    rb"[A-Za-z_][A-Za-z_0-9]*", spellings[cursor]
+                ):
+                    return None
+                is_inline = position > 0 and spellings[position - 1] == b"inline"
+                names.append(spellings[cursor])
+                cursor += 1
+                while cursor < len(spellings) and spellings[cursor] == b"::":
+                    cursor += 1
+                    if cursor >= len(spellings) or not re.fullmatch(
+                        rb"[A-Za-z_][A-Za-z_0-9]*", spellings[cursor]
+                    ):
+                        return None
+                    names.append(spellings[cursor])
+                    cursor += 1
+                if cursor >= len(spellings) or spellings[cursor] != b"{":
+                    return None
+                if is_inline and len(names) != 1:
+                    return None
+                scopes.extend(
+                    (name.decode(), is_inline and index == len(names) - 1)
+                    for index, name in enumerate(names)
+                )
+                position = cursor + 1
+        elif b"}" in spellings and not any(token not in {b"}"} for token in spellings):
+            for _ in spellings:
+                if not scopes:
+                    return None
+                scopes.pop()
+    return tuple(scopes)
+
+
+def _initializer_namespace_matches(
+    scopes: tuple[tuple[str, bool], ...], requested: tuple[str, ...]
+) -> bool:
+    """Check a qualified name against explicit and inline namespace scopes.
+
+    Parameters
+    ----------
+    scopes : tuple[tuple[str, bool], ...]
+        Namespace path, with inline namespace flags.
+    requested : tuple[str, ...]
+        Qualified namespace prefix written at the call site.
+
+    Returns
+    -------
+    bool
+        Whether inline namespace elision yields the requested exact prefix.
+    """
+    paths: set[tuple[str, ...]] = {()}
+    for name, is_inline in scopes:
+        paths = {(*path, name) for path in paths}
+        if is_inline:
+            paths.update(path[:-1] for path in tuple(paths) if path[-1] == name)
+    return requested in paths
+
+
+def _extract_calls(
+    body: Node | None,
+    source: bytes,
+    *,
+    parameter_names: tuple[str, ...] = (),
+    initializer_value_bindings: Mapping[str, tuple[int, ...]] | None = None,
+) -> tuple[CallSite, ...]:
     """
     Extract normalized calls from one function body.
 
@@ -677,23 +4665,80 @@ def _extract_calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
         Compound-statement node owning the function body.
     source : bytes
         Full source buffer.
+    parameter_names : tuple[str, ...], optional
+        Explicit value parameters licensing direct initializer disambiguation.
+    initializer_value_bindings : collections.abc.Mapping[str, tuple[int, ...]] | None, optional
+        Qualified source/header values proven for original declaration offsets.
 
     Returns
     -------
     tuple[codira.models.CallSite, ...]
-        Call records in deterministic source order.
+        Call records in deterministic source order, including written operands
+        erased by a source-selected statement macro.
     """
     if body is None:
         return ()
+    value_bindings = (
+        {} if initializer_value_bindings is None else initializer_value_bindings
+    )
 
     calls: list[CallSite] = []
+    statement_hints = False
     for node in _named_descendants(body):
+        if isinstance(node, _ProjectedNode) and node.macro_hint is not None:
+            statement_hints = True
+            calls.append(
+                CallSite(
+                    kind="name",
+                    target=node.macro_hint,
+                    lineno=node.start_point.row + 1,
+                    col_offset=node.start_point.column,
+                    external_target_kind="C++:<macro>",
+                    external_target_name=node.macro_hint,
+                )
+            )
+            if node.macro_arguments is not None:
+                calls.extend(
+                    _extract_calls(
+                        node.macro_arguments,
+                        source,
+                        parameter_names=parameter_names,
+                        initializer_value_bindings=value_bindings,
+                    )
+                )
         if node.type != "call_expression":
             continue
         call = _call_site_from_expression(node, source)
         if call is not None:
             calls.append(call)
-    return tuple(calls)
+    if statement_hints:
+        calls = list(dict.fromkeys(calls))
+    seen = set(calls)
+    recovered: list[CallSite] = []
+    for call in _initializer_argument_calls(
+        body, source, parameter_names, value_bindings
+    ):
+        if call not in seen:
+            seen.add(call)
+            recovered.append(call)
+    if not recovered:
+        return tuple(calls)
+    recovered.sort(key=lambda call: (call.lineno, call.col_offset))
+    merged: list[CallSite] = []
+    pending = iter(recovered)
+    next_call = next(pending, None)
+    for call in calls:
+        while next_call is not None and (next_call.lineno, next_call.col_offset) < (
+            call.lineno,
+            call.col_offset,
+        ):
+            merged.append(next_call)
+            next_call = next(pending, None)
+        merged.append(call)
+    if next_call is not None:
+        merged.append(next_call)
+    merged.extend(pending)
+    return tuple(merged)
 
 
 def _returns_value(body: Node | None) -> int:
@@ -720,7 +4765,7 @@ def _returns_value(body: Node | None) -> int:
 
 def _find_function_declarator(node: Node) -> Node | None:
     """
-    Locate a function declarator nested under one declaration node.
+    Follow the declared name's binding to distinguish functions from pointers.
 
     Parameters
     ----------
@@ -730,17 +4775,107 @@ def _find_function_declarator(node: Node) -> Node | None:
     Returns
     -------
     tree_sitter.Node | None
-        Nested `function_declarator` when present.
+        Callable declarator when the name binds as a function. Function-pointer
+        variables and parameter or initializer subtrees are not callable owners.
     """
-    if node.type == "function_declarator":
+    current = (
+        node
+        if node.type == "function_declarator"
+        else node.child_by_field_name("declarator")
+    )
+    function: Node | None = None
+    binds_as_function = False
+    while current is not None:
+        if current.type == "function_declarator":
+            if function is None:
+                function = current
+            binds_as_function = True
+        elif current.type in {
+            "pointer_declarator",
+            "reference_declarator",
+            "array_declarator",
+        }:
+            function = None
+            binds_as_function = False
+        nested = current.child_by_field_name("declarator")
+        if nested is None and current.type in {
+            "parenthesized_declarator",
+            "reference_declarator",
+        }:
+            nested = next(
+                (
+                    child
+                    for child in current.named_children
+                    if child.type.endswith("_declarator")
+                    or child.type
+                    in {"identifier", "field_identifier", "qualified_identifier"}
+                ),
+                None,
+            )
+        current = nested
+    return function if binds_as_function else None
+
+
+def _declared_type_specifier(node: Node) -> Node | None:
+    """Find an explicitly declared record or enum without entering nested scopes.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Type specifier or declaration that may also declare a variable.
+
+    Returns
+    -------
+    tree_sitter.Node | None
+        Direct record/enum specifier, excluding types hidden in initializers.
+    """
+    types = {"class_specifier", "struct_specifier", "union_specifier", "enum_specifier"}
+    if node.type in types:
         return node
-    if _find_parameter_list(node) is not None:
-        return node
-    for child in node.named_children:
-        declarator = _find_function_declarator(child)
-        if declarator is not None:
-            return declarator
+    if node.type in {"declaration", "field_declaration", "type_definition"}:
+        declared_type = node.child_by_field_name("type")
+        if declared_type is not None and declared_type.type in types:
+            return declared_type
     return None
+
+
+def _may_be_type_operator_expression(source: bytes) -> bool:
+    """Gate syntax parsing to expressions beginning with the decltype keyword.
+
+    Parameters
+    ----------
+    source : bytes
+        Candidate function spelling from physical or projected syntax.
+
+    Returns
+    -------
+    bool
+        Whether the spelling begins with the exact language-operator token.
+    """
+    return re.match(rb"\s*decltype\b\s*\(", source) is not None
+
+
+def _is_type_operator_expression(source: bytes) -> bool:
+    """Check whether source spelling is exactly one C++ decltype operand.
+
+    Parameters
+    ----------
+    source : bytes
+        Function-node spelling to classify from syntax rather than its name.
+
+    Returns
+    -------
+    bool
+        Whether the complete spelling parses as a decltype language construct.
+    """
+    prefix = b"void codira_type_operator_probe() { "
+    tree = _new_parser().parse(prefix + source + b"; }").root_node
+    return any(
+        node.type == "decltype"
+        and node.start_byte == len(prefix)
+        and node.end_byte == len(prefix) + len(source)
+        for node in _named_descendants(tree)
+    )
 
 
 def _extract_enum_members(
@@ -897,7 +5032,15 @@ def _disambiguate_callable_stable_ids(
             digest = hashlib.sha256(function.signature.encode("utf-8")).hexdigest()[:12]
             stable_id = f"{stable_id}:{digest}"
             if stable_id in used_ids:
-                stable_id = f"{stable_id}:{function.lineno}"
+                identity = (
+                    function.semantic_identity.value
+                    if function.semantic_identity is not None
+                    else f"line:{function.lineno}:end:{function.end_lineno}"
+                )
+                identity_digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[
+                    :12
+                ]
+                stable_id = f"{stable_id}:identity:{identity_digest}"
             function = replace(function, stable_id=stable_id)
         used_ids.add(stable_id)
         disambiguated.append(function)
@@ -1140,19 +5283,12 @@ def _class_name_from_specifier(node: Node, source: bytes) -> str | None:
     Returns
     -------
     str | None
-        Declared class name when present.
+        Declared class name, including explicit template specialization arguments.
     """
-    name_node = next(
-        (
-            child
-            for child in node.named_children
-            if child.type in {"type_identifier", "identifier"}
-        ),
-        None,
-    )
+    name_node = node.child_by_field_name("name")
     if name_node is None:
         return None
-    return _node_text(name_node, source)
+    return _canonical_node_text(name_node, source)
 
 
 def _type_specifier_name(node: Node, source: bytes) -> str | None:
@@ -1169,12 +5305,12 @@ def _type_specifier_name(node: Node, source: bytes) -> str | None:
     Returns
     -------
     str | None
-        Declared type name when present.
+        Declared type name, including explicit template specialization arguments.
     """
-    for child in node.named_children:
-        if child.type in {"type_identifier", "identifier"}:
-            return _node_text(child, source)
-    return None
+    name = node.child_by_field_name("name")
+    if name is None:
+        return None
+    return _canonical_node_text(name, source)
 
 
 def _is_function_definition(node: Node) -> bool:
@@ -1231,6 +5367,8 @@ def _resolve_callable_identity(
     relative_owner = _qualified_name((*namespace, *parts[:-1]))
     if relative_owner in known_class_names:
         return parts[-1], relative_owner
+    if any(relative_owner.startswith(name + "<") for name in known_class_names):
+        return parts[-1], relative_owner
 
     qualified_name = _qualified_name((*namespace, *parts))
     return qualified_name, None
@@ -1246,6 +5384,7 @@ def _build_function_artifact(
     docstring: str | None,
     is_public: int,
     signature_node: Node,
+    initializer_value_bindings: Mapping[str, tuple[int, ...]],
 ) -> _PendingFunction | None:
     """
     Build one function or method artifact from a definition or declaration node.
@@ -1268,6 +5407,8 @@ def _build_function_artifact(
         Public-visibility flag for the callable.
     signature_node : tree_sitter.Node
         Node whose source span should be used for signature extraction.
+    initializer_value_bindings : collections.abc.Mapping[str, tuple[int, ...]]
+        Qualified source/header values proven at original declaration offsets.
 
     Returns
     -------
@@ -1291,10 +5432,25 @@ def _build_function_artifact(
     parameter_list = _find_parameter_list(declarator)
     parameters = _extract_parameter_names(parameter_list, source)
     body = node.child_by_field_name("body")
+    children: Sequence[Node] = node.named_children
+    bodyless_definition = node.type == "function_definition" and any(
+        child.type in {"default_method_clause", "delete_method_clause"}
+        for child in children
+    )
+    if node.type in {"declaration", "field_declaration"}:
+        suffix = source[declarator.end_byte : node.end_byte]
+        suffix = re.sub(rb"/\*[\s\S]*?\*/|//[^\r\n]*", b" ", suffix)
+        bodyless_definition = re.fullmatch(rb"\s*=\s*delete\s*;", suffix) is not None
+    definition_end = (
+        body.end_point.row + 1
+        if body is not None
+        else node.end_point.row + 1
+        if bodyless_definition
+        else None
+    )
     signature_end = body.start_byte if body is not None else signature_node.end_byte
-    signature = _decode_source_text(
-        source[signature_node.start_byte : signature_end]
-    ).strip()
+    signature_start = _original_declaration_start(signature_node, source)
+    signature = _decode_source_text(source[signature_start:signature_end]).strip()
 
     artifact = FunctionArtifact(
         name=method_name if class_name is not None else resolved_name,
@@ -1303,8 +5459,12 @@ def _build_function_artifact(
             method_name if class_name is not None else resolved_name,
             class_name=class_name,
         ),
-        lineno=signature_node.start_point.row + 1,
-        end_lineno=body.end_point.row + 1 if body is not None else None,
+        lineno=(
+            signature_node.start_point.row
+            + 1
+            - source.count(b"\n", signature_start, signature_node.start_byte)
+        ),
+        end_lineno=definition_end,
         signature=_normalize_signature(signature),
         docstring=docstring,
         has_docstring=int(docstring is not None),
@@ -1316,13 +5476,19 @@ def _build_function_artifact(
         raises=0,
         has_asserts=0,
         decorators=(),
-        calls=_extract_calls(body, source),
+        calls=_extract_calls(
+            body,
+            source,
+            parameter_names=parameters,
+            initializer_value_bindings=initializer_value_bindings,
+        ),
         callable_refs=(),
     )
     return _PendingFunction(
         artifact=artifact,
         class_name=class_name,
-        is_definition=body is not None,
+        is_definition=definition_end is not None,
+        binding_key=_callable_binding_key(declarator, source),
     )
 
 
@@ -1351,6 +5517,19 @@ def _collect_known_class_names(
     """
     known: set[str] = set()
     for child in _conditional_children(children):
+        if child.type == "linkage_specification":
+            body = child.child_by_field_name("body")
+            if body is not None:
+                known.update(
+                    _collect_known_class_names(
+                        body.named_children
+                        if body.type == "declaration_list"
+                        else (body,),
+                        source,
+                        namespace=namespace,
+                    )
+                )
+            continue
         if child.type == "template_declaration":
             inner = _template_inner_node(child)
             if inner is not None:
@@ -1380,12 +5559,20 @@ def _collect_known_class_names(
             )
             continue
 
-        if child.type != "class_specifier":
+        record = _declared_type_specifier(child)
+        if record is None or record.type == "enum_specifier":
             continue
-        class_name = _class_name_from_specifier(child, source)
+        class_name = _class_name_from_specifier(record, source)
         if class_name is None:
             continue
         known.add(_qualified_name((*namespace, class_name)))
+        body = record.child_by_field_name("body")
+        if body is not None:
+            known.update(
+                _collect_known_class_names(
+                    body.named_children, source, namespace=(*namespace, class_name)
+                )
+            )
     return known
 
 
@@ -1403,6 +5590,12 @@ class _CppAnalysisBuilder:
         File-scoped owner identity preserving the source suffix.
     known_class_names : set[str]
         Qualified class names collected from the file.
+    comment_maps : CommentMaps or None, optional
+        Unmasked source attachment facts, independent of syntax visibility.
+
+    Returns
+    -------
+    None
     """
 
     def __init__(
@@ -1412,15 +5605,46 @@ class _CppAnalysisBuilder:
         root: Node,
         owner_id: str,
         known_class_names: set[str],
+        comment_maps: CommentMaps | None = None,
+        initializer_value_bindings: Mapping[str, tuple[int, ...]] | None = None,
     ) -> None:
+        """Initialize artifact accumulators and optional physical comment facts.
+
+        Parameters
+        ----------
+        source : bytes
+            Buffer used for declaration and callable extraction.
+        root : SyntaxNode
+            Syntax view rooted in the same coordinate space.
+        owner_id : str
+            File-scoped symbol identity.
+        known_class_names : set[str]
+            Collected qualified class names.
+        comment_maps : CommentMaps or None, optional
+            Attachments captured before visibility projection.
+        initializer_value_bindings : collections.abc.Mapping[str, tuple[int, ...]] | None, optional
+            Profile-bound qualified value names proven by the primary include walk.
+
+        Returns
+        -------
+        None
+        """
         self.source = source
         self.root = root
         self.owner_id = owner_id
         self.known_class_names = known_class_names
-        self.class_builders: dict[str, _ClassBuilder] = {}
+        self.initializer_value_bindings = (
+            {} if initializer_value_bindings is None else initializer_value_bindings
+        )
+        self.class_builders: dict[tuple[str, tuple[int, ...]], _ClassBuilder] = {}
+        self.ambiguous_class_owners: set[str] = set()
         self.functions_by_key: dict[tuple[str, tuple[str, ...]], _PendingFunction] = {}
         self.declarations_by_id: dict[str, DeclarationArtifact] = {}
+        self.type_definition_ids: set[str] = set()
         self.doxygen_by_lineno: dict[int, tuple[str, int, int | None]] = {}
+        self.source_comments = comment_maps[0] if comment_maps is not None else None
+        if comment_maps is not None:
+            self.doxygen_by_lineno.update(comment_maps[1])
 
     def _ensure_class_builder(
         self,
@@ -1429,6 +5653,8 @@ class _CppAnalysisBuilder:
         lineno: int,
         end_lineno: int | None,
         docstring: str | None,
+        is_definition: bool = False,
+        branch_identity: tuple[int, ...] | None = None,
     ) -> _ClassBuilder:
         """
         Return the mutable builder for one class, creating it when needed.
@@ -1443,14 +5669,37 @@ class _CppAnalysisBuilder:
             Candidate ending line for the class.
         docstring : str | None
             Candidate docstring attached to the class.
+        is_definition : bool, optional
+            Whether the candidate range contains a complete record body.
+        branch_identity : tuple[int, ...] or None, optional
+            Source identity of enclosing preprocessor alternatives.
 
         Returns
         -------
         _ClassBuilder
             Mutable class accumulator.
         """
+        key = (qualified_name, branch_identity or ())
+        if end_lineno is None and branch_identity is None:
+            candidates = [
+                builder
+                for (name, _), builder in self.class_builders.items()
+                if name == qualified_name
+            ]
+            containing = [
+                builder
+                for builder in candidates
+                if builder.end_lineno is not None
+                and builder.lineno <= lineno <= builder.end_lineno
+            ]
+            if len(containing) == 1:
+                return containing[0]
+            if not containing and len(candidates) == 1:
+                return candidates[0]
+            if not containing and len(candidates) > 1:
+                key = (qualified_name, (lineno,))
         stable_id = _class_stable_id(self.owner_id, qualified_name)
-        builder = self.class_builders.get(qualified_name)
+        builder = self.class_builders.get(key)
         if builder is None:
             builder = _ClassBuilder(
                 qualified_name=qualified_name,
@@ -1459,13 +5708,15 @@ class _CppAnalysisBuilder:
                 end_lineno=end_lineno,
                 docstring=docstring,
                 has_docstring=int(docstring is not None),
+                has_definition=is_definition,
             )
-            self.class_builders[qualified_name] = builder
+            self.class_builders[key] = builder
             return builder
         builder.absorb_metadata(
             lineno=lineno,
             end_lineno=end_lineno,
             docstring=docstring,
+            is_definition=is_definition,
         )
         return builder
 
@@ -1484,17 +5735,47 @@ class _CppAnalysisBuilder:
             The appropriate function accumulator is updated in place.
         """
         if pending.class_name is None:
-            key = (pending.artifact.stable_id, pending.artifact.parameters)
+            key = (pending.artifact.stable_id, pending.binding_key)
             current = self.functions_by_key.get(key)
-            if current is None or _prefer_pending_function(current, pending) is pending:
-                self.functions_by_key[key] = pending
+            self.functions_by_key[key] = (
+                pending
+                if current is None
+                else _prefer_pending_function(current, pending)
+            )
             return
+
+        if pending.class_branch_identity is None:
+            candidates = [
+                builder
+                for (name, _), builder in self.class_builders.items()
+                if name == pending.class_name
+            ]
+            containing = [
+                builder
+                for builder in candidates
+                if builder.end_lineno is not None
+                and builder.lineno <= pending.artifact.lineno <= builder.end_lineno
+            ]
+            if len(candidates) > 1 and not containing:
+                self.ambiguous_class_owners.add(pending.class_name)
+                artifact = replace(
+                    pending.artifact,
+                    stable_id=_function_stable_id(self.owner_id, pending.artifact.name),
+                    is_method=0,
+                    owner_name=None,
+                    owner_stable_id=None,
+                )
+                self._record_function(
+                    replace(pending, artifact=artifact, class_name=None)
+                )
+                return
 
         builder = self._ensure_class_builder(
             qualified_name=pending.class_name,
             lineno=pending.artifact.lineno,
             end_lineno=None,
             docstring=None,
+            branch_identity=pending.class_branch_identity,
         )
         builder.record_method(pending)
 
@@ -1513,6 +5794,22 @@ class _CppAnalysisBuilder:
             The declaration map is updated in place when a declaration exists.
         """
         if declaration is not None:
+            current = self.declarations_by_id.get(declaration.stable_id)
+            if (
+                declaration.kind == "type_alias"
+                and current is not None
+                and (declaration.lineno, declaration.signature)
+                != (current.lineno, current.signature)
+            ):
+                digest = hashlib.sha256(
+                    declaration.signature.encode("utf-8")
+                ).hexdigest()[:12]
+                declaration = replace(
+                    declaration,
+                    stable_id=(
+                        f"{declaration.stable_id}:source:{declaration.lineno}:{digest}"
+                    ),
+                )
             self.declarations_by_id[declaration.stable_id] = declaration
 
     def _handle_type_declaration(
@@ -1523,7 +5820,7 @@ class _CppAnalysisBuilder:
         docstring: str | None,
     ) -> None:
         """
-        Record one enum, struct, or union declaration.
+        Prefer a complete enum, struct or union over its forward declarations.
 
         Parameters
         ----------
@@ -1537,7 +5834,8 @@ class _CppAnalysisBuilder:
         Returns
         -------
         None
-            Matching declaration artifacts are stored in place.
+            One logical type retains its first complete definition, otherwise its
+            first forward declaration.
         """
         if node.type == "enum_specifier":
             kind: DeclarationKind = "enum"
@@ -1552,16 +5850,60 @@ class _CppAnalysisBuilder:
         if name is None:
             return
         qualified_name = _qualified_name((*namespace, name))
-        self._record_declaration(
-            _build_type_declaration(
-                kind,
-                qualified_name,
-                node,
-                self.source,
-                owner_id=self.owner_id,
-                docstring=docstring,
-            )
+        declaration = _build_type_declaration(
+            kind,
+            qualified_name,
+            node,
+            self.source,
+            owner_id=self.owner_id,
+            docstring=docstring,
         )
+        is_definition = any(
+            child.type in {"field_declaration_list", "enumerator_list"}
+            for child in node.named_children
+        )
+        current = self.declarations_by_id.get(declaration.stable_id)
+        if current is None or (
+            is_definition and declaration.stable_id not in self.type_definition_ids
+        ):
+            self._record_declaration(declaration)
+        if is_definition:
+            self.type_definition_ids.add(declaration.stable_id)
+
+    def _handle_typedef_definition(
+        self,
+        node: Node,
+        *,
+        namespace: Sequence[str],
+        docstring: str | None,
+    ) -> None:
+        """Record every written alias in one module or class typedef.
+
+        Parameters
+        ----------
+        node : SyntaxNode
+            Complete typedef declaration, including its original signature.
+        namespace : collections.abc.Sequence[str]
+            Enclosing namespace and class path.
+        docstring : str | None
+            Leading declaration documentation when present.
+
+        Returns
+        -------
+        None
+            Qualified typedef artifacts are stored without visiting local scopes.
+        """
+        for name in _typedef_name_nodes(node):
+            self._record_declaration(
+                _build_type_declaration(
+                    "typedef",
+                    _qualified_name((*namespace, _node_text(name, self.source))),
+                    node,
+                    self.source,
+                    owner_id=self.owner_id,
+                    docstring=docstring,
+                )
+            )
 
     def _handle_alias_declaration(
         self,
@@ -1697,12 +6039,13 @@ class _CppAnalysisBuilder:
         docstring: str | None,
     ) -> None:
         """
-        Record one class declaration and its in-class methods.
+        Record class-like methods, member type aliases and nested record declarations.
 
         Parameters
         ----------
         node : tree_sitter.Node
-            Class-specifier node.
+            Class, struct or union specifier. Struct/union method containers
+            are created only when explicit methods are present.
         namespace : collections.abc.Sequence[str]
             Active namespace path.
         docstring : str | None
@@ -1711,7 +6054,7 @@ class _CppAnalysisBuilder:
         Returns
         -------
         None
-            Class and method artifacts are stored in place.
+            Class, method and qualified member-alias artifacts are stored in place.
         """
         class_name = _class_name_from_specifier(node, self.source)
         if class_name is None:
@@ -1725,22 +6068,33 @@ class _CppAnalysisBuilder:
             ),
             None,
         )
-        builder = self._ensure_class_builder(
-            qualified_name=qualified_name,
-            lineno=node.start_point.row + 1,
-            end_lineno=node.end_point.row + 1,
-            docstring=docstring,
+        builder = (
+            self._ensure_class_builder(
+                qualified_name=qualified_name,
+                lineno=node.start_point.row + 1,
+                end_lineno=node.end_point.row + 1,
+                docstring=docstring,
+                is_definition=field_list is not None,
+                branch_identity=_conditional_branch_identity(node),
+            )
+            if node.type == "class_specifier"
+            else None
         )
         if field_list is None:
             return
 
-        current_public = any(child.type == "struct" for child in node.children)
+        current_public = node.type in {"struct_specifier", "union_specifier"}
         children = tuple(_conditional_children(field_list.children))
-        attached_comments = _attached_comment_map(children, self.source)
-        self.doxygen_by_lineno.update(
-            _attached_doxygen_comment_map(children, self.source)
-        )
+        attached_comments = self.source_comments
+        if attached_comments is None:
+            attached_comments = _attached_comment_map(children, self.source)
+            self.doxygen_by_lineno.update(
+                _attached_doxygen_comment_map(children, self.source)
+            )
+        friend_sibling_starts: set[int] = set()
         for child in children:
+            if child.start_byte in friend_sibling_starts:
+                continue
             if child.type == "access_specifier":
                 current_public = _node_text(child, self.source) in {
                     "public",
@@ -1749,6 +6103,56 @@ class _CppAnalysisBuilder:
                 continue
 
             child_docstring = attached_comments.get(child.start_byte)
+            candidate = (
+                _template_inner_node(child)
+                if child.type == "template_declaration"
+                else child
+            )
+            if candidate is not None and candidate.type == "friend_declaration":
+                self._handle_friend_declaration(
+                    candidate,
+                    namespace=namespace,
+                    docstring=child_docstring,
+                    signature_node=child,
+                )
+                continue
+            if child.type == "field_declaration":
+                sibling = self._friend_prefix_has_callable_sibling(children, child)
+                if sibling is not None:
+                    friend_sibling_starts.add(sibling.start_byte)
+                    self._handle_friend_declaration(
+                        sibling,
+                        namespace=namespace,
+                        docstring=child_docstring,
+                        signature_node=sibling,
+                    )
+                    continue
+            if candidate is not None and candidate.type == "type_definition":
+                self._dispatch_node(
+                    candidate,
+                    namespace=(*namespace, class_name),
+                    docstring=child_docstring,
+                    signature_node=child,
+                )
+                continue
+            if candidate is not None and candidate.type == "alias_declaration":
+                self._handle_alias_declaration(
+                    candidate,
+                    namespace=(*namespace, class_name),
+                    docstring=child_docstring,
+                )
+                continue
+            nested_type = (
+                _declared_type_specifier(candidate) if candidate is not None else None
+            )
+            if nested_type is not None:
+                self._dispatch_node(
+                    nested_type,
+                    namespace=(*namespace, class_name),
+                    docstring=child_docstring,
+                    signature_node=child,
+                )
+                continue
             if child.type == "template_declaration":
                 inner = _template_inner_node(child)
                 if inner is None:
@@ -1762,11 +6166,13 @@ class _CppAnalysisBuilder:
                     docstring=child_docstring,
                     is_public=int(current_public),
                     signature_node=child,
+                    initializer_value_bindings=self.initializer_value_bindings,
                 )
                 if pending is not None:
                     pending = replace(
                         pending,
                         class_name=qualified_name,
+                        class_branch_identity=_conditional_branch_identity(node),
                         artifact=replace(
                             pending.artifact,
                             name=pending.artifact.name.split("::")[-1],
@@ -1778,6 +6184,15 @@ class _CppAnalysisBuilder:
                             is_method=1,
                         ),
                     )
+                    if builder is None:
+                        builder = self._ensure_class_builder(
+                            qualified_name=qualified_name,
+                            lineno=node.start_point.row + 1,
+                            end_lineno=node.end_point.row + 1,
+                            docstring=docstring,
+                            is_definition=True,
+                            branch_identity=_conditional_branch_identity(node),
+                        )
                     builder.record_method(pending)
                 continue
 
@@ -1790,12 +6205,14 @@ class _CppAnalysisBuilder:
                 docstring=child_docstring,
                 is_public=int(current_public),
                 signature_node=child,
+                initializer_value_bindings=self.initializer_value_bindings,
             )
             if pending is None:
                 continue
             pending = replace(
                 pending,
                 class_name=qualified_name,
+                class_branch_identity=_conditional_branch_identity(node),
                 artifact=replace(
                     pending.artifact,
                     name=pending.artifact.name.split("::")[-1],
@@ -1807,7 +6224,118 @@ class _CppAnalysisBuilder:
                     is_method=1,
                 ),
             )
+            if builder is None:
+                builder = self._ensure_class_builder(
+                    qualified_name=qualified_name,
+                    lineno=node.start_point.row + 1,
+                    end_lineno=node.end_point.row + 1,
+                    docstring=docstring,
+                    is_definition=True,
+                    branch_identity=_conditional_branch_identity(node),
+                )
             builder.record_method(pending)
+
+    def _friend_prefix_has_callable_sibling(
+        self, children: Sequence[Node], prefix: Node
+    ) -> Node | None:
+        """Return a parser-split friend declarator following its prefix node.
+
+        Parameters
+        ----------
+        children : collections.abc.Sequence[tree_sitter.Node]
+            Class-body children in source order.
+        prefix : tree_sitter.Node
+            Field node containing a trailing `friend` token.
+
+        Returns
+        -------
+        tree_sitter.Node | None
+            Adjacent callable field node when the grammar split the declaration.
+        """
+        leaf = next(
+            (
+                item
+                for item in reversed(_named_descendants(prefix))
+                if _node_text(item, self.source) == "friend"
+            ),
+            None,
+        )
+        if leaf is None or leaf.end_byte != prefix.end_byte:
+            return None
+        position = children.index(prefix)
+        if position + 1 >= len(children):
+            return None
+        candidate = children[position + 1]
+        if candidate.type not in {
+            "declaration",
+            "field_declaration",
+            "function_definition",
+        }:
+            return None
+        between = self.source[prefix.end_byte : candidate.start_byte]
+        if b"\n" in between or between.strip():
+            return None
+        if _find_function_declarator(candidate) is None:
+            return None
+        return candidate
+
+    def _handle_friend_declaration(
+        self,
+        node: Node,
+        *,
+        namespace: Sequence[str],
+        docstring: str | None,
+        signature_node: Node,
+    ) -> None:
+        """Record a callable friend with its namespace or qualified owner.
+
+        Parameters
+        ----------
+        node : tree_sitter.Node
+            Friend wrapper or parser-split callable declaration.
+        namespace : collections.abc.Sequence[str]
+            Enclosing namespace path; the befriending class is excluded.
+        docstring : str | None
+            Attached comment summary when present.
+        signature_node : tree_sitter.Node
+            Original syntax node used for signature and source position.
+
+        Returns
+        -------
+        None
+            Callable friends are stored using ordinary declaration coalescing.
+        """
+        callable_node = next(
+            (
+                candidate
+                for candidate in _named_descendants(node)
+                if candidate.type
+                in {"function_definition", "declaration", "field_declaration"}
+                and _find_function_declarator(candidate) is not None
+            ),
+            None,
+        )
+        if callable_node is None:
+            return
+        friend_namespace = list(namespace)
+        while (
+            friend_namespace
+            and _qualified_name(friend_namespace) in self.known_class_names
+        ):
+            friend_namespace.pop()
+        pending = _build_function_artifact(
+            callable_node,
+            self.source,
+            namespace=friend_namespace,
+            known_class_names=self.known_class_names,
+            owner_id=self.owner_id,
+            docstring=docstring,
+            is_public=_is_likely_public_definition(callable_node, self.source),
+            signature_node=signature_node,
+            initializer_value_bindings=self.initializer_value_bindings,
+        )
+        if pending is not None:
+            self._record_function(pending)
 
     def _handle_callable_node(
         self,
@@ -1845,6 +6373,7 @@ class _CppAnalysisBuilder:
             docstring=docstring,
             is_public=_is_likely_public_definition(node, self.source),
             signature_node=signature_node,
+            initializer_value_bindings=self.initializer_value_bindings,
         )
         if pending is not None:
             self._record_function(pending)
@@ -1879,12 +6408,59 @@ class _CppAnalysisBuilder:
         if node.type in {"preproc_def", "preproc_function_def"}:
             self._handle_macro_declaration(node, docstring=docstring)
             return
+        if node.type == "template_declaration":
+            inner = _template_inner_node(node)
+            if inner is not None:
+                self._dispatch_node(
+                    inner,
+                    namespace=namespace,
+                    docstring=docstring,
+                    signature_node=signature_node,
+                )
+            return
+        if node.type == "linkage_specification":
+            body = node.child_by_field_name("body")
+            if body is not None:
+                if body.type == "declaration_list":
+                    self._visit_children(body.named_children, namespace=namespace)
+                else:
+                    self._dispatch_node(
+                        body,
+                        namespace=namespace,
+                        docstring=docstring,
+                        signature_node=signature_node,
+                    )
+            return
         if node.type == "namespace_definition":
             self._handle_namespace(node, namespace=namespace, docstring=docstring)
             return
         if node.type == "class_specifier":
             self._handle_class_specifier(node, namespace=namespace, docstring=docstring)
             return
+        if node.type == "type_definition":
+            self._handle_typedef_definition(
+                node, namespace=namespace, docstring=docstring
+            )
+            declared_type = _declared_type_specifier(node)
+            if declared_type is not None:
+                self._dispatch_node(
+                    declared_type,
+                    namespace=namespace,
+                    docstring=docstring,
+                    signature_node=signature_node,
+                )
+            return
+        if node.type in {"declaration", "field_declaration"}:
+            declared_type = _declared_type_specifier(node)
+            if declared_type is not None:
+                self._dispatch_node(
+                    declared_type,
+                    namespace=namespace,
+                    docstring=docstring,
+                    signature_node=signature_node,
+                )
+                if _find_function_declarator(node) is None:
+                    return
         if node.type == "alias_declaration":
             self._handle_alias_declaration(
                 node, namespace=namespace, docstring=docstring
@@ -1894,6 +6470,10 @@ class _CppAnalysisBuilder:
             self._handle_type_declaration(
                 node, namespace=namespace, docstring=docstring
             )
+            if node.type in {"struct_specifier", "union_specifier"}:
+                self._handle_class_specifier(
+                    node, namespace=namespace, docstring=docstring
+                )
             return
         if _is_function_definition(node):
             self._handle_callable_node(
@@ -1936,10 +6516,12 @@ class _CppAnalysisBuilder:
             Matching artifacts are stored in place.
         """
         children = tuple(_conditional_children(children))
-        attached_comments = _attached_comment_map(children, self.source)
-        self.doxygen_by_lineno.update(
-            _attached_doxygen_comment_map(children, self.source)
-        )
+        attached_comments = self.source_comments
+        if attached_comments is None:
+            attached_comments = _attached_comment_map(children, self.source)
+            self.doxygen_by_lineno.update(
+                _attached_doxygen_comment_map(children, self.source)
+            )
         for child in children:
             if child.type in {"comment", "preproc_include"}:
                 continue
@@ -1991,13 +6573,53 @@ class _CppAnalysisBuilder:
         """
         imports = _extract_imports(self.root, self.source)
         self._visit_children(self.root.children, namespace=())
-        classes = tuple(
-            builder.build()
-            for builder in sorted(
+        class_builders = tuple(
+            sorted(
                 self.class_builders.values(),
                 key=lambda item: (item.lineno, item.qualified_name),
             )
         )
+        class_counts: dict[str, int] = {}
+        for builder in class_builders:
+            class_counts[builder.qualified_name] = (
+                class_counts.get(builder.qualified_name, 0) + 1
+            )
+        classes_list: list[ClassArtifact] = []
+        for builder in class_builders:
+            artifact = builder.build()
+            if class_counts[builder.qualified_name] > 1:
+                suffix = f":source:{builder.lineno}"
+                class_id = f"{artifact.stable_id}{suffix}"
+                artifact = replace(
+                    artifact,
+                    stable_id=class_id,
+                    methods=tuple(
+                        replace(
+                            method,
+                            stable_id=f"{method.stable_id}{suffix}",
+                            owner_stable_id=class_id,
+                        )
+                        for method in artifact.methods
+                    ),
+                )
+            artifact = replace(
+                artifact,
+                methods=tuple(
+                    replace(
+                        method,
+                        semantic_identity=(
+                            method.semantic_identity
+                            or SemanticIdentity(
+                                namespace="codira.cpp.source.v1",
+                                value=method.stable_id,
+                            )
+                        ),
+                    )
+                    for method in artifact.methods
+                ),
+            )
+            classes_list.append(artifact)
+        classes = tuple(classes_list)
         functions = tuple(
             pending.artifact
             for pending in sorted(
@@ -2056,8 +6678,9 @@ def _is_cpp_header(path: Path) -> bool:
     Returns
     -------
     bool
-        True for a C++-only same-stem neighbour or a C++ syntax node. Shared
-        C/C++ neighbours and syntax without such evidence retain the C default.
+        True for a C++-only same-stem neighbour, a C++ syntax node or an
+        independently parsed named template parameter list. Shared C/C++
+        neighbours and syntax without such evidence retain the C default.
     """
     if not path.is_file():
         return False
@@ -2066,14 +6689,1195 @@ def _is_cpp_header(path: Path) -> bool:
     )
     if cpp_neighbour and not path.with_suffix(".c").is_file():
         return True
-    pending = [_new_parser().parse(path.read_bytes()).root_node]
+    source = path.read_bytes()
+    root = _parse_cpp_source(source)
+    pending = [root]
     while pending:
         node = pending.pop()
         if node.type in _CPP_HEADER_NODES:
             return True
         if node.type not in {"comment", "string_literal", "raw_string_literal"}:
             pending.extend(node.named_children)
+    return root.has_error and has_named_template_parameters(source, root)
+
+
+def _contains_conditional_branches(source: bytes) -> bool:
+    """Check whether the original parse tree contains preprocessor alternatives.
+
+    Parameters
+    ----------
+    source : bytes
+        Unmodified C++ translation unit or header bytes.
+
+    Returns
+    -------
+    bool
+        Whether source contains a conditional branch requiring source-first
+        reconciliation.
+    """
+    root = _new_parser().parse(source).root_node
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.type in {"preproc_if", "preproc_ifdef", "preproc_elif", "preproc_else"}:
+            return True
+        pending.extend(node.named_children)
     return False
+
+
+def _constrain_unproven_source_calls(result: AnalysisResult) -> AnalysisResult:
+    """Prevent inferred targets for calls without exact source evidence.
+
+    Parameters
+    ----------
+    result : codira.models.AnalysisResult
+        Tree-sitter result containing source-written callable occurrences.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        Result with calls that lack exact target identities constrained against
+        name-based resolution.
+    """
+
+    return replace(
+        result,
+        functions=tuple(
+            _constrain_function_calls(function) for function in result.functions
+        ),
+        classes=tuple(
+            replace(
+                class_artifact,
+                methods=tuple(
+                    _constrain_function_calls(method)
+                    for method in class_artifact.methods
+                ),
+            )
+            for class_artifact in result.classes
+        ),
+    )
+
+
+def _constrain_function_calls(function: FunctionArtifact) -> FunctionArtifact:
+    """Keep calls without exact target evidence out of inferred relations.
+
+    Parameters
+    ----------
+    function : codira.models.FunctionArtifact
+        Source callable containing static call-site records.
+
+    Returns
+    -------
+    codira.models.FunctionArtifact
+        Callable whose unproven calls cannot resolve through name matching.
+    """
+    return replace(
+        function,
+        calls=tuple(
+            replace(
+                call,
+                external_target_kind=(
+                    "C++:<macro>"
+                    if call.external_target_kind == "C++:<macro>"
+                    else None
+                ),
+                external_target_name=(
+                    call.external_target_name
+                    if call.external_target_kind == "C++:<macro>"
+                    else call.target
+                ),
+                resolution_mode="exact",
+            )
+            if call.target_identity is None
+            else call
+            for call in function.calls
+        ),
+    )
+
+
+def _remove_macro_named_callables(
+    result: AnalysisResult, source: bytes
+) -> AnalysisResult:
+    """Exclude macro invocations misread as source callable declarations.
+
+    Parameters
+    ----------
+    result : codira.models.AnalysisResult
+        Tree-sitter artifacts for the original, unexpanded source.
+    source : bytes
+        Original translation-unit bytes.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        Source artifacts without callable nodes whose names are function-like
+        macros declared in this file.
+    """
+    macro_names = {
+        match.group(1).decode("ascii")
+        for match in re.finditer(
+            rb"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)[ \t]*\(",
+            source,
+            flags=re.MULTILINE,
+        )
+    }
+    if not macro_names:
+        macro_names = set()
+
+    def keep(function: FunctionArtifact) -> bool:
+        name = function.name.rsplit("::", 1)[-1]
+        if name in macro_names:
+            return False
+        if function.is_method:
+            return True
+        return re.match(rf"^\s*{re.escape(name)}\s*\(", function.signature) is None
+
+    functions = tuple(item for item in result.functions if keep(item))
+    classes = tuple(
+        replace(
+            item,
+            methods=tuple(method for method in item.methods if keep(method)),
+        )
+        for item in result.classes
+    )
+    if len(functions) == len(result.functions) and all(
+        len(item.methods) == len(previous.methods)
+        for item, previous in zip(classes, result.classes)
+    ):
+        return result
+    status = result.status or AnalysisStatus(
+        grammar="tree-sitter-cpp",
+        target_contract={"language": "cpp"},
+        reliable_categories=("module", "class", "function"),
+        omitted_categories=(),
+    )
+    return replace(
+        result,
+        functions=functions,
+        classes=classes,
+        index_symbols=bool(functions or classes),
+        status=replace(
+            status,
+            diagnostics=tuple(
+                dict.fromkeys(
+                    (
+                        *status.diagnostics,
+                        AnalysisDiagnostic(
+                            category="macro_context",
+                            message=(
+                                "source-defined callable macros were not expanded"
+                            ),
+                        ),
+                    )
+                )
+            ),
+            omitted_categories=tuple(
+                dict.fromkeys((*status.omitted_categories, "function"))
+            ),
+            coverage_state=AnalysisCoverageState.PARTIAL,
+        ),
+    )
+
+
+def _retain_clean_partial_symbols(
+    result: AnalysisResult, root: Node, source: bytes
+) -> AnalysisResult:
+    """Retain source-backed callable and type facts despite parser recovery.
+
+    Parameters
+    ----------
+    result : codira.models.AnalysisResult
+        Recovered C++ artifacts from one translation unit.
+    root : SyntaxNode
+        Parse tree for the same source buffer.
+    source : bytes
+        Original source bytes used for physical identifier coordinates.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        Complete results unchanged, or clean entities and written callable
+        declarators retained with partial coverage after syntax recovery.
+    """
+    if not root.has_error or result.status is None:
+        return result
+    error_lines: set[int] = set()
+    error_positions: list[tuple[int, int, int, int]] = []
+    clean_definitions: set[tuple[str, int, int | None]] = set()
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.type in {"declaration", "field_declaration"}:
+            declarator = node.child_by_field_name("declarator")
+            if declarator is not None and declarator.type == "function_declarator":
+                declaration_name = _missing_scope_annotation_name(declarator, source)
+                declared_type = node.child_by_field_name("type")
+                errors = [
+                    child for child in node.named_children if child.type == "ERROR"
+                ]
+                if (
+                    declaration_name is None
+                    and not declarator.has_error
+                    and declared_type is not None
+                    and re.fullmatch(
+                        rb"[A-Z][A-Z_0-9]*",
+                        source[declared_type.start_byte : declared_type.end_byte],
+                    )
+                    is not None
+                    and len(errors) == 1
+                    and errors[0].end_byte <= declarator.start_byte
+                    and re.fullmatch(
+                        rb"\s*(?:(?:inline|constexpr|static|virtual|const)\s+)*(?:(?!operator\b)[A-Za-z_][A-Za-z_0-9]*(?:::[A-Za-z_][A-Za-z_0-9]*)*)\s*",
+                        source[errors[0].start_byte : errors[0].end_byte],
+                    )
+                    is not None
+                ):
+                    declaration_name = _unwrap_declarator_name(declarator, source)
+                if declaration_name is not None:
+                    clean_definitions.add(
+                        (
+                            declaration_name.rsplit("::", 1)[-1],
+                            node.start_point.row + 1,
+                            None,
+                        )
+                    )
+        if node.type == "function_definition":
+            declarator = node.child_by_field_name("declarator")
+            declared_type = node.child_by_field_name("type")
+            errors = [child for child in node.named_children if child.type == "ERROR"]
+            if declarator is not None:
+                missing_scope_name = _missing_scope_annotation_name(declarator, source)
+                if missing_scope_name is not None:
+                    clean_definitions.add(
+                        (
+                            missing_scope_name.rsplit("::", 1)[-1],
+                            node.start_point.row + 1,
+                            node.end_point.row + 1,
+                        )
+                    )
+            if (
+                declarator is not None
+                and not declarator.has_error
+                and declared_type is not None
+                and re.fullmatch(
+                    rb"[A-Z][A-Z_0-9]*",
+                    source[declared_type.start_byte : declared_type.end_byte],
+                )
+                is not None
+                and len(errors) == 1
+                and errors[0].end_byte <= declarator.start_byte
+                and re.fullmatch(
+                    rb"\s*(?:(?:inline|constexpr|static|virtual|const)\s+)*(?:(?!operator\b)[A-Za-z_][A-Za-z_0-9]*(?:::[A-Za-z_][A-Za-z_0-9]*)*)\s*",
+                    source[errors[0].start_byte : errors[0].end_byte],
+                )
+                is not None
+            ):
+                name = _unwrap_declarator_name(declarator, source)
+                if name is not None:
+                    clean_definitions.add(
+                        (
+                            name.rsplit("::", 1)[-1],
+                            node.start_point.row + 1,
+                            node.end_point.row + 1,
+                        )
+                    )
+        if node.type == "ERROR" or node.is_missing:
+            first = node.start_point.row + 1
+            last = max(first, node.end_point.row + 1)
+            error_lines.update(range(first, last + 1))
+            error_positions.append(
+                (
+                    first,
+                    node.start_point.column,
+                    last,
+                    node.end_point.column,
+                )
+            )
+        pending.extend(node.children)
+    if not error_lines:
+        return replace(result, index_symbols=False)
+
+    def clean_span(first: int, last: int | None) -> bool:
+        end = first if last is None else last
+        return not any(line in error_lines for line in range(first, end + 1))
+
+    def clean_function(function: FunctionArtifact) -> FunctionArtifact | None:
+        if clean_span(function.lineno, function.end_lineno):
+            return function
+        if function.lineno in error_lines:
+            recovered_name = function.name.rsplit("::", 1)[-1]
+            if any(
+                (recovered_name, start, function.end_lineno) in clean_definitions
+                for start in range(function.lineno, function.lineno + 3)
+            ):
+                return replace(
+                    function,
+                    calls=tuple(
+                        call
+                        for call in function.calls
+                        if all(
+                            not (first <= call.lineno <= last)
+                            or (last == call.lineno and end_column <= call.col_offset)
+                            for first, _, last, end_column in error_positions
+                        )
+                    ),
+                )
+            lines = source.splitlines()
+            source_line = (
+                lines[function.lineno - 1] if 0 < function.lineno <= len(lines) else b""
+            )
+            name = function.name.rsplit("::", 1)[-1].encode()
+            name_start = source_line.find(name)
+            error_starts = [
+                start_column
+                for first, start_column, _, _ in error_positions
+                if first == function.lineno
+            ]
+            if name_start < 0 or not error_starts:
+                return None
+            error_column = min(error_starts)
+            source_lines = source.splitlines(keepends=True)
+            error_byte = (
+                sum(len(line) for line in source_lines[: function.lineno - 1])
+                + error_column
+            )
+            declaration_prefix = source[
+                source.rfind(b"\n", 0, error_byte) + 1 : error_byte
+            ]
+            name_end = name_start + len(name)
+            if name_start >= error_column or not any(
+                token in declaration_prefix[name_end:] for token in (b"{", b";")
+            ):
+                return None
+        return replace(
+            function,
+            calls=tuple(
+                call for call in function.calls if call.lineno not in error_lines
+            ),
+        )
+
+    functions = tuple(
+        function
+        for item in result.functions
+        if (function := clean_function(item)) is not None
+    )
+    classes = tuple(
+        replace(
+            class_artifact,
+            methods=tuple(
+                method
+                for item in class_artifact.methods
+                if (method := clean_function(item)) is not None
+            ),
+        )
+        for class_artifact in result.classes
+        if class_artifact.lineno not in error_lines
+    )
+    declarations = tuple(
+        item for item in result.declarations if item.lineno not in error_lines
+    )
+    imports = tuple(item for item in result.imports if item.lineno not in error_lines)
+    reliable = tuple(
+        category
+        for category, present in (
+            ("module", True),
+            ("class", bool(classes)),
+            ("function", bool(functions) or any(item.methods for item in classes)),
+        )
+        if present
+    )
+    all_categories = (
+        "module",
+        "class",
+        "function",
+        "declaration",
+        "import",
+        "documentation",
+    )
+    status = replace(
+        result.status,
+        reliable_categories=reliable,
+        omitted_categories=tuple(
+            category for category in all_categories if category not in reliable
+        ),
+    )
+    return replace(
+        result,
+        classes=classes,
+        functions=functions,
+        declarations=declarations,
+        imports=imports,
+        documentation=(),
+        index_symbols=bool(functions or classes),
+        status=status,
+    )
+
+
+def _merge_source_first_result(
+    source_first: AnalysisResult,
+    configured: AnalysisResult,
+    source: bytes,
+    *,
+    prefer_configured: bool = False,
+) -> AnalysisResult:
+    """Keep source-written branches when adding explicit macro-context facts.
+
+    Parameters
+    ----------
+    source_first : codira.models.AnalysisResult
+        Tree-Sitter analysis of the unchanged translation unit.
+    configured : codira.models.AnalysisResult
+        Macro-context analysis using explicitly supplied definitions.
+    source : bytes
+        Original translation unit used to verify configured call spelling.
+    prefer_configured : bool, optional
+        Preserve compiler-mapped metadata and entities when the configured
+        result comes from the optional Clang frontend.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        Source-first artifacts enriched with distinct configured calls and
+        generated entities that carry explicit provenance.
+    """
+
+    def source_spells_call(call: CallSite) -> bool:
+        lines = source.splitlines()
+        if not call.target or not 0 < call.lineno <= len(lines):
+            return False
+        line = lines[call.lineno - 1]
+        target = call.target.encode("utf-8")
+        start = call.col_offset
+        return 0 <= start < len(line) and line[start : start + len(target)] == target
+
+    def call_key(call: CallSite) -> tuple[object, ...]:
+        return (
+            call.kind,
+            call.target,
+            call.lineno,
+            call.col_offset,
+            call.base,
+        )
+
+    def merge_calls(
+        source_calls: tuple[CallSite, ...], configured_calls: tuple[CallSite, ...]
+    ) -> tuple[CallSite, ...]:
+        calls = {call_key(call): call for call in source_calls}
+        for call in configured_calls:
+            if call.target_identity is None and not source_spells_call(call):
+                continue
+            if call.target_identity is None:
+                call = replace(
+                    call,
+                    external_target_kind=None,
+                    external_target_name=call.target,
+                    resolution_mode="exact",
+                )
+            key = call_key(call)
+            current = calls.get(key)
+            if current is None or call.target_identity is not None:
+                calls[key] = call
+        return tuple(
+            sorted(calls.values(), key=lambda item: (item.lineno, item.col_offset))
+        )
+
+    def callable_key(function: FunctionArtifact) -> tuple[str, int, str, int]:
+        return function.name, function.lineno, function.signature, function.is_method
+
+    def merge_callables(
+        source_callables: tuple[FunctionArtifact, ...],
+        configured_callables: tuple[FunctionArtifact, ...],
+    ) -> tuple[FunctionArtifact, ...]:
+        merged = {callable_key(item): item for item in source_callables}
+        consumed: set[tuple[str, int, str, int]] = set()
+        for item in configured_callables:
+            key = callable_key(item)
+            current = merged.get(key)
+            if current is None:
+                source_matches = [
+                    (candidate_key, candidate)
+                    for candidate_key, candidate in merged.items()
+                    if candidate_key not in consumed
+                    and candidate.is_method == item.is_method
+                    and candidate.lineno == item.lineno
+                    and candidate.end_lineno == item.end_lineno
+                ]
+                if len(source_matches) == 1:
+                    candidate_key, current = source_matches[0]
+                    del merged[candidate_key]
+            if current is None:
+                if (
+                    prefer_configured
+                    or item.generated is not None
+                    or item.semantic_identity is not None
+                ):
+                    merged[key] = _constrain_function_calls(item)
+                continue
+            base = item if prefer_configured or current.name != item.name else current
+            merged[key] = replace(
+                base,
+                stable_id=current.stable_id,
+                calls=merge_calls(current.calls, item.calls),
+                generated=item.generated or current.generated,
+                semantic_identity=item.semantic_identity or current.semantic_identity,
+            )
+            consumed.add(callable_key(item))
+        return tuple(
+            sorted(merged.values(), key=lambda item: (item.lineno, item.stable_id))
+        )
+
+    configured_classes = {(item.name, item.lineno): item for item in configured.classes}
+    classes: list[ClassArtifact] = []
+    for source_class in source_first.classes:
+        configured_class = configured_classes.pop(
+            (source_class.name, source_class.lineno), None
+        )
+        if configured_class is None:
+            matches = [
+                (key, item)
+                for key, item in configured_classes.items()
+                if item.lineno == source_class.lineno
+                and item.end_lineno == source_class.end_lineno
+            ]
+            if len(matches) == 1:
+                key, configured_class = matches[0]
+                del configured_classes[key]
+        base_class = configured_class or source_class
+        methods = merge_callables(
+            source_class.methods,
+            () if configured_class is None else configured_class.methods,
+        )
+        classes.append(
+            replace(
+                base_class,
+                stable_id=source_class.stable_id,
+                methods=tuple(
+                    replace(
+                        method,
+                        owner_name=method.owner_name or source_class.name,
+                        owner_stable_id=source_class.stable_id,
+                    )
+                    for method in methods
+                ),
+            )
+        )
+    for configured_class in configured_classes.values():
+        proven_methods = tuple(
+            method
+            for method in configured_class.methods
+            if prefer_configured
+            or method.generated is not None
+            or method.semantic_identity is not None
+        )
+        if proven_methods:
+            classes.append(replace(configured_class, methods=proven_methods))
+
+    declarations: dict[tuple[str, str, int, str], DeclarationArtifact] = {
+        (item.kind, item.name, item.lineno, item.signature): item
+        for item in source_first.declarations
+    }
+    for item in configured.declarations:
+        declaration_key: tuple[str, str, int, str] = (
+            item.kind,
+            item.name,
+            item.lineno,
+            item.signature,
+        )
+        if declaration_key in declarations:
+            if prefer_configured:
+                declarations[declaration_key] = item
+            continue
+        same_source: list[tuple[str, str, int, str]] = [
+            candidate_key
+            for candidate_key, candidate in declarations.items()
+            if candidate.kind == item.kind and candidate.lineno == item.lineno
+        ]
+        if len(same_source) == 1:
+            del declarations[same_source[0]]
+            declarations[declaration_key] = item
+        elif prefer_configured or item.generated is not None:
+            declarations[declaration_key] = item
+
+    functions = merge_callables(source_first.functions, configured.functions)
+    statuses = tuple(
+        status
+        for status in (source_first.status, configured.status)
+        if status is not None
+    )
+    status = statuses[0] if statuses else None
+    if (
+        source_first.status is not None
+        and source_first.status.diagnostics
+        and all(
+            item.category == "macro_context"
+            and item.message == "source-defined callable macros were not expanded"
+            for item in source_first.status.diagnostics
+        )
+        and configured.status is None
+        and any(item.generated is not None for item in configured.functions)
+    ):
+        status = None
+    if len(statuses) > 1 and status is not None:
+        diagnostics = tuple(
+            dict.fromkeys(
+                diagnostic for item in statuses for diagnostic in item.diagnostics
+            )
+        )
+        reliable_categories = tuple(
+            dict.fromkeys(
+                category for item in statuses for category in item.reliable_categories
+            )
+        )
+        status = replace(
+            status,
+            diagnostics=diagnostics,
+            reliable_categories=reliable_categories,
+            omitted_categories=tuple(
+                category
+                for category in dict.fromkeys(
+                    category
+                    for item in statuses
+                    for category in item.omitted_categories
+                )
+                if category not in reliable_categories
+            ),
+            coverage_state=(
+                AnalysisCoverageState.PARTIAL
+                if any(
+                    item.coverage_state is AnalysisCoverageState.PARTIAL
+                    for item in statuses
+                )
+                else AnalysisCoverageState.COMPLETE
+            ),
+        )
+    imports = {
+        (item.name, item.lineno, item.kind, item.alias): item
+        for item in source_first.imports
+    }
+    imports.update(
+        {
+            (item.name, item.lineno, item.kind, item.alias): item
+            for item in configured.imports
+        }
+    )
+    documentation = {
+        (item.lineno, item.end_lineno, item.text, item.kind): item
+        for item in source_first.documentation
+    }
+    documentation.update(
+        {
+            (item.lineno, item.end_lineno, item.text, item.kind): item
+            for item in configured.documentation
+        }
+    )
+    return replace(
+        configured if prefer_configured else source_first,
+        classes=tuple(sorted(classes, key=lambda item: (item.lineno, item.stable_id))),
+        functions=functions,
+        declarations=tuple(
+            sorted(
+                declarations.values(), key=lambda item: (item.lineno, item.stable_id)
+            )
+        ),
+        imports=tuple(
+            sorted(imports.values(), key=lambda item: (item.lineno, item.name))
+        ),
+        documentation=tuple(
+            sorted(
+                documentation.values(), key=lambda item: (item.lineno, item.stable_id)
+            )
+        ),
+        index_symbols=source_first.index_symbols
+        or (
+            configured.index_symbols
+            and (configured.status is None or prefer_configured)
+        ),
+        status=status,
+    )
+
+
+@dataclass
+class _ExternalOwner:
+    """Collect source-proven class declarations without emitting their symbols.
+
+    Parameters
+    ----------
+    stable_ids : set[str]
+        Candidate declaration identities from contained headers.
+    visibility : dict[str, set[int]]
+        Observed access flags for each explicitly declared method name.
+
+    Returns
+    -------
+    None
+        Header evidence for external owner references only.
+    """
+
+    stable_ids: set[str] = field(default_factory=set)
+    visibility: dict[str, set[int]] = field(default_factory=dict)
+    method_identities: dict[str, set[tuple[str, str]]] = field(default_factory=dict)
+    macro_names: set[str] = field(default_factory=set)
+    lookup_is_closed: bool = True
+
+
+def _external_class_members_are_accounted(
+    class_node: Node, class_artifact: ClassArtifact, source: bytes
+) -> bool:
+    """Check that every written class member is a parsed method or access label.
+
+    Parameters
+    ----------
+    class_node : tree_sitter.Node
+        Source class occurrence corresponding to the artifact.
+    class_artifact : codira.models.ClassArtifact
+        Parsed methods available for exact lookup evidence.
+    source : bytes
+        Original header text used to read declaration names.
+
+    Returns
+    -------
+    bool
+        Whether the class has no unaccounted member syntax that could alter
+        unqualified method lookup.
+    """
+    field_list = next(
+        (
+            child
+            for child in class_node.named_children
+            if child.type == "field_declaration_list"
+        ),
+        None,
+    )
+    if field_list is None:
+        return False
+    for member in field_list.named_children:
+        if member.type == "access_specifier":
+            continue
+        if member.type != "field_declaration":
+            return False
+        function_declarator = member.child_by_field_name("declarator")
+        if (
+            function_declarator is None
+            or function_declarator.type != "function_declarator"
+        ):
+            return False
+        declarator = function_declarator.child_by_field_name("declarator")
+        if declarator is None or declarator.type != "field_identifier":
+            return False
+        method_name = _node_text(declarator, source)
+        if not any(
+            method.name == method_name and method.lineno == member.start_point.row + 1
+            for method in class_artifact.methods
+        ):
+            return False
+    return True
+
+
+def _external_owner_alternatives(result: AnalysisResult) -> set[str]:
+    """Retain namespace/alias conflicts without treating member aliases as owners.
+
+    Parameters
+    ----------
+    result : codira.models.AnalysisResult
+        Source-local or captured-header artifacts.
+
+    Returns
+    -------
+    set[str]
+        Existing namespace and nonmember alias alternatives. An alias whose
+        direct owner is a written record does not invalidate that record or
+        change the legacy treatment of namespace alias prefixes. If a written
+        namespace shares the record name in another alternative, its aliases
+        retain their conflict evidence.
+    """
+    namespaces = {
+        declaration.name
+        for declaration in result.declarations
+        if declaration.kind == "namespace"
+    }
+    records = {cls.name for cls in result.classes} | {
+        declaration.name
+        for declaration in result.declarations
+        if declaration.kind in {"class", "struct", "union"}
+    }
+    return {
+        declaration.name
+        for declaration in result.declarations
+        if declaration.kind == "namespace"
+        or (
+            declaration.kind == "type_alias"
+            and (
+                declaration.name.rpartition("::")[0] not in records
+                or declaration.name.rpartition("::")[0] in namespaces
+            )
+        )
+    }
+
+
+def _external_method_owners(
+    context: IncludeContext, root: Path, source_result: AnalysisResult
+) -> dict[str, _ExternalOwner]:
+    """Find unambiguous class-owner evidence in clean captured header trees.
+
+    Parameters
+    ----------
+    context : IncludeContext
+        Exact source and header snapshot already used for syntax recovery.
+    root : pathlib.Path
+        Repository boundary used to derive declaration identities.
+    source_result : AnalysisResult
+        Source-local artifacts whose namespace and alias evidence takes priority.
+
+    Returns
+    -------
+    dict[str, _ExternalOwner]
+        Qualified class names and declaration/access evidence. Header artifacts
+        are not copied into the source result. Member aliases are excluded from
+        conflicting alternatives so their parent records remain valid owners.
+    """
+    owners: dict[str, _ExternalOwner] = {}
+    alternatives = _external_owner_alternatives(source_result)
+    source_macro_names = {
+        match.group(1).decode("ascii")
+        for match in re.finditer(
+            rb"(?m)^\s*#\s*define\s+([A-Za-z_]\w*)\b", context.source
+        )
+    }
+    source_lookup_is_closed = not context.unresolved and not any(
+        node.type in {"using_declaration", "using_directive"}
+        for node in _named_descendants(_parse_cpp_source(context.source))
+    )
+    for header in context.headers:
+        tree = _parse_cpp_source(header.source)
+        if tree.has_error:
+            continue
+        header_macro_names = {
+            match.group(1).decode("ascii")
+            for match in re.finditer(
+                rb"(?m)^\s*#\s*define\s+([A-Za-z_]\w*)\b", header.source
+            )
+        }
+        header_lookup_is_closed = not any(
+            node.type
+            in {
+                "base_class_clause",
+                "using_declaration",
+                "using_directive",
+            }
+            for node in _named_descendants(tree)
+        )
+        header_result = _CppAnalysisBuilder(
+            source=header.source,
+            root=tree,
+            owner_id=_symbol_owner_id(header.path, root),
+            known_class_names=_collect_known_class_names(tree.children, header.source),
+        ).build(
+            source_path=header.path,
+            module_name=_module_name_for_path(header.path, root),
+            module_stable_id=_module_stable_id(header.path, root),
+            module_docstring=None,
+        )
+        alternatives.update(_external_owner_alternatives(header_result))
+        for cls in header_result.classes:
+            class_node = next(
+                (
+                    node
+                    for node in _named_descendants(tree)
+                    if node.type
+                    in {"class_specifier", "struct_specifier", "union_specifier"}
+                    and node.start_point.row + 1 == cls.lineno
+                    and (name_node := node.child_by_field_name("name")) is not None
+                    and _node_text(name_node, header.source) == cls.name.split("::")[-1]
+                ),
+                None,
+            )
+            owner = owners.setdefault(cls.name, _ExternalOwner())
+            owner.stable_ids.add(cls.stable_id)
+            owner.macro_names.update(source_macro_names)
+            owner.macro_names.update(header_macro_names)
+            owner.lookup_is_closed = (
+                owner.lookup_is_closed
+                and header_lookup_is_closed
+                and source_lookup_is_closed
+                and class_node is not None
+                and _external_class_members_are_accounted(
+                    class_node, cls, header.source
+                )
+            )
+            for method in cls.methods:
+                owner.visibility.setdefault(method.name, set()).add(method.is_public)
+                if method.semantic_identity is not None:
+                    owner.method_identities.setdefault(method.name, set()).add(
+                        (
+                            method.semantic_identity.namespace,
+                            method.semantic_identity.value,
+                        )
+                    )
+    conflicting_names = {
+        _qualified_name(_split_qualified_name(name)[:end])
+        for name in alternatives
+        for end in range(1, len(_split_qualified_name(name)) + 1)
+    }
+    return {
+        name: owner for name, owner in owners.items() if name not in conflicting_names
+    }
+
+
+def _external_member_calls(
+    function: FunctionArtifact,
+    owner_name: str,
+    owner: _ExternalOwner,
+    source: bytes,
+    source_tree: Node,
+) -> tuple[CallSite, ...]:
+    """Qualify proven member calls while retaining ambiguous lexical bindings.
+
+    Parameters
+    ----------
+    function : FunctionArtifact
+        Source-owned method definition and original call sites.
+    owner_name : str
+        Header-declared qualified class name.
+    owner : _ExternalOwner
+        Captured method declarations for that class.
+    source : bytes
+        Original source bytes for lexical names.
+    source_tree : tree_sitter.Node
+        Recovered source tree with original byte and line positions.
+
+    Returns
+    -------
+    tuple[CallSite, ...]
+        Explicit class-member records where unqualified lookup is proven.
+        Local declarations, parameters and nested scopes prevent inference.
+    """
+    bodies = [
+        node.child_by_field_name("body")
+        for node in _named_descendants(source_tree)
+        if node.type == "function_definition"
+        and node.end_point.row + 1 == function.end_lineno
+        and node.start_point.row + 1 >= function.lineno
+    ]
+    if len(bodies) != 1 or bodies[0] is None or len(owner.stable_ids) != 1:
+        return function.calls
+    nodes = _named_descendants(bodies[0])
+    nested_scopes = [
+        node
+        for node in nodes
+        if node.type in {"lambda_expression", "class_specifier", "struct_specifier"}
+    ]
+    if any(
+        node.type == "call_expression"
+        and (callee := node.child_by_field_name("function")) is not None
+        and callee.type == "primitive_type"
+        for node in nodes
+    ):
+        # The grammar can parse a local function-pointer declaration as nested
+        # primitive-type calls. Its lexical bindings are then not proven.
+        return function.calls
+    shadowed = set(function.parameters)
+    for node in nodes:
+        if node.type in {"using_declaration", "type_definition"}:
+            shadowed.update(
+                _node_text(child, source)
+                for child in _named_descendants(node)
+                if child.type in {"identifier", "type_identifier"}
+            )
+        for index, declarator in enumerate([*node.children]):
+            if node.field_name_for_child(index) != "declarator":
+                continue
+            name = _parameter_name_node(declarator)
+            if name is not None:
+                shadowed.add(_node_text(name, source))
+            else:
+                shadowed.update(
+                    _node_text(child, source)
+                    for binding in (declarator, *_named_descendants(declarator))
+                    if binding.type == "structured_binding_declarator"
+                    for child in binding.named_children
+                    if child.type == "identifier"
+                )
+    source_lines = source.splitlines()
+    source_has_open_lookup = any(
+        node.type in {"using_declaration", "using_directive"}
+        for node in _named_descendants(source_tree)
+    )
+
+    def exact_method_identity(target: str) -> SemanticIdentity | None:
+        """Return a unique source identity for a proven external member name.
+
+        Parameters
+        ----------
+        target : str
+            Written member target from the call expression.
+
+        Returns
+        -------
+        codira.models.SemanticIdentity or None
+            Exact header method identity only when the name has one occurrence.
+        """
+        identities = owner.method_identities.get(target, set())
+        if (
+            len(identities) != 1
+            or not owner.lookup_is_closed
+            or source_has_open_lookup
+            or target in owner.macro_names
+        ):
+            return None
+        namespace, value = next(iter(identities))
+        return SemanticIdentity(namespace=namespace, value=value)
+
+    def has_no_arguments(call: CallSite) -> bool:
+        """Check that the matched written call has no ADL argument candidates.
+
+        Parameters
+        ----------
+        call : codira.models.CallSite
+            Source call with physical token coordinates.
+
+        Returns
+        -------
+        bool
+            Whether one matching call expression has an empty argument list.
+        """
+        for node in nodes:
+            if node.type != "call_expression":
+                continue
+            callee = node.child_by_field_name("function")
+            arguments = node.child_by_field_name("arguments")
+            if (
+                callee is None
+                or arguments is None
+                or callee.start_point.row + 1 != call.lineno
+                or callee.start_point.column != call.col_offset
+            ):
+                continue
+            return not any(
+                child.type != "comment" for child in arguments.named_children
+            )
+        return False
+
+    return tuple(
+        replace(
+            call,
+            kind="attribute",
+            base=owner_name,
+            target_identity=(
+                exact_method_identity(call.target) if has_no_arguments(call) else None
+            )
+            or call.target_identity,
+            resolution_mode=(
+                "exact"
+                if has_no_arguments(call)
+                and exact_method_identity(call.target) is not None
+                else call.resolution_mode
+            ),
+        )
+        if call.target in owner.visibility
+        and not any(
+            (scope.start_point.row, scope.start_point.column)
+            <= (call.lineno - 1, call.col_offset)
+            < (scope.end_point.row, scope.end_point.column)
+            for scope in nested_scopes
+        )
+        and (
+            (
+                call.kind == "name"
+                and not call.base
+                and call.target not in shadowed
+                and not source_lines[call.lineno - 1][call.col_offset :]
+                .lstrip()
+                .startswith(b"::")
+                and not source_lines[call.lineno - 1][: call.col_offset]
+                .rstrip()
+                .endswith(b"::")
+            )
+            or (call.kind == "attribute" and call.base == "this")
+        )
+        else call
+        for call in function.calls
+    )
+
+
+def _attach_external_method_owners(
+    result: AnalysisResult,
+    context: IncludeContext,
+    root: Path,
+    owner_id: str,
+    source_tree: Node,
+) -> AnalysisResult:
+    """Attach proven owners to qualified definitions without fake class rows.
+
+    Parameters
+    ----------
+    result : AnalysisResult
+        Source-local normalized output.
+    context : IncludeContext
+        Captured include inputs.
+    root : pathlib.Path
+        Repository root for declaration identities.
+    owner_id : str
+        Source-owned identity prefix for callable definitions.
+    source_tree : tree_sitter.Node
+        Recovered tree used to check lexical call bindings.
+
+    Returns
+    -------
+    AnalysisResult
+        Methods retain source spans and refer to the original header declaration.
+        Header owner discovery is skipped when source namespace or alias
+        evidence already excludes every requested owner. Callable identities
+        still receive the same final disambiguation.
+    """
+    if not any("::" in function.name for function in result.functions):
+        return result
+    requested_owners = {
+        _qualified_name(_split_qualified_name(function.name)[:-1])
+        for function in result.functions
+    }
+    source_conflicts = {
+        _qualified_name(_split_qualified_name(name)[:end])
+        for name in _external_owner_alternatives(result)
+        for end in range(1, len(_split_qualified_name(name)) + 1)
+    }
+    # Header alternatives can only add conflicts, never remove source evidence.
+    # Include unqualified functions above so mixed inputs retain header lookup.
+    owners = (
+        {}
+        if requested_owners <= source_conflicts
+        else _external_method_owners(context, root, result)
+    )
+    functions: list[FunctionArtifact] = []
+    for function in result.functions:
+        parts = _split_qualified_name(function.name)
+        owner_name = _qualified_name(parts[:-1])
+        owner = owners.get(owner_name)
+        if owner is None:
+            functions.append(function)
+            continue
+        name = parts[-1]
+        visibility = owner.visibility.get(name, set())
+        functions.append(
+            replace(
+                function,
+                name=name,
+                stable_id=_function_stable_id(owner_id, name, class_name=owner_name),
+                is_method=1,
+                is_public=next(iter(visibility))
+                if len(visibility) == 1
+                else function.is_public,
+                owner_name=owner_name,
+                owner_stable_id=next(iter(owner.stable_ids))
+                if len(owner.stable_ids) == 1
+                else None,
+                calls=_external_member_calls(
+                    function, owner_name, owner, context.source, source_tree
+                ),
+            )
+        )
+    return replace(
+        result, functions=_disambiguate_callable_stable_ids(tuple(functions))
+    )
 
 
 class CppAnalyzer:
@@ -2091,12 +7895,13 @@ class CppAnalyzer:
 
     Notes
     -----
-    This analyzer is backed by `tree-sitter-cpp` and targets deterministic
-    structural extraction rather than compilation-complete C++ semantics.
+    The default analyzer uses `tree-sitter-cpp`. An explicitly configured
+    Clang frontend is optional and falls back to Tree-sitter with partial
+    status when its profile, helper, or source mapping is incomplete.
     """
 
     name = "cpp"
-    version = "6"
+    version = "54"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -2123,11 +7928,28 @@ class CppAnalyzer:
         """
         self._path_filters = AnalyzerPathFilters()
         self._header_language = "auto"
+        self._include_search_paths: tuple[Path, ...] = ()
+        self._namespace_macro_definitions: tuple[tuple[bytes, bytes], ...] = ()
+        self._preprocessor_definitions: dict[bytes, _MacroDefinition | None] | None = (
+            None
+        )
+        self._preprocessor_features: FeatureAnswers = {}
+        self._preprocessor_header_queries: dict[str, HeaderQuerySet] = {}
+        self._preprocessor_query_profile_fingerprint = plugin_configuration_fingerprint(
+            {}
+        )
         self._use_leading_comments = True
         self._emit_doxygen_documentation = True
         self._include_system_includes = True
         self._emit_namespaces = True
         self._emit_macros = True
+        self._frontend = "tree-sitter"
+        self._clang_compile_commands: str | None = None
+        self._clang_captured_profiles: str | None = None
+        self._clang_header_owner_profiles: dict[str, str] = {}
+        self._clang_helper_path: str | None = None
+        self._clang_build_receipt_path: str | None = None
+        self._clang_attempt_root = ".artifacts/clang-frontend"
         self.configuration_fingerprint = plugin_configuration_fingerprint({})
 
     def configuration_json_schema(self) -> Mapping[str, object]:
@@ -2149,6 +7971,51 @@ class CppAnalyzer:
                 "use_leading_comments": boolean_property(True),
                 "emit_doxygen_documentation": boolean_property(True),
                 "include_system_includes": boolean_property(True),
+                "include_search_paths": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "default": [],
+                    "description": (
+                        "Ordered include search roots, relative to the repository "
+                        "or absolute inside it. Quoted includes search their "
+                        "own directory first."
+                    ),
+                },
+                "namespace_macro_definitions": {
+                    "type": "object",
+                    "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z_0-9]*$"},
+                    "additionalProperties": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z_][A-Za-z_0-9]*$",
+                    },
+                    "default": {},
+                    "description": "Explicit identifier bindings for namespace declaration names; no branch selection or general expression expansion.",
+                },
+                "preprocessor_definitions": {
+                    "type": "object",
+                    "maxProperties": 4096,
+                    "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z_0-9]*$"},
+                    "additionalProperties": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "boolean"},
+                            {
+                                "type": "object",
+                                "properties": {"defined": {"const": True}},
+                                "required": ["defined"],
+                                "additionalProperties": False,
+                            },
+                        ]
+                    },
+                    "description": "Opt-in bounded captured declaration-macro analysis. Strings are object replacements, true is 1, false is explicitly undefined, and {defined: true} supplies opaque definedness. Missing names remain unknown.",
+                },
+                "preprocessor_features": {
+                    "type": "object",
+                    "maxProperties": 4096,
+                    "additionalProperties": {"type": "string", "maxLength": 32},
+                    "description": "Explicit exact native integer answers for pure compiler feature queries. Source overrides and changed argument macros remain unsupported.",
+                },
+                "preprocessor_header_queries": header_queries_schema(),
                 "emit_namespaces": boolean_property(True),
                 "emit_macros": boolean_property(True),
                 "header_language": {
@@ -2156,6 +8023,43 @@ class CppAnalyzer:
                     "enum": ["auto", "c", "cpp"],
                     "default": "auto",
                     "description": "Language selection for ambiguous .h headers.",
+                },
+                "frontend": {
+                    "type": "string",
+                    "enum": ["tree-sitter", "clang"],
+                    "default": "tree-sitter",
+                    "description": "Select the optional Clang frontend explicitly; Tree-sitter remains the default.",
+                },
+                "clang_compile_commands": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Explicit compilation database used to select the exact C++ profile for each source file.",
+                },
+                "clang_captured_profiles": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Explicit generic captured-profile JSON file, selected by exact source path and digest.",
+                },
+                "clang_header_owner_profiles": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string", "minLength": 1},
+                    "description": "Optional explicit header-to-captured-profile identity selections from header preparation candidates; unresolved headers remain held.",
+                },
+                "clang_helper_path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Explicit path to the packaged Clang frontend helper executable.",
+                },
+                "clang_build_receipt_path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Explicit path to the helper build receipt used for toolchain identity.",
+                },
+                "clang_attempt_root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "default": ".artifacts/clang-frontend",
+                    "description": "Durable root for immutable per-attempt Clang evidence; may be repository-relative or an explicit absolute path.",
                 },
             }
         )
@@ -2177,13 +8081,74 @@ class CppAnalyzer:
         Raises
         ------
         ValueError
-            If header_language is not auto, c or cpp.
+            If header_language is not auto, c or cpp, or include_search_paths
+            is not a list of nonempty strings, or namespace_macro_definitions
+            is not an identifier mapping. Repository containment is checked
+            when analysis inputs are read. Invalid compiler query literals,
+            observation identities, ranges or bounds are rejected explicitly.
         """
 
+        frontend = config.get("frontend", "tree-sitter")
+        if not isinstance(frontend, str) or frontend not in {"tree-sitter", "clang"}:
+            raise ValueError("frontend must be tree-sitter or clang")
+        clang_options: dict[str, str | None] = {}
+        for option in (
+            "clang_compile_commands",
+            "clang_captured_profiles",
+            "clang_helper_path",
+            "clang_build_receipt_path",
+        ):
+            value = config.get(option)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(f"{option} must be a nonempty string when provided")
+            clang_options[option] = value if isinstance(value, str) else None
+        attempt_root = config.get("clang_attempt_root", ".artifacts/clang-frontend")
+        if not isinstance(attempt_root, str) or not attempt_root:
+            raise ValueError("clang_attempt_root must be a nonempty string")
+        if (
+            clang_options["clang_compile_commands"]
+            and clang_options["clang_captured_profiles"]
+        ):
+            raise ValueError(
+                "configure only one of clang_compile_commands or clang_captured_profiles"
+            )
         self._path_filters = analyzer_path_filters_from_config(config)
         self._header_language = str(config.get("header_language", "auto"))
         if self._header_language not in {"auto", "c", "cpp"}:
             raise ValueError("header_language must be auto, c or cpp")
+        search_paths = config.get("include_search_paths", [])
+        if not isinstance(search_paths, list) or any(
+            not isinstance(item, str) or not item for item in search_paths
+        ):
+            raise ValueError("include_search_paths must be a list of nonempty strings")
+        self._include_search_paths = tuple(Path(item) for item in search_paths)
+        self._namespace_macro_definitions = _namespace_bindings_from_config(
+            config.get("namespace_macro_definitions", {})
+        )
+        from .cpp_generated_analysis import preprocessor_definitions
+
+        self._preprocessor_definitions = (
+            preprocessor_definitions(config["preprocessor_definitions"])
+            if "preprocessor_definitions" in config
+            else None
+        )
+        self._preprocessor_features = feature_answers(
+            config.get("preprocessor_features", {}), self._preprocessor_definitions
+        )
+        self._preprocessor_header_queries = header_query_sets(
+            config.get("preprocessor_header_queries", {})
+        )
+        if self._preprocessor_header_queries and self._preprocessor_definitions is None:
+            raise ValueError(
+                "header query observations require explicit preprocessor_definitions"
+            )
+        self._preprocessor_query_profile_fingerprint = plugin_configuration_fingerprint(
+            {
+                key: value
+                for key, value in config.items()
+                if key != "preprocessor_header_queries"
+            }
+        )
         self._use_leading_comments = bool(config.get("use_leading_comments", True))
         self._emit_doxygen_documentation = bool(
             config.get("emit_doxygen_documentation", True)
@@ -2193,6 +8158,15 @@ class CppAnalyzer:
         )
         self._emit_namespaces = bool(config.get("emit_namespaces", True))
         self._emit_macros = bool(config.get("emit_macros", True))
+        self._frontend = frontend
+        self._clang_compile_commands = clang_options["clang_compile_commands"]
+        self._clang_captured_profiles = clang_options["clang_captured_profiles"]
+        self._clang_header_owner_profiles = _clang_header_owner_profiles_from_config(
+            config.get("clang_header_owner_profiles", {})
+        )
+        self._clang_helper_path = clang_options["clang_helper_path"]
+        self._clang_build_receipt_path = clang_options["clang_build_receipt_path"]
+        self._clang_attempt_root = attempt_root
         self.configuration_fingerprint = plugin_configuration_fingerprint(config)
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
@@ -2221,8 +8195,9 @@ class CppAnalyzer:
                 "constant",
                 "namespace",
                 "documentation",
+                *(("variable",) if self._frontend == "clang" else ()),
             ),
-            does_not_support=("variable",),
+            does_not_support=(() if self._frontend == "clang" else ("variable",)),
             mappings={
                 "module": "module",
                 "class": "type",
@@ -2237,6 +8212,11 @@ class CppAnalyzer:
                 "include_local": "import",
                 "include_system": "import",
                 "doxygen": "documentation",
+                **(
+                    {"variable": "variable", "field": "variable"}
+                    if self._frontend == "clang"
+                    else {}
+                ),
             },
         )
 
@@ -2297,11 +8277,306 @@ class CppAnalyzer:
 
         if not analyzer_path_allowed(path=path, root=root, filters=self._path_filters):
             return False
+        if path.suffix not in _CPP_HEADER_SUFFIXES:
+            return True
+        if self._frontend == "clang":
+            resolution, reason = self._clang_header_projection_resolution(path, root)
+            if reason is not None or resolution is None or resolution.status != "ready":
+                return True
+            if path.suffix == ".h":
+                return (
+                    resolution.request is not None
+                    and resolution.request.owner_profile.language == "cpp"
+                )
+            return (
+                resolution.request is not None
+                and resolution.request.owner_profile.language == "cpp"
+            )
         if path.suffix != ".h":
             return True
         if self._header_language != "auto":
             return self._header_language == "cpp"
         return _is_cpp_header(path)
+
+    def _clang_header_projection_resolution(
+        self, path: Path, root: Path
+    ) -> tuple[HeaderProjectionResolution | None, str | None]:
+        """Resolve a header using only current captured owner profiles.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Physical header requested for indexing.
+        root : pathlib.Path
+            Repository root containing the configured captured profiles.
+
+        Returns
+        -------
+        tuple[HeaderProjectionResolution or None, str or None]
+            Owner resolution and a held reason when selection is invalid or
+            captured profile evidence is unavailable.
+        """
+        if self._clang_captured_profiles is None:
+            return None, "clang_header_captured_profiles_unavailable"
+        try:
+            relative = path.resolve().relative_to(root.resolve()).as_posix()
+        except (OSError, ValueError):
+            return None, "clang_header_outside_repository"
+        evidence = Path(self._clang_captured_profiles)
+        if not evidence.is_absolute():
+            evidence = root / evidence
+        try:
+            from codira_clang_frontend import (
+                from_captured_profiles_json,
+                resolve_header_projection,
+            )
+
+            profiles = from_captured_profiles_json(
+                evidence,
+                root,
+                requested_dependency_path=path,
+            )
+            resolution = resolve_header_projection(path, profiles)
+        except (ImportError, OSError, ValueError):
+            return None, "clang_header_owner_profiles_stale_or_invalid"
+        selected = self._clang_header_owner_profiles.get(relative)
+        if selected is None:
+            return resolution, None
+        try:
+            return (
+                resolve_header_projection(
+                    path, profiles, selected_owner_identity=selected
+                ),
+                None,
+            )
+        except ValueError:
+            return resolution, "clang_header_owner_selection_not_a_current_candidate"
+
+    def _analyze_clang_header(self, path: Path, root: Path) -> AnalysisResult:
+        """Analyze one header through its captured owner translation unit.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Physical header requested for projection.
+        root : pathlib.Path
+            Repository root used for contained profile and evidence paths.
+
+        Returns
+        -------
+        codira.models.AnalysisResult
+            Projected Clang artifacts, or an explicit empty partial held result.
+        """
+        resolution, reason = self._clang_header_projection_resolution(path, root)
+        if (
+            reason is not None
+            or resolution is None
+            or resolution.status != "ready"
+            or resolution.request is None
+            or resolution.request.owner_profile.language != "cpp"
+        ):
+            return self._clang_header_held_result(
+                path,
+                root,
+                reason
+                or (
+                    resolution.status if resolution is not None else "owner_unavailable"
+                ),
+            )
+        helper = Path(self._clang_helper_path or "")
+        receipt = Path(self._clang_build_receipt_path or "")
+        if not helper.is_absolute():
+            helper = root / helper
+        if not receipt.is_absolute():
+            receipt = root / receipt
+        from codira_clang_frontend import ClangFrontend, __version__
+
+        frontend = ClangFrontend(helper, receipt, package_version=__version__)
+        attempt_root = Path(self._clang_attempt_root)
+        if not attempt_root.is_absolute():
+            attempt_root = root / attempt_root
+        source_key = hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:16]
+        attempt_id = uuid4().hex
+        attempt_dir = attempt_root / source_key / attempt_id
+        try:
+            attempt_dir.mkdir(parents=True, exist_ok=False)
+            result = frontend.analyze_header(
+                resolution.request, attempt_dir=attempt_dir, attempt_id=attempt_id
+            )
+        except (ImportError, OSError, ValueError):
+            return self._clang_header_held_result(
+                path, root, "clang_header_attempt_unavailable"
+            )
+        if result.status != "parsed" or result.coverage_state != "complete":
+            return self._clang_header_held_result(
+                path,
+                root,
+                result.reasons[0]
+                if result.reasons
+                else "clang_header_projection_incomplete",
+                frontend_result=result,
+            )
+        mapped = _analysis_from_clang_result(
+            path,
+            root,
+            result,
+            context_identity=self.analysis_input_fingerprint(path, root),
+        )
+        return (
+            self._apply_clang_output_options(mapped)
+            if mapped is not None
+            else self._clang_header_held_result(
+                path,
+                root,
+                "clang_header_entities_outside_supported_dto_scope",
+                frontend_result=result,
+            )
+        )
+
+    def _apply_clang_output_options(self, analysis: AnalysisResult) -> AnalysisResult:
+        """Apply the C++ analyzer output filters to normalized Clang artifacts.
+
+        Parameters
+        ----------
+        analysis : codira.models.AnalysisResult
+            Fully mapped Clang analysis before user-facing output filters.
+
+        Returns
+        -------
+        codira.models.AnalysisResult
+            Analysis with the same configured comment, namespace, macro,
+            import, and documentation options as the Tree-sitter route.
+        """
+        module = analysis.module
+        classes = analysis.classes
+        functions = analysis.functions
+        declarations = analysis.declarations
+        if not self._use_leading_comments:
+            module = replace(module, docstring=None, has_docstring=0)
+            classes = tuple(
+                replace(
+                    item,
+                    docstring=None,
+                    has_docstring=0,
+                    methods=tuple(
+                        replace(method, docstring=None, has_docstring=0)
+                        for method in item.methods
+                    ),
+                )
+                for item in classes
+            )
+            functions = tuple(
+                replace(function, docstring=None, has_docstring=0)
+                for function in functions
+            )
+            declarations = tuple(
+                replace(declaration, docstring=None) for declaration in declarations
+            )
+        excluded_kinds: set[str] = set()
+        if not self._emit_namespaces:
+            excluded_kinds.add("namespace")
+        if not self._emit_macros:
+            excluded_kinds.add("macro")
+        removed_stable_ids = {
+            declaration.stable_id
+            for declaration in declarations
+            if declaration.kind in excluded_kinds
+        }
+        if excluded_kinds:
+            declarations = tuple(
+                declaration
+                for declaration in declarations
+                if declaration.kind not in excluded_kinds
+            )
+        imports = analysis.imports
+        if not self._include_system_includes:
+            imports = tuple(item for item in imports if item.kind != "include_system")
+        documentation = analysis.documentation
+        if not self._emit_doxygen_documentation:
+            documentation = ()
+        elif removed_stable_ids:
+            documentation = tuple(
+                item
+                for item in documentation
+                if item.owner_stable_id not in removed_stable_ids
+            )
+        return replace(
+            analysis,
+            module=module,
+            classes=classes,
+            functions=functions,
+            declarations=declarations,
+            imports=imports,
+            documentation=documentation,
+        )
+
+    def _clang_header_held_result(
+        self,
+        path: Path,
+        root: Path,
+        reason: str,
+        *,
+        frontend_result: FrontendResult | None = None,
+    ) -> AnalysisResult:
+        """Return an empty partial result for a held header projection.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Requested physical header.
+        root : pathlib.Path
+            Repository root for module identity.
+        reason : str
+            Stable resolution or frontend failure category.
+        frontend_result : FrontendResult or None, optional
+            Optional completed attempt whose raw receipt remains in its
+            immutable attempt directory.
+
+        Returns
+        -------
+        codira.models.AnalysisResult
+            Non-indexable empty result with explicit omitted categories.
+        """
+        return AnalysisResult(
+            source_path=path,
+            module=ModuleArtifact(
+                name=_module_name_for_path(path, root),
+                stable_id=_module_stable_id(path, root),
+                docstring=None,
+                has_docstring=0,
+            ),
+            classes=(),
+            functions=(),
+            declarations=(),
+            imports=(),
+            documentation=(),
+            index_symbols=False,
+            status=AnalysisStatus(
+                grammar="clang-cpp-header-projection",
+                target_contract={
+                    "language": "cpp",
+                    "requested_frontend": "clang",
+                    "clang_attempt": (
+                        _clang_result_evidence(frontend_result)
+                        if frontend_result is not None
+                        else None
+                    ),
+                },
+                diagnostics=(
+                    AnalysisDiagnostic("clang_header_projection_held", reason),
+                ),
+                reliable_categories=(),
+                omitted_categories=(
+                    "module",
+                    "class",
+                    "function",
+                    "declaration",
+                    "import",
+                    "documentation",
+                ),
+                coverage_state=AnalysisCoverageState.PARTIAL,
+            ),
+        )
 
     def path_priority(self, path: Path, root: Path) -> int:
         """Prefer this plugin for accepted C++ headers over generic C claims.
@@ -2320,6 +8595,194 @@ class CppAnalyzer:
         """
         return 1 if path.suffix == ".h" else 0
 
+    def analysis_input_fingerprint(self, path: Path, root: Path) -> str:
+        """Identify literal include inputs using the same snapshot as analysis.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Translation unit considered for incremental reuse.
+        root : pathlib.Path
+            Repository boundary for contained include resolution.
+
+        Returns
+        -------
+        str
+            Dependency identity including header bytes and negative lookups.
+        """
+        from .cpp_generated_analysis import captured_identity
+
+        payload = json.loads(
+            captured_identity(
+                read_include_context(
+                    path, root, include_paths=self._include_search_paths
+                ),
+                self.configuration_fingerprint,
+            )
+        )
+        if self._frontend == "clang":
+            if path.suffix in _CPP_HEADER_SUFFIXES:
+                resolution, reason = self._clang_header_projection_resolution(
+                    path, root
+                )
+                payload["clang_header_projection"] = {
+                    "status": resolution.status if resolution is not None else "held",
+                    "reason": reason,
+                    "candidate_profile_identities": (
+                        list(resolution.candidate_profile_identities)
+                        if resolution is not None
+                        else []
+                    ),
+                    "owner_profile_identity": (
+                        resolution.request.owner_profile.identity
+                        if resolution is not None and resolution.request is not None
+                        else None
+                    ),
+                    "projection_identity": (
+                        resolution.request.identity
+                        if resolution is not None and resolution.request is not None
+                        else None
+                    ),
+                }
+                return validate_analysis_input_fingerprint(
+                    json.dumps(
+                        payload,
+                        sort_keys=True,
+                        ensure_ascii=True,
+                        separators=(",", ":"),
+                    )
+                )
+            try:
+                frontend, profile = _clang_profile_and_frontend(
+                    path=path,
+                    root=root,
+                    compile_commands=self._clang_compile_commands,
+                    captured_profiles=self._clang_captured_profiles,
+                    helper_path=self._clang_helper_path,
+                    build_receipt_path=self._clang_build_receipt_path,
+                )
+                from codira_clang_frontend import frontend_profile_fingerprint
+
+                clang_identity = frontend_profile_fingerprint(frontend, profile)
+            except (ImportError, OSError, ValueError):
+                clang_identity = _clang_fallback_fingerprint(
+                    path=path,
+                    root=root,
+                    frontend_options=(
+                        self._clang_compile_commands,
+                        self._clang_captured_profiles,
+                        self._clang_helper_path,
+                        self._clang_build_receipt_path,
+                        self._clang_attempt_root,
+                    ),
+                )
+            payload["clang_frontend_fingerprint"] = clang_identity
+        return validate_analysis_input_fingerprint(
+            json.dumps(
+                payload, sort_keys=True, ensure_ascii=True, separators=(",", ":")
+            )
+        )
+
+    def analysis_input_fingerprint_matches(
+        self, path: Path, root: Path, expected: str
+    ) -> bool:
+        """Check captured input content and resolutions without reparsing C++.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Translation unit being checked.
+        root : pathlib.Path
+            Repository boundary.
+        expected : str
+            Captured versioned include-input manifest.
+
+        Returns
+        -------
+        bool
+            Whether source/header bytes and resolution outcomes remain current.
+        """
+        try:
+            payload = json.loads(expected)
+        except ValueError:
+            return False
+        if self._frontend == "clang":
+            try:
+                return self.analysis_input_fingerprint(path, root) == expected
+            except (OSError, ValueError):
+                return False
+        return (
+            isinstance(payload, dict)
+            and payload.get("generated_provenance_version") == 1
+            and payload.get("configuration_fingerprint")
+            == self.configuration_fingerprint
+            and include_identity_matches(
+                path,
+                root,
+                json.dumps(
+                    {
+                        key: value
+                        for key, value in payload.items()
+                        if key != "generated_provenance_version"
+                    }
+                ),
+                include_paths=self._include_search_paths,
+            )
+        )
+
+    def _try_clang_frontend(
+        self, path: Path, root: Path
+    ) -> tuple[FrontendResult | None, str]:
+        """Run the optional frontend once with a fresh durable evidence leaf.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Translation unit selected for analysis.
+        root : pathlib.Path
+            Repository root used to resolve configured relative paths.
+
+        Returns
+        -------
+        tuple[codira_clang_frontend.FrontendResult or None, str]
+            Frontend result, or ``None``, and a stable fallback reason.
+
+        Notes
+        -----
+        Failed and successful attempt directories are retained. There is no
+        temporary-directory fallback for raw Clang evidence.
+        """
+        try:
+            frontend, profile = _clang_profile_and_frontend(
+                path=path,
+                root=root,
+                compile_commands=self._clang_compile_commands,
+                captured_profiles=self._clang_captured_profiles,
+                helper_path=self._clang_helper_path,
+                build_receipt_path=self._clang_build_receipt_path,
+            )
+        except ImportError:
+            return None, "optional_clang_frontend_package_unavailable"
+        except (OSError, ValueError):
+            return None, "clang_profile_or_toolchain_unavailable"
+        attempt_root = Path(self._clang_attempt_root)
+        if not attempt_root.is_absolute():
+            attempt_root = root / attempt_root
+        source_key = hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:16]
+        attempt_id = uuid4().hex
+        attempt_dir = attempt_root / source_key / attempt_id
+        try:
+            attempt_dir.mkdir(parents=True, exist_ok=False)
+            result = frontend.analyze(
+                profile, attempt_dir=attempt_dir, attempt_id=attempt_id
+            )
+        except (OSError, ValueError):
+            return None, "clang_attempt_evidence_or_execution_unavailable"
+        if result.status != "parsed" or result.coverage_state != "complete":
+            reason = result.reasons[0] if result.reasons else "clang_result_incomplete"
+            return result, reason
+        return result, ""
+
     def analyze_file(self, path: Path, root: Path) -> AnalysisResult:
         """
         Analyze one C++ source file into normalized artifacts.
@@ -2336,14 +8799,202 @@ class CppAnalyzer:
         codira.models.AnalysisResult
             Normalized analysis result for the file.
         """
-        source = path.read_bytes()
-        root_node = _new_parser().parse(source).root_node
+        if self._frontend == "clang" and path.suffix in _CPP_HEADER_SUFFIXES:
+            clang_header = self._analyze_clang_header(path, root)
+            source_context = read_include_context(
+                path, root, include_paths=self._include_search_paths
+            )
+            source_first = self._analyze_captured_file(path, root, source_context)
+            return replace(
+                _merge_source_first_result(
+                    source_first,
+                    clang_header,
+                    source_context.source,
+                    prefer_configured=True,
+                ),
+                written_source=source_context.source,
+            )
+        clang_fallback_reason: str | None = None
+        clang_result: FrontendResult | None = None
+        if self._frontend == "clang":
+            clang_result, clang_fallback_reason = self._try_clang_frontend(path, root)
+            if clang_result is not None and not clang_fallback_reason:
+                context_identity = None
+                if any(
+                    item.provenance in {"macro_argument", "macro_replacement"}
+                    for item in clang_result.callables
+                ) or any(
+                    item.provenance in {"macro_argument", "macro_replacement"}
+                    for item in clang_result.declarations
+                ):
+                    try:
+                        context_identity = self.analysis_input_fingerprint(path, root)
+                    except (OSError, ValueError):
+                        context_identity = None
+                mapped = _analysis_from_clang_result(
+                    path,
+                    root,
+                    clang_result,
+                    context_identity=context_identity,
+                )
+                if mapped is not None:
+                    source_context = read_include_context(
+                        path, root, include_paths=self._include_search_paths
+                    )
+                    source_first = self._analyze_captured_file(
+                        path, root, source_context
+                    )
+                    mapped = _merge_source_first_result(
+                        source_first,
+                        mapped,
+                        source_context.source,
+                        prefer_configured=True,
+                    )
+                    return replace(
+                        self._apply_clang_output_options(mapped),
+                        written_source=source_context.source,
+                    )
+                clang_fallback_reason = "clang_entities_outside_supported_cpp_dto_scope"
+        context = read_include_context(
+            path, root, include_paths=self._include_search_paths
+        )
+        if self._preprocessor_definitions is not None:
+            from .cpp_generated_analysis import analyze_generated_file
+
+            try:
+                generated = analyze_generated_file(self, path, root, context)
+                combined = generated
+                if _contains_conditional_branches(context.source):
+                    source_first = self._analyze_captured_file(path, root, context)
+                    combined = _merge_source_first_result(
+                        source_first, generated, context.source
+                    )
+                else:
+                    combined = _constrain_unproven_source_calls(generated)
+                if clang_fallback_reason is not None:
+                    combined = _clang_fallback_result(
+                        combined,
+                        clang_fallback_reason,
+                        language="cpp",
+                        frontend_result=clang_result,
+                    )
+                return replace(combined, written_source=context.source)
+            except ValueError as error:
+                result = self._analyze_captured_file(path, root, context)
+                diagnostic = AnalysisDiagnostic(
+                    category="macro_context", message=str(error)
+                )
+                status = result.status
+                if status is None:
+                    status = AnalysisStatus(
+                        grammar="tree-sitter-cpp",
+                        target_contract={"language": "cpp"},
+                        reliable_categories=(
+                            "module",
+                            "class",
+                            "function",
+                            "declaration",
+                            "import",
+                            "documentation",
+                        ),
+                        omitted_categories=(),
+                    )
+                failed = replace(
+                    result,
+                    status=AnalysisStatus(
+                        grammar=status.grammar,
+                        target_contract=status.target_contract,
+                        diagnostics=(
+                            *status.diagnostics,
+                            *(
+                                ()
+                                if diagnostic in status.diagnostics
+                                else (diagnostic,)
+                            ),
+                        ),
+                        reliable_categories=status.reliable_categories,
+                        omitted_categories=status.omitted_categories,
+                        coverage_state=AnalysisCoverageState.PARTIAL,
+                    ),
+                )
+                if clang_fallback_reason is not None:
+                    failed = _clang_fallback_result(
+                        failed,
+                        clang_fallback_reason,
+                        language="cpp",
+                        frontend_result=clang_result,
+                    )
+                return replace(failed, written_source=context.source)
+        result = self._analyze_captured_file(path, root, context)
+        if clang_fallback_reason is not None:
+            result = _clang_fallback_result(
+                result,
+                clang_fallback_reason,
+                language="cpp",
+                frontend_result=clang_result,
+            )
+        return replace(result, written_source=context.source)
+
+    def _analyze_captured_file(
+        self,
+        path: Path,
+        root: Path,
+        context: IncludeContext,
+        *,
+        syntax_root: Node | None = None,
+        comment_source: bytes | None = None,
+        initializer_value_bindings: Mapping[str, tuple[int, ...]] | None = None,
+    ) -> AnalysisResult:
+        """Extract ordinary syntax from an explicitly supplied immutable snapshot.
+
+        Parameters
+        ----------
+        path, root : pathlib.Path
+            Original file and trusted repository root.
+        context : IncludeContext
+            Exact source/header bytes, possibly a generated parser projection.
+        syntax_root : SyntaxNode or None, optional
+            Statement-only syntax already mapped to the original source buffer.
+        comment_source : bytes or None, optional
+            Unmasked source in the same coordinate space for physical attachment.
+        initializer_value_bindings : collections.abc.Mapping[str, tuple[int, ...]] | None, optional
+            Qualified header values proven by the primary macro-context walk.
+
+        Returns
+        -------
+        AnalysisResult
+            Ordinary normalized extraction before generated coordinate repair.
+        """
+        source = context.source
+        root_node = (
+            syntax_root
+            if syntax_root is not None
+            else _parse_with_namespace_bindings(
+                source,
+                bindings=self._namespace_macro_definitions,
+                included_sources=tuple(
+                    (header.source, header.available_after)
+                    for header in context.headers
+                ),
+            )
+        )
+        comment_root = root_node
+        if comment_source is not None:
+            comment_root = _parse_with_namespace_bindings(
+                comment_source,
+                bindings=self._namespace_macro_definitions,
+                included_sources=tuple(
+                    (header.source, header.available_after)
+                    for header in context.headers
+                ),
+            )
+        comment_bytes = source if comment_source is None else comment_source
         module_comment = (
-            _leading_module_comment(root_node, source)
+            _leading_module_comment(comment_root, comment_bytes)
             if self._use_leading_comments
             else None
         )
-        module_doxygen = _leading_module_doxygen(root_node, source)
+        module_doxygen = _leading_module_doxygen(comment_root, comment_bytes)
         module_name = _module_name_for_path(path, root)
         module_stable_id = _module_stable_id(path, root)
         owner_id = _symbol_owner_id(path, root)
@@ -2353,12 +9004,23 @@ class CppAnalyzer:
             root=root_node,
             owner_id=owner_id,
             known_class_names=known_class_names,
+            initializer_value_bindings=(
+                {} if initializer_value_bindings is None else initializer_value_bindings
+            ),
+            comment_maps=(
+                source_comment_maps(comment_root, comment_bytes)
+                if comment_source is not None
+                else None
+            ),
         )
         result = builder.build(
             source_path=path,
             module_name=module_name,
             module_stable_id=module_stable_id,
             module_docstring=module_comment,
+        )
+        result = _attach_external_method_owners(
+            result, context, root, owner_id, root_node
         )
         if not self._use_leading_comments:
             result = replace(
@@ -2398,23 +9060,105 @@ class CppAnalyzer:
                     if declaration.kind != "macro"
                 ),
             )
-        return replace(
-            result,
-            documentation=(
-                _documentation_artifacts(
-                    path=path,
-                    analysis=result,
-                    module_doxygen=module_doxygen,
-                    doxygen_by_lineno=builder.doxygen_by_lineno,
-                )
-                if self._emit_doxygen_documentation
-                else ()
-            ),
-            index_symbols=not root_node.has_error,
-            status=tree_sitter_recovery_status(
-                language="cpp", has_error=root_node.has_error
-            ),
+        result = _constrain_unproven_source_calls(
+            replace(
+                result,
+                documentation=(
+                    _documentation_artifacts(
+                        path=path,
+                        analysis=result,
+                        module_doxygen=module_doxygen,
+                        doxygen_by_lineno=builder.doxygen_by_lineno,
+                    )
+                    if self._emit_doxygen_documentation
+                    else ()
+                ),
+                index_symbols=not root_node.has_error,
+                status=tree_sitter_recovery_status(
+                    language="cpp", has_error=root_node.has_error
+                ),
+            )
         )
+        if builder.ambiguous_class_owners:
+            status = result.status or AnalysisStatus(
+                grammar="tree-sitter-cpp",
+                target_contract={"language": "cpp"},
+                reliable_categories=("module", "class", "function"),
+                omitted_categories=(),
+            )
+            diagnostics = tuple(
+                dict.fromkeys(
+                    (
+                        *status.diagnostics,
+                        *(
+                            AnalysisDiagnostic(
+                                category="ambiguous_class_owner",
+                                message=(
+                                    f"Out-of-class method owner {owner!r} matches "
+                                    "multiple conditional class occurrences; retained "
+                                    "without a class owner."
+                                ),
+                            )
+                            for owner in sorted(builder.ambiguous_class_owners)
+                        ),
+                    )
+                )
+            )
+            result = replace(
+                result,
+                status=replace(
+                    status,
+                    diagnostics=diagnostics,
+                    omitted_categories=tuple(
+                        dict.fromkeys(
+                            (*status.omitted_categories, "class_method_ownership")
+                        )
+                    ),
+                    coverage_state=AnalysisCoverageState.PARTIAL,
+                ),
+            )
+        result = _remove_macro_named_callables(result, source)
+        result = _retain_clean_partial_symbols(result, root_node, source)
+        if context.unresolved:
+            status = result.status or AnalysisStatus(
+                grammar="tree-sitter-cpp",
+                target_contract={"language": "cpp"},
+                reliable_categories=(
+                    "module",
+                    "class",
+                    "function",
+                    "declaration",
+                    "import",
+                    "documentation",
+                ),
+                omitted_categories=(),
+            )
+            result = replace(
+                result,
+                status=replace(
+                    status,
+                    diagnostics=tuple(
+                        dict.fromkeys(
+                            (
+                                *status.diagnostics,
+                                AnalysisDiagnostic(
+                                    category="include_context",
+                                    message=(
+                                        "One or more include dependencies could not "
+                                        "be captured; their declarations and macros "
+                                        "may affect name lookup."
+                                    ),
+                                ),
+                            )
+                        )
+                    ),
+                    omitted_categories=tuple(
+                        dict.fromkeys((*status.omitted_categories, "include_context"))
+                    ),
+                    coverage_state=AnalysisCoverageState.PARTIAL,
+                ),
+            )
+        return result
 
 
 def build_analyzer() -> LanguageAnalyzer:

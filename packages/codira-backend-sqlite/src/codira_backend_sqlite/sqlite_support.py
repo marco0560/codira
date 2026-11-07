@@ -24,6 +24,9 @@ import json
 from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
+from codira.generated import generated_provenance_rows
+from codira.source_evidence import source_evidence_rows
+
 from codira.contracts import (
     EmbeddingIndexingMetrics,
     EmbeddingIndexingPolicy,
@@ -100,6 +103,8 @@ def _clear_index_tables(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM call_records")
     conn.execute("DELETE FROM callable_ref_records")
     conn.execute("DELETE FROM reference_scan_lines")
+    conn.execute("DELETE FROM written_source_tokens")
+    conn.execute("DELETE FROM written_source_lines")
     conn.execute("DELETE FROM overloads")
     conn.execute("DELETE FROM enum_members")
     conn.execute("DELETE FROM embeddings")
@@ -109,6 +114,7 @@ def _clear_index_tables(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM functions")
     conn.execute("DELETE FROM classes")
     conn.execute("DELETE FROM modules")
+    conn.execute("DELETE FROM artifact_provenance")
     conn.execute("DELETE FROM files")
     conn.execute("DELETE FROM analysis_status")
 
@@ -874,8 +880,8 @@ def _store_analysis(
 
     cur = conn.execute(
         "INSERT INTO files"
-        "(path, hash, mtime, size, analyzer_name, analyzer_version) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "(path, hash, mtime, size, analyzer_name, analyzer_version, "
+        "analysis_input_fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             str(file_metadata.path),
             file_metadata.sha256,
@@ -883,10 +889,23 @@ def _store_analysis(
             file_metadata.size,
             file_metadata.analyzer_name,
             file_metadata.analyzer_version,
+            file_metadata.analysis_input_fingerprint,
         ),
     )
     assert cur.lastrowid is not None
     file_id = int(cur.lastrowid)
+    if analysis.written_source is not None:
+        source_lines, source_tokens = source_evidence_rows(
+            analysis.written_source, file_metadata.sha256
+        )
+        conn.executemany(
+            "INSERT INTO written_source_lines(file_id, lineno, line_text) VALUES (?, ?, ?)",
+            [(file_id, lineno, line_text) for lineno, line_text in source_lines],
+        )
+        conn.executemany(
+            "INSERT INTO written_source_tokens(identifier, file_id, lineno) VALUES (?, ?, ?)",
+            [(identifier, file_id, lineno) for identifier, lineno in source_tokens],
+        )
     if analysis.status is not None:
         conn.execute(
             "INSERT OR REPLACE INTO analysis_status "
@@ -957,6 +976,12 @@ def _store_analysis(
     )
     _persist_class_artifacts(artifact_request)
     _persist_function_artifacts(artifact_request)
+    provenance = generated_provenance_rows(analysis)
+    if provenance:
+        conn.executemany(
+            "INSERT INTO artifact_provenance(file_id, stable_id, payload) VALUES (?, ?, ?)",
+            [(file_id, stable_id, payload) for stable_id, payload in provenance],
+        )
     _persist_declaration_artifacts(artifact_request)
     _persist_import_artifacts(
         conn,
@@ -1078,6 +1103,12 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
         return
 
     file_id = int(file_row[0])
+    conn.execute(
+        "UPDATE functions SET class_id = NULL WHERE owner_stable_id IS NOT NULL "
+        "AND class_id IN (SELECT c.id FROM classes c JOIN modules m "
+        "ON m.id = c.module_id WHERE m.file_id = ?)",
+        (file_id,),
+    )
 
     module_ids = [
         int(row[0])
@@ -1195,6 +1226,9 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
     conn.execute("DELETE FROM call_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM callable_ref_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM reference_scan_lines WHERE file_id = ?", (file_id,))
+    conn.execute("DELETE FROM written_source_tokens WHERE file_id = ?", (file_id,))
+    conn.execute("DELETE FROM written_source_lines WHERE file_id = ?", (file_id,))
+    conn.execute("DELETE FROM artifact_provenance WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM files WHERE path = ?", (file_path,))
     conn.execute("DELETE FROM analysis_status WHERE path = ?", (file_path,))
 
@@ -1345,6 +1379,25 @@ def _load_existing_file_hashes(conn: sqlite3.Connection) -> dict[str, str]:
     """
     rows = conn.execute("SELECT path, hash FROM files ORDER BY path").fetchall()
     return {str(path): str(file_hash) for path, file_hash in rows}
+
+
+def _load_existing_file_analysis_inputs(conn: sqlite3.Connection) -> dict[str, str]:
+    """Read source-external input identities without altering content hashes.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open backend connection.
+
+    Returns
+    -------
+    dict[str, str]
+        External analysis-input identity keyed by absolute source path.
+    """
+    rows = conn.execute(
+        "SELECT path, analysis_input_fingerprint FROM files ORDER BY path"
+    ).fetchall()
+    return {str(path): str(fingerprint) for path, fingerprint in rows}
 
 
 def _count_indexed_files(conn: sqlite3.Connection) -> int:

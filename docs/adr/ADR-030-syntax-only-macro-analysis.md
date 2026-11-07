@@ -19,6 +19,9 @@ the analyzer cannot prove from the repository source alone.
 ## Decision
 
 Adopt one syntax-only macro policy for first-party language analyzers.
+[ADR-034](ADR-034-bounded-cpp-declaration-macro-analysis.md) subsequently authorizes
+a bounded, explicitly configured C++ declaration-macro capability. That exception
+does not change this ADR's Rust contract or unconfigured syntax-only behavior.
 
 ### Extract stable source evidence
 

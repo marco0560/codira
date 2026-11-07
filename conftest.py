@@ -5,6 +5,7 @@ Responsibilities
 - Neutralize ambient backend-selection environment variables that would
   otherwise leak into unrelated tests.
 - Provide an explicit helper for tests that need to select one backend.
+- Observe asynchronous descendant termination with a bounded shared assertion.
 
 Design principles
 -----------------
@@ -19,6 +20,8 @@ tests across different operator shell environments.
 
 from __future__ import annotations
 
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -92,3 +95,48 @@ def set_index_backend(
         registry.reset_plugin_registry_caches()
 
     return _set
+
+
+def _assert_process_terminated(pid: int) -> None:
+    """Wait for a signalled process to disappear or become a zombie.
+
+    Parameters
+    ----------
+    pid : int
+        Positive identifier captured from an owned test subprocess.
+
+    Returns
+    -------
+    None
+        The process reaches a terminal state within two seconds. A surviving
+        process fails the assertion; procfs disappearance races count as exit.
+    """
+    assert pid > 0
+    process_state = Path(f"/proc/{pid}/stat")
+    deadline = time.monotonic() + 2
+    while True:
+        try:
+            state = process_state.read_text().split(")", 1)[1].split()[0]
+        except (FileNotFoundError, ProcessLookupError):
+            return
+        if state == "Z":
+            return
+        assert time.monotonic() < deadline, f"owned descendant {pid} survived"
+        time.sleep(0.01)
+
+
+@pytest.fixture
+def assert_process_terminated() -> Callable[[int], None]:
+    """Provide a bounded process-termination assertion for lifecycle tests.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    collections.abc.Callable[[int], None]
+        Shared observer that retains the terminal-state requirement while
+        allowing asynchronous signal delivery and process cleanup to finish.
+    """
+    return _assert_process_terminated

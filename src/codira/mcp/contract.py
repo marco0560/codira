@@ -24,7 +24,7 @@ from codira.config import load_effective_config
 if TYPE_CHECKING:
     from pathlib import Path
 
-MCP_CONTRACT_VERSION: Final = "2.0.0"
+MCP_CONTRACT_VERSION: Final = "2.1.0"
 MAX_OUTPUT_BUDGET: Final = 16_000
 DEFAULT_OUTPUT_BUDGET: Final = 4_000
 CURSOR_GUIDANCE: Final = (

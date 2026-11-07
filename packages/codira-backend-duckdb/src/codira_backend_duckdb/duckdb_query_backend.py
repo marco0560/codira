@@ -63,6 +63,7 @@ from .duckdb_query_primitives import (
 from .duckdb_index_state import (
     _count_indexed_files,
     _current_embedding_state_matches,
+    _load_existing_file_analysis_inputs,
     _load_existing_file_hashes,
     _load_existing_file_ownership,
 )
@@ -95,7 +96,17 @@ if TYPE_CHECKING:
         SymbolRow,
     )
 
-CallEdgeRow = tuple[str, str, str | None, str | None, str | None, str | None, int]
+CallEdgeRow = tuple[
+    str,
+    str,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    int,
+]
 CallableRefRow = tuple[str, str, str | None, str | None, str | None, str | None, int]
 EmbeddingInventoryRow = tuple[str, str, int, int]
 
@@ -319,8 +330,9 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
             ORDER BY m.name, i.name, i.kind, i.lineno"""
         ).fetchall()
         calls = conn.execute(
-            """SELECT ce.caller_module, ce.caller_name, ce.callee_module,
-                ce.callee_name, ce.external_target_kind,
+            """SELECT ce.caller_module, ce.caller_name, ce.caller_stable_id,
+                ce.callee_module, ce.callee_name, ce.callee_stable_id,
+                ce.external_target_kind,
                 ce.external_target_name, ce.resolved
             FROM call_edges ce JOIN files f ON f.id = ce.caller_file_id
             ORDER BY ce.caller_module, ce.caller_name,
@@ -351,20 +363,24 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                 (
                     str(module),
                     str(name),
+                    None if caller_stable_id is None else str(caller_stable_id),
                     None if target_module is None else str(target_module),
                     None if target_name is None else str(target_name),
+                    None if target_stable_id is None else str(target_stable_id),
                     None if target_kind is None else str(target_kind),
                     None if external is None else str(external),
                     int(str(resolved)),
                 )
-                for module, name, target_module, target_name, target_kind, external, resolved in calls
+                for module, name, caller_stable_id, target_module, target_name, target_stable_id, target_kind, external, resolved in calls
             ),
             references=tuple(
                 (
                     str(module),
                     str(name),
+                    None,
                     None if target_module is None else str(target_module),
                     None if target_name is None else str(target_name),
+                    None,
                     None if target_kind is None else str(target_kind),
                     None if external is None else str(external),
                     int(str(resolved)),
@@ -440,7 +456,8 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                     WHERE type != 'method'
                     UNION ALL
                     SELECT s.type, s.module_name,
-                           CASE WHEN c.name IS NOT NULL THEN c.name || '.' || s.name
+                           CASE WHEN COALESCE(fn.owner_name, c.name) IS NOT NULL
+                            THEN COALESCE(fn.owner_name, c.name) || '.' || s.name
                                 ELSE s.name END AS name,
                            s.path, s.lineno
                     FROM eligible_symbols s
@@ -933,7 +950,7 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                     COALESCE(fn_mod.name, cls_mod.name, mod.name, '') AS module_name,
                     CASE
                         WHEN di.function_id IS NOT NULL AND fn.is_method = 1
-                            THEN cls.name || '.' || fn.name
+                            THEN COALESCE(fn.owner_name, cls.name) || '.' || fn.name
                         WHEN di.function_id IS NOT NULL THEN fn.name
                         WHEN di.class_id IS NOT NULL THEN cls.name
                         ELSE COALESCE(mod.name, '')
@@ -1065,6 +1082,7 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
 
         direction_column = "callee_name" if incoming else "caller_name"
         module_column = "callee_module" if incoming else "caller_module"
+        stable_id_column = "callee_stable_id" if incoming else "caller_stable_id"
         safe_direction_column = _validated_graph_identifier(
             direction_column,
             kind="column",
@@ -1077,8 +1095,10 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
             SELECT
                 ce.caller_module,
                 ce.caller_name,
+                ce.caller_stable_id,
                 ce.callee_module,
                 ce.callee_name,
+                ce.callee_stable_id,
                 ce.external_target_kind,
                 ce.external_target_name,
                 ce.resolved
@@ -1093,13 +1113,22 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
         if module is not None:
             query += f" AND {safe_module_column} = ?"
             params.append(module)
+        if request.stable_id is not None:
+            safe_stable_id_column = _validated_graph_identifier(
+                stable_id_column,
+                kind="column",
+            )
+            query += f" AND {safe_stable_id_column} = ?"
+            params.append(request.stable_id)
 
         query += """
             ORDER BY
                 caller_module,
                 caller_name,
+                COALESCE(caller_stable_id, ''),
                 COALESCE(callee_module, ''),
                 COALESCE(callee_name, ''),
+                COALESCE(callee_stable_id, ''),
                 COALESCE(external_target_kind, ''),
                 COALESCE(external_target_name, ''),
                 resolved
@@ -1114,8 +1143,10 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                 (
                     str(caller_module),
                     str(caller_name),
+                    None if caller_stable_id is None else str(caller_stable_id),
                     None if callee_module is None else str(callee_module),
                     None if callee_name is None else str(callee_name),
+                    None if callee_stable_id is None else str(callee_stable_id),
                     None if external_target_kind is None else str(external_target_kind),
                     None if external_target_name is None else str(external_target_name),
                     _backend_int(resolved),
@@ -1123,8 +1154,10 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                 for (
                     caller_module,
                     caller_name,
+                    caller_stable_id,
                     callee_module,
                     callee_name,
+                    callee_stable_id,
                     external_target_kind,
                     external_target_name,
                     resolved,
@@ -1320,6 +1353,7 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
         logical_name: str,
         *,
         prefix: str | None = None,
+        stable_id: str | None = None,
         conn: _BackendCompatibleConnection | None = None,
     ) -> list[SymbolRow]:
         """
@@ -1335,6 +1369,8 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
             Logical symbol identity such as ``helper`` or ``Class.method``.
         prefix : str | None, optional
             Repo-root-relative path prefix used to restrict symbol files.
+        stable_id : str | None, optional
+            Optional exact analyzer-owned identity used to select one symbol.
         conn : _BackendCompatibleConnection | None, optional
             Existing backend-compatible connection to reuse.
 
@@ -1352,6 +1388,7 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
             if "." in logical_name:
                 class_name, method_name = logical_name.rsplit(".", 1)
                 prefix_sql, prefix_params = prefix_clause(normalized_prefix, "fp.path")
+                stable_sql = " AND s.stable_id = ?" if stable_id is not None else ""
                 # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 rows = conn.execute(
                     f"""
@@ -1362,7 +1399,7 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                         fp.path,
                         s.lineno
                     FROM functions fn
-                    JOIN classes c
+                    LEFT JOIN classes c
                       ON fn.class_id = c.id
                     JOIN modules m
                       ON fn.module_id = m.id
@@ -1373,14 +1410,22 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                      AND s.lineno = fn.lineno
                     JOIN files fp
                       ON s.file_id = fp.id
-                    WHERE m.name = ? AND c.name = ? AND fn.name = ?
+                    WHERE m.name = ? AND COALESCE(fn.owner_name, c.name) = ? AND fn.name = ?
+                    {stable_sql}
                     {prefix_sql}
                     ORDER BY fp.path, s.lineno, s.name
                     """,
-                    (module_name, class_name, method_name, *prefix_params),
+                    (
+                        module_name,
+                        class_name,
+                        method_name,
+                        *([stable_id] if stable_id is not None else []),
+                        *prefix_params,
+                    ),
                 ).fetchall()
             else:
                 prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+                stable_sql = " AND s.stable_id = ?" if stable_id is not None else ""
                 # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 rows = conn.execute(
                     f"""
@@ -1390,10 +1435,17 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                       ON s.file_id = f.id
                     WHERE s.module_name = ?
                       AND (s.name = ? OR (s.type = 'module' AND s.module_name = ?))
+                      {stable_sql}
                     {prefix_sql}
                     ORDER BY s.type, s.module_name, f.path, s.lineno
                     """,
-                    (module_name, logical_name, logical_name, *prefix_params),
+                    (
+                        module_name,
+                        logical_name,
+                        logical_name,
+                        *([stable_id] if stable_id is not None else []),
+                        *prefix_params,
+                    ),
                 ).fetchall()
 
             return [
@@ -1439,9 +1491,9 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
         try:
             row = conn.execute(
                 """
-                SELECT c.name
+                SELECT COALESCE(f.owner_name, c.name)
                 FROM functions f
-                JOIN classes c
+                LEFT JOIN classes c
                   ON f.class_id = c.id
                 JOIN modules m
                   ON f.module_id = m.id
@@ -1453,7 +1505,7 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                 """,
                 (module_name, name, lineno, file_path),
             ).fetchone()
-            if row is None:
+            if row is None or row[0] is None:
                 return name
             return f"{str(row[0])}.{name}"
         finally:
@@ -1914,6 +1966,37 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
             conn = self.open_connection(root)
         try:
             return _count_indexed_files(cast("_DuckDBPersistenceConnection", conn))
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def load_existing_file_analysis_inputs(
+        self,
+        root: Path,
+        *,
+        conn: _BackendCompatibleConnection | None = None,
+    ) -> dict[str, str]:
+        """Read persisted external analysis identities independently of hashes.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository whose file rows are queried.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend connection to reuse without closing it.
+
+        Returns
+        -------
+        dict[str, str]
+            Input identity keyed by absolute source path.
+        """
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            return _load_existing_file_analysis_inputs(
+                cast("_DuckDBPersistenceConnection", conn)
+            )
         finally:
             if owns_connection:
                 conn.close()

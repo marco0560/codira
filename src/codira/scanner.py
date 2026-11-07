@@ -428,19 +428,18 @@ def iter_coverage_project_files(root: Path, patterns: Sequence[str]) -> Iterator
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         files = root.rglob("*")
-    return iter(
-        sorted(
-            path
-            for path in files
-            if path.is_file()
-            and not is_repository_scope_excluded(path, root)
-            and any(
-                fnmatch.fnmatch(path.relative_to(root).as_posix(), pattern)
-                or path.relative_to(root).as_posix() == pattern
-                or path.relative_to(root)
-                .as_posix()
-                .startswith(f"{pattern.rstrip('/')}/")
-                for pattern in patterns
-            )
-        )
-    )
+    matches: list[Path] = []
+    for path in files:
+        if not path.is_file() or is_repository_scope_excluded(path, root):
+            continue
+        if not patterns:
+            continue
+        relative = path.relative_to(root).as_posix()
+        if any(
+            fnmatch.fnmatch(relative, pattern)
+            or relative == pattern
+            or relative.startswith(f"{pattern.rstrip('/')}/")
+            for pattern in patterns
+        ):
+            matches.append(path)
+    return iter(sorted(matches))

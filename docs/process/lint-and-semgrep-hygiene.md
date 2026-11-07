@@ -8,7 +8,42 @@ appearing without this inventory.
 
 ## `# noqa` inventory
 
-src/codira/family_runtime.py:468 PLR0913 — federation query options expose
+scripts/clang_frontend_pilot/adapter.py:559 C901, PLR0913, PLR0912 — the
+single-row adapter preserves its direct qualification API while keeping source,
+profile, toolchain, and evidence state transitions explicit.
+
+scripts/clang_frontend_pilot/run.py:142 C901, PLR0912 — checkpoint reuse
+revalidates source, dependency, compiler, helper, receipt, and producer identity
+at one explicit resume boundary.
+
+scripts/clang_frontend_pilot/run.py:306 C901, PLR0913, PLR0912 — the batch
+runner keeps manifest, compile database, checkout, helper, output/checkpoint,
+selection, and capture-mode inputs independently bound and auditable.
+
+scripts/clang_frontend_pilot/cohort.py:35 PLR0913 — cohort entry keeps manifest,
+attempt, repository, fixture, and baseline inputs explicit for deterministic
+grading.
+
+scripts/clang_frontend_pilot/cohort.py:369 PLR0913 — identity validation receives
+every producer/profile/source binding explicitly so mismatch findings remain
+reviewable.
+
+scripts/clang_frontend_pilot/cohort.py:508 PLR0913 — descriptive baseline
+comparison keeps source roots, grader facts, and raw artifact paths explicit.
+
+scripts/clang_frontend_pilot/measure.py:37 PLR0913 — the measurement runner
+receives all input identities and output roots explicitly for resumable batch
+binding.
+
+scripts/clang_frontend_pilot/measure.py:581 C901 — retained-input validation
+checks all source, dependency, helper, and compiler identity dimensions together
+at the resume boundary.
+
+scripts/clang_frontend_pilot/baseline.py:322 BLE001 — analyzer exceptions of any
+type are retained as per-case failure evidence instead of aborting the batch
+and losing later cases.
+
+src/codira/family_runtime.py:472 PLR0913 — federation query options expose
 the independently selectable operation, member filter, pagination, direction,
 and explicit partial-results policy at the shared CLI/MCP boundary.
 
@@ -63,10 +98,12 @@ scripts/characterize_similarity_indexes.py:306 PLR0913 — the reproducible
     corpus runner keeps independently selectable corpus and timing inputs.
 scripts/generate_github_snapshot.py:118 S607 — the fixed `gh` executable is
     intentionally invoked by argument vector; there is no shell interpolation.
-src/codira/indexer.py:1272 PLR0913 — bulk indexing keeps backend, transaction,
+src/codira/indexer.py:1371 PLR0913 — bulk indexing keeps backend, transaction,
     artifact, coverage, and embedding ownership explicit at the orchestration seam.
-src/codira/contracts.py:3317 PLR0913 — the plugin protocol signature is a
+src/codira/contracts.py:3441 PLR0913 — the plugin protocol signature is a
     public compatibility contract and cannot be bundled without breaking providers.
+src/codira/contracts.py:3598 PLR0913 — exact symbol lookup keeps the optional
+    stable identity alongside the existing root, name, prefix, and connection filters.
 src/codira/contracts.py:17 EM101,TRY003 — public contract validation keeps
     short, consistent exception messages at the typed boundary.
 src/codira/config_validation.py:574 C901 — configuration semantics remain deliberately
@@ -83,10 +120,12 @@ src/codira/query_daemon_lifecycle.py:580 PLR0913 — service lifecycle inputs ar
     explicit to preserve platform-independent restart behavior.
 src/codira/query_daemon_ipc.py:902 PLR0913 — IPC server construction exposes its
     authentication, runtime, and connection-boundary dependencies.
-src/codira/cli_index.py:150 C901,PLR0912 — index CLI failure/reporting branches are
+src/codira/cli_index.py:151 C901,PLR0912 — index CLI failure/reporting branches are
     deliberately explicit because they are the user-facing command contract.
-src/codira/cli_queries.py:2395 PLR0913 — daemon context rendering receives the complete
+src/codira/cli_queries.py:2439 PLR0913 — daemon context rendering receives the complete
     explicit query/output/profile request after freshness has been established.
+src/codira/query/exact.py:949 PLR0913 — graph lookup keeps root, module, name,
+    stable identity, prefix, and connection as explicit independent filters.
 src/codira/cli.py:463 PLR0913 — command dispatch receives parsed arguments and
     resolved routing/runtime state as one explicit integration boundary.
 src/codira/cli.py:381 E402 — compatibility re-export import ordering avoids
@@ -147,7 +186,7 @@ scripts/run_final_embedding_model_campaign.py:642,
 scripts/run_final_embedding_model_campaign.py:793,
 scripts/run_retrieval_quality_benchmark.py:913,
 src/codira/docstring.py:1019, src/codira/docstring.py:1114,
-src/codira/index_generation.py:160,
+src/codira/index_generation.py:164,
 src/codira/query_daemon.py:366, src/codira/query_daemon_lifecycle.py:738, and
 src/codira/query_daemon_ipc.py:1372 retain the same category-specific reasons
 as their immediately preceding grouped entries.
@@ -242,11 +281,13 @@ host parser.
 - `src/codira/cli.py:419` (E402): Compatibility imports retain their established initialization order.
 - `src/codira/cli.py:424` (E402): Compatibility imports retain their established initialization order.
 - `src/codira/cli.py:463` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
-- `src/codira/cli_queries.py:2395` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/cli_queries.py:2439` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/contracts.py:3598` (PLR0913): Exact symbol identity remains an explicit optional backend query filter.
+- `src/codira/query/exact.py:949` (PLR0913): Exact symbol identity remains an explicit graph lookup filter.
 - `src/codira/mcp/server.py:272` (SLF001 - required SDK transport boundary): The MCP transport adapter requires the SDK private server boundary.
-- `src/codira/query/context_scoring.py:638` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
-- `src/codira/query/context_scoring.py:787` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
-- `src/codira/query/context_scoring.py:822` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/query/context_scoring.py:686` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/query/context_scoring.py:835` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/query/context_scoring.py:870` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
 
 ### Native subscription preparation
 
@@ -273,3 +314,32 @@ host parser.
 
 - `scripts/agent_efficiency/preparation.py:396` (TRY301): retain a failed boundary record before propagating rejection; changed controls stop before model work.
 - `scripts/run_agent_efficiency_phase6_pilot.py:1787` (PLR0913): readiness supplies an already indexed canary workspace to the same provider executor used by campaign attempts; ordinary attempts retain their original agent workspace.
+
+
+
+
+
+
+
+- `scripts/clang_parity_qualification.py:3108` (BLE001): Retain terminal evidence for every failed native preparation attempt.
+- `scripts/run_test_material_benchmarks.py:2915` (TRY003): Raise the dedicated daemon prerequisite exception with the repository, upstream index status, and retained evidence path in one actionable diagnostic.
+- `scripts/run_test_material_benchmarks.py:3718` (BLE001): Persist extension failures uniformly while the logger keeps concise diagnostics for expected prerequisites and tracebacks for unexpected faults.
+- `scripts/clang_reference_facts.py:624` (C901): The reference normalizer applies one physical ownership policy across declaration, type, field and call categories.
+- `scripts/clang_reference_facts.py:804` (C901, PLR0912): The nested AST visitor keeps lexical owner and callable stacks together with the corresponding source-range checks.
+- `scripts/clang_reference_facts.py:1372` (C901, PLR0912): Profile input validation checks each source, dependency, compiler, resource and receipt binding before capture or reuse.
+- `scripts/clang_reference_facts.py:1906` (C901, PLR0913): The reference runner preserves independently supplied immutable inputs and records every capture and post-capture validation boundary.
+- `scripts/clang_original_whole_file_grade.py:484` (C901): Contract validation checks evidence and control bindings together before grading.
+- `scripts/clang_original_whole_file_grade.py:1362` (C901, PLR0912): Normalized-site reconciliation rejects missing, duplicate, and unbound fact evidence.
+- `scripts/clang_original_whole_file_grade.py:1599` (C901, PLR0912): Source-site reconciliation validates physical coordinates and fact bindings together.
+- `scripts/clang_original_whole_file_grade.py:2010` (C901, PLR0913): The bounded AST expectation builder binds raw-source declarations and normalized facts through one exhaustive reconciliation.
+- `scripts/clang_original_whole_file_grade.py:2253` (C901): The raw AST declaration walk checks physical ownership, lexical parents, types and unsupported source constructs.
+- `scripts/clang_original_whole_file_grade.py:2328` (C901, PLR0912): The nested visitor validates source-owned nodes while preserving lexical record and function context.
+- `scripts/clang_original_whole_file_grade.py:2671` (C901): The Doxygen scanner skips C literals and rejects preprocessing spellings outside its proven lexical subset.
+- `scripts/clang_original_whole_file_grade.py:2836` (C901): The raw enum inventory binds tag and member tokens to source bytes and fails closed on unsupported origins.
+- `scripts/clang_original_whole_file_grade.py:2934` (C901, PLR0912): The nested enum visitor checks physical ownership, source ranges, macro origins, and supported enum shape.
+- `scripts/clang_original_whole_file_grade.py:3097` (C901): Documentation absence requires both lexical source scanning and bound compiler AST evidence.
+- `scripts/clang_original_whole_file_grade.py:3227` (PLR0913): Enum category comparison receives explicit AST, source, identity, and both backend inputs.
+- `scripts/clang_original_whole_file_grade.py:3311` (PLR0913): Category evaluation keeps source and dual-backend evidence boundaries explicit.
+- `scripts/clang_original_whole_file_grade.py:3474` (C901, PLR0913, PLR0912): The call reconciliation checks ownership, locations and target evidence across all source occurrences.
+- `scripts/clang_original_whole_file_grade.py:3669` (C901, PLR0912): The nested call visitor retains lexical caller and macro-origin context while traversing Clang AST nodes.
+- `scripts/clang_original_whole_file_grade.py:4091` (C901, PLR0912, PLR0915): The evidence wrapper validates the complete capture, profile, toolchain, database and snapshot chain before grading.

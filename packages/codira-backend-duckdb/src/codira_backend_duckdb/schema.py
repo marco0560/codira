@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 30
 
 DDL: tuple[str, ...] = (
     "CREATE SEQUENCE IF NOT EXISTS files_id_seq START 1;",
@@ -24,7 +24,8 @@ DDL: tuple[str, ...] = (
         mtime DOUBLE NOT NULL,
         size BIGINT NOT NULL,
         analyzer_name TEXT NOT NULL,
-        analyzer_version TEXT NOT NULL
+        analyzer_version TEXT NOT NULL,
+        analysis_input_fingerprint TEXT NOT NULL DEFAULT ''
     );
     """,
     """
@@ -36,6 +37,30 @@ DDL: tuple[str, ...] = (
         reliable_categories TEXT NOT NULL,
         omitted_categories TEXT NOT NULL,
         coverage_state TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS artifact_provenance (
+        file_id INTEGER NOT NULL,
+        stable_id TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        PRIMARY KEY(file_id, stable_id)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS written_source_lines (
+        file_id INTEGER NOT NULL,
+        lineno INTEGER NOT NULL,
+        line_text TEXT NOT NULL,
+        PRIMARY KEY(file_id, lineno)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS written_source_tokens (
+        identifier TEXT NOT NULL,
+        file_id INTEGER NOT NULL,
+        lineno INTEGER NOT NULL,
+        PRIMARY KEY(identifier, file_id, lineno)
     );
     """,
     """
@@ -85,7 +110,9 @@ DDL: tuple[str, ...] = (
         docstring TEXT,
         has_docstring INTEGER NOT NULL,
         is_method INTEGER NOT NULL,
-        is_public INTEGER NOT NULL
+        is_public INTEGER NOT NULL,
+        owner_name TEXT,
+        owner_stable_id TEXT
     );
     """,
     """
@@ -152,7 +179,14 @@ DDL: tuple[str, ...] = (
         type TEXT NOT NULL,
         module_name TEXT NOT NULL,
         file_id INTEGER NOT NULL,
-        lineno INTEGER NOT NULL
+        lineno INTEGER NOT NULL,
+        semantic_identity_namespace TEXT,
+        semantic_identity_value TEXT,
+        owner_name TEXT,
+        owner_stable_id TEXT,
+        access TEXT,
+        signature TEXT,
+        type_text TEXT
     );
     """,
     """
@@ -177,8 +211,10 @@ DDL: tuple[str, ...] = (
         caller_file_id INTEGER NOT NULL,
         caller_module TEXT NOT NULL,
         caller_name TEXT NOT NULL,
+        caller_stable_id TEXT,
         callee_module TEXT,
         callee_name TEXT,
+        callee_stable_id TEXT,
         unresolved_identity TEXT NOT NULL DEFAULT '',
         external_target_kind TEXT,
         external_target_name TEXT,
@@ -203,9 +239,14 @@ DDL: tuple[str, ...] = (
         file_id INTEGER NOT NULL,
         owner_module TEXT NOT NULL,
         owner_name TEXT NOT NULL,
+        owner_stable_id TEXT,
         kind TEXT NOT NULL,
         base TEXT NOT NULL,
         target TEXT NOT NULL,
+        target_identity_namespace TEXT,
+        target_identity_value TEXT,
+        resolution_mode TEXT,
+        origin TEXT,
         external_target_kind TEXT,
         external_target_name TEXT,
         lineno INTEGER NOT NULL,
@@ -297,7 +338,7 @@ DDL: tuple[str, ...] = (
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_documentation_stable_id ON documentation_artifacts(stable_id);",
     "CREATE INDEX IF NOT EXISTS idx_documentation_file ON documentation_artifacts(file_id);",
     "CREATE INDEX IF NOT EXISTS idx_documentation_kind_format ON documentation_artifacts(kind, source_format);",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_call_edges_identity ON call_edges(caller_file_id, caller_module, caller_name, COALESCE(callee_module, ''), COALESCE(callee_name, ''), unresolved_identity);",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_call_edges_identity ON call_edges(caller_file_id, caller_module, caller_name, COALESCE(caller_stable_id, ''), COALESCE(callee_module, ''), COALESCE(callee_name, ''), COALESCE(callee_stable_id, ''), unresolved_identity);",
     "CREATE INDEX IF NOT EXISTS idx_call_edges_caller ON call_edges(caller_file_id, caller_module, caller_name);",
     "CREATE INDEX IF NOT EXISTS idx_call_edges_caller_lookup ON call_edges(caller_name, caller_module, caller_file_id);",
     "CREATE INDEX IF NOT EXISTS idx_call_edges_callee ON call_edges(callee_module, callee_name);",
@@ -318,13 +359,16 @@ DDL: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_callable_ref_records_file ON callable_ref_records(file_id);",
     "CREATE INDEX IF NOT EXISTS idx_callable_ref_records_owner ON callable_ref_records(owner_module, owner_name);",
     "CREATE INDEX IF NOT EXISTS idx_reference_scan_lines_file ON reference_scan_lines(file_id);",
+    "CREATE INDEX IF NOT EXISTS idx_written_source_token_identifier ON written_source_tokens(identifier, file_id, lineno);",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_embeddings_object_backend_version ON embeddings(object_type, object_id, backend, version);",
     "CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);",
     "CREATE INDEX IF NOT EXISTS idx_functions_name ON functions(name);",
     "CREATE INDEX IF NOT EXISTS idx_classes_name ON classes(name);",
     "CREATE INDEX IF NOT EXISTS idx_symbol_name ON symbol_index(name);",
+    "CREATE INDEX IF NOT EXISTS idx_symbol_semantic_identity ON symbol_index(semantic_identity_namespace, semantic_identity_value);",
     "CREATE INDEX IF NOT EXISTS idx_symbol_exact_lookup ON symbol_index(name, type, module_name, file_id, lineno);",
     "CREATE INDEX IF NOT EXISTS idx_symbol_file ON symbol_index(file_id);",
+    "CREATE INDEX IF NOT EXISTS idx_symbol_semantic_identity ON symbol_index(semantic_identity_namespace, semantic_identity_value);",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_symbol_stable_id ON symbol_index(stable_id);",
     "CREATE INDEX IF NOT EXISTS idx_docstring_issues_file ON docstring_issues(file_id);",
     "CREATE INDEX IF NOT EXISTS idx_duckdb_modules_file_name ON modules(file_id, name);",
@@ -334,6 +378,9 @@ DDL: tuple[str, ...] = (
 )
 
 INDEX_DATA_TABLES: tuple[str, ...] = (
+    "written_source_tokens",
+    "written_source_lines",
+    "artifact_provenance",
     "docstring_issues",
     "call_edges",
     "callable_refs",

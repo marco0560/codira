@@ -606,7 +606,7 @@ First-party analyzer options:
 | `[plugins.analyzer-python]` | `emit_module_documentation`, `emit_imports`, `emit_constants`, `emit_type_aliases` |
 | `[plugins.analyzer-json]` | `enabled_families = ["schema", "package", "release"]`, `emit_dependencies`, `emit_scripts`, `emit_schema_properties` |
 | `[plugins.analyzer-c]` | `use_leading_comments`, `emit_doxygen_documentation`, `include_system_includes`, `emit_macros` |
-| `[plugins.analyzer-cpp]` | `use_leading_comments`, `emit_doxygen_documentation`, `include_system_includes`, `emit_namespaces`, `emit_macros`, `header_language` (`auto`, `c`, `cpp`) |
+| `[plugins.analyzer-cpp]` | `use_leading_comments`, `emit_doxygen_documentation`, `include_system_includes`, `include_search_paths`, `emit_namespaces`, `emit_macros`, `header_language` (`auto`, `c`, `cpp`) |
 | `[plugins.analyzer-rust]` | `include_paths`, `exclude_paths`, `emit_macros` |
 | `[plugins.analyzer-javascript]` | `include_paths`, `exclude_paths`, `emit_variables`, `emit_jsdoc_documentation` |
 | `[plugins.analyzer-typescript]` | `include_paths`, `exclude_paths`, `emit_variables`, `emit_tsdoc_documentation` |
@@ -704,3 +704,24 @@ to disable C++ claims for `.h`, or the default `"auto"` for inference. Filters
 also apply to non-`.h` C++ files, so include the source directories you need.
 Changed source or configuration is handled by normal index freshness and
 incremental analyzer selection. Compilation database flags are not inferred.
+
+### C++ include search roots
+
+Configure explicit header search directories using the indexed repository's build
+or test settings:
+
+```toml
+[plugins.analyzer-cpp]
+include_search_paths = ["include", "llvm/include"]
+```
+
+These paths resolve literal include dependencies, unlike `include_paths`, which
+filters source files. Relative roots start at the indexed repository; absolute
+roots must also remain inside it. Quoted includes first search the including
+file's own directory, then the configured roots in order. Angle includes search
+only the configured roots. The default is an empty list.
+
+Resolved annotation definitions can recover declarations that otherwise require
+unknown macro names. Header bytes, failed lookups, search order and retargeted
+symlinks invalidate incremental reuse. External headers, compilation conditions
+and general macro expansion remain outside this resolver's scope.

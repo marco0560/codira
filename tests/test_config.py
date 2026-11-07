@@ -20,9 +20,11 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import asdict
 from typing import TYPE_CHECKING, cast
 
 import pytest
+import tomlkit
 
 from codira import (
     config as config_module,
@@ -111,6 +113,41 @@ def test_config_facade_reexports_public_model_types() -> None:
         is config_validation.validate_config_mapping
     )
     assert config_module.render_config_toml is config_toml.render_config_toml
+
+
+def test_nested_plugin_arrays_support_config_fingerprinting(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Copy nested TOML arrays into containers accepted by dataclass serialization.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Redirects host configuration paths.
+    tmp_path : pathlib.Path
+        Root containing the isolated plugin configuration.
+
+    Returns
+    -------
+    None
+        Nested source sites retain their values through the fingerprint boundary.
+    """
+    _isolate_config_paths(monkeypatch, tmp_path)
+    path = tmp_path / ".codira" / "config.toml"
+    path.parent.mkdir()
+    path.write_text(
+        "[plugins.analyzer-example]\n"
+        'sites = [["unit.cpp", 0], ["probe.h", 17]]\n'
+        "observations = [{ spans = [[1, 4], [8, 12]], value = true }]\n",
+        encoding="utf-8",
+    )
+    config = load_effective_config(root=tmp_path)
+    copied = asdict(config)["plugins"]["configs"]["analyzer-example"]
+    assert copied == {
+        "sites": [["unit.cpp", 0], ["probe.h", 17]],
+        "observations": [{"spans": [[1, 4], [8, 12]], "value": True}],
+    }
+    assert all(type(site) is list for site in copied["sites"])
 
 
 def test_effective_config_merges_with_env_precedence(
@@ -1529,6 +1566,111 @@ def test_config_validation_handles_coverage_roots(
     else:
         with pytest.raises(ConfigError):
             validate_config_mapping(payload)
+
+
+def test_runtime_config_reads_nested_query_arrays_without_formatting_trees(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Read large nested plugin observations without constructing style trees.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture preventing the expensive formatting parser from being called.
+    tmp_path : pathlib.Path
+        Temporary directory for the runtime configuration.
+
+    Returns
+    -------
+    None
+        Every nested observation retains its exact value and order.
+    """
+    payload = profile_config("default") | {
+        "plugins": {
+            "analyzer-cpp": {
+                "preprocessor_header_queries": {
+                    "source.cpp": {
+                        "queries": [
+                            {
+                                "operator": "__has_include",
+                                "value": ordinal % 2 == 0,
+                                "span": [ordinal, ordinal + 1],
+                                "operand": f"header-{ordinal}.h",
+                            }
+                            for ordinal in range(128)
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    path = tmp_path / "observations.toml"
+    path.write_text(render_config_toml(payload), encoding="utf-8")
+
+    def reject_style_parse(_text: str) -> None:
+        """Reject formatting-tree construction during an ordinary runtime read.
+
+        Parameters
+        ----------
+        _text : str
+            Unused TOML input.
+
+        Returns
+        -------
+        None
+            No formatting tree is permitted.
+
+        Raises
+        ------
+        AssertionError
+            If the runtime invokes the formatting parser.
+        """
+        message = "Runtime read constructed a formatting tree"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(tomlkit, "parse", reject_style_parse)
+    assert config_module._read_config_file(path) == payload
+
+
+def test_runtime_config_retains_extended_toml_syntax(tmp_path: Path) -> None:
+    """Retain TOML escapes supported by the existing formatting parser.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory for the compatibility configuration.
+
+    Returns
+    -------
+    None
+        The TOML 1.1 escape remains readable through the compatibility path.
+    """
+    path = tmp_path / "extended.toml"
+    path.write_text('[plugins.example]\nmessage = "\\e"\n', encoding="utf-8")
+    assert config_module._read_config_file(path) == {
+        "plugins": {"example": {"message": "\x1b"}}
+    }
+
+
+def test_runtime_config_retains_parse_error_contract(tmp_path: Path) -> None:
+    """Retain the configuration error and parser cause for malformed TOML.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory for the malformed configuration.
+
+    Returns
+    -------
+    None
+        The public error retains its file identity and original parser cause.
+    """
+    path = tmp_path / "malformed.toml"
+    path.write_text("[plugins\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="Failed to parse config file") as error:
+        config_module._read_config_file(path)
+    assert str(path) in str(error.value)
+    assert isinstance(error.value.__cause__, tomlkit.exceptions.ParseError)
 
 
 @pytest.mark.parametrize(

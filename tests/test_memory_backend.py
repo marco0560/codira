@@ -50,7 +50,17 @@ if TYPE_CHECKING:
             self,
             request: BackendRelationQueryRequest,
         ) -> list[
-            tuple[str, str, str | None, str | None, str | None, str | None, int]
+            tuple[
+                str,
+                str,
+                str | None,
+                str | None,
+                str | None,
+                str | None,
+                str | None,
+                str | None,
+                int,
+            ]
         ]: ...
 
         def find_callable_refs(

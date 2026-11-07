@@ -79,6 +79,27 @@ def _count_indexed_files(conn: _DuckDBPersistenceConnection) -> int:
     return _backend_int(cast("BackendQueryValue", row[0]))
 
 
+def _load_existing_file_analysis_inputs(
+    conn: _DuckDBPersistenceConnection,
+) -> dict[str, str]:
+    """Read external-input identities without changing source content hashes.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open backend connection.
+
+    Returns
+    -------
+    dict[str, str]
+        Persisted external identity keyed by absolute source path.
+    """
+    rows = conn.execute(
+        "SELECT path, analysis_input_fingerprint FROM files ORDER BY path"
+    ).fetchall()
+    return {str(path): str(fingerprint) for path, fingerprint in rows}
+
+
 def _load_existing_file_ownership(
     conn: _DuckDBPersistenceConnection,
 ) -> dict[str, tuple[str, str]]:

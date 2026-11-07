@@ -75,7 +75,7 @@ __all__ = ["PythonAnalyzer", "build_analyzer"]
 ArtifactT = TypeVar("ArtifactT")
 _PYTHON_BUILTINS = frozenset(dir(builtins))
 _PYTHON_STDLIB_MODULES = frozenset(sys.stdlib_module_names)
-_SYNTAX_ARTIFACT_REVISION = "tree-sitter-python-0.25.0-artifacts-v1"
+_SYNTAX_ARTIFACT_REVISION = "tree-sitter-python-0.25.0-artifacts-v2"
 _GRAMMAR_IDENTITY = PYTHON_TARGET_GRAMMAR
 _ALL_ARTIFACT_CATEGORIES = (
     "module",
@@ -970,7 +970,7 @@ class PythonAnalyzer:
     """
 
     name = "python"
-    version = "12"
+    version = "13"
     discovery_globs: tuple[str, ...] = ("*.py",)
     default_coverage_roots: tuple[str, ...] = ("src", "tests", "scripts")
 
@@ -1166,7 +1166,7 @@ class PythonAnalyzer:
         grammar_diagnostics = tuple(
             AnalysisDiagnostic(
                 "grammar_error",
-                f"Tree-sitter reported {diagnostic.kind.value} syntax",
+                f"Python parser reported {diagnostic.kind.value} syntax",
                 diagnostic.start_line,
                 diagnostic.start_column,
             )

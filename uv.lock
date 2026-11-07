@@ -355,6 +355,7 @@ dev = [
     { name = "codira-analyzer-typescript" },
     { name = "codira-backend-duckdb" },
     { name = "codira-backend-sqlite" },
+    { name = "codira-clang-frontend" },
     { name = "codira-documentation-audit-doxygen" },
     { name = "codira-documentation-audit-go-doc-comments" },
     { name = "codira-documentation-audit-google" },
@@ -448,6 +449,7 @@ dev = [
     { name = "codira-analyzer-typescript", editable = "packages/codira-analyzer-typescript" },
     { name = "codira-backend-duckdb", editable = "packages/codira-backend-duckdb" },
     { name = "codira-backend-sqlite", editable = "packages/codira-backend-sqlite" },
+    { name = "codira-clang-frontend", editable = "packages/codira-clang-frontend" },
     { name = "codira-documentation-audit-doxygen", editable = "packages/codira-documentation-audit-doxygen" },
     { name = "codira-documentation-audit-go-doc-comments", editable = "packages/codira-documentation-audit-go-doc-comments" },
     { name = "codira-documentation-audit-google", editable = "packages/codira-documentation-audit-google" },
@@ -479,7 +481,7 @@ dev = [
 
 [[package]]
 name = "codira-analyzer-bash"
-version = "2.0.0"
+version = "2.0.1"
 source = { editable = "packages/codira-analyzer-bash" }
 dependencies = [
     { name = "codira" },
@@ -501,7 +503,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-c"
-version = "2.0.0"
+version = "2.0.25"
 source = { editable = "packages/codira-analyzer-c" }
 dependencies = [
     { name = "codira" },
@@ -513,17 +515,18 @@ dependencies = [
 requires-dist = [
     { name = "black", marker = "extra == 'test'" },
     { name = "codira", specifier = ">=2.0.0,<3.0.0" },
+    { name = "codira-clang-frontend", marker = "extra == 'clang'", specifier = "==0.4.1" },
     { name = "mypy", marker = "extra == 'test'" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "ruff", marker = "extra == 'test'" },
     { name = "tree-sitter", specifier = ">=0.25.2" },
     { name = "tree-sitter-c", specifier = ">=0.24.1" },
 ]
-provides-extras = ["test"]
+provides-extras = ["clang", "test"]
 
 [[package]]
 name = "codira-analyzer-cpp"
-version = "2.0.1"
+version = "2.0.55"
 source = { editable = "packages/codira-analyzer-cpp" }
 dependencies = [
     { name = "codira" },
@@ -535,17 +538,18 @@ dependencies = [
 requires-dist = [
     { name = "black", marker = "extra == 'test'" },
     { name = "codira", specifier = ">=2.0.0,<3.0.0" },
+    { name = "codira-clang-frontend", marker = "extra == 'clang'", specifier = "==0.4.1" },
     { name = "mypy", marker = "extra == 'test'" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "ruff", marker = "extra == 'test'" },
     { name = "tree-sitter", specifier = ">=0.25.2" },
     { name = "tree-sitter-cpp", specifier = ">=0.23.4" },
 ]
-provides-extras = ["test"]
+provides-extras = ["clang", "test"]
 
 [[package]]
 name = "codira-analyzer-go"
-version = "2.0.2"
+version = "2.0.3"
 source = { editable = "packages/codira-analyzer-go" }
 dependencies = [
     { name = "codira" },
@@ -623,7 +627,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-python"
-version = "2.0.1"
+version = "2.0.2"
 source = { editable = "packages/codira-analyzer-python" }
 dependencies = [
     { name = "codira" },
@@ -645,7 +649,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-rust"
-version = "2.0.2"
+version = "2.0.4"
 source = { editable = "packages/codira-analyzer-rust" }
 dependencies = [
     { name = "codira" },
@@ -684,7 +688,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-typescript"
-version = "2.0.1"
+version = "2.0.3"
 source = { editable = "packages/codira-analyzer-typescript" }
 dependencies = [
     { name = "codira" },
@@ -705,7 +709,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-backend-duckdb"
-version = "2.0.5"
+version = "2.0.13"
 source = { editable = "packages/codira-backend-duckdb" }
 dependencies = [
     { name = "codira" },
@@ -727,7 +731,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-backend-sqlite"
-version = "2.0.3"
+version = "2.0.9"
 source = { editable = "packages/codira-backend-sqlite" }
 dependencies = [
     { name = "codira" },
@@ -737,6 +741,19 @@ dependencies = [
 requires-dist = [
     { name = "black", marker = "extra == 'test'" },
     { name = "codira", specifier = ">=2.0.0,<3.0.0" },
+    { name = "mypy", marker = "extra == 'test'" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "ruff", marker = "extra == 'test'" },
+]
+provides-extras = ["test"]
+
+[[package]]
+name = "codira-clang-frontend"
+version = "0.4.1"
+source = { editable = "packages/codira-clang-frontend" }
+
+[package.metadata]
+requires-dist = [
     { name = "mypy", marker = "extra == 'test'" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "ruff", marker = "extra == 'test'" },
@@ -914,7 +931,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-installer"
-version = "2.0.2"
+version = "2.0.8"
 source = { editable = "packages/codira-installer" }
 dependencies = [
     { name = "textual" },

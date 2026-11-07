@@ -2048,6 +2048,130 @@ class LanguageAnalyzer(Protocol):
 
 
 @runtime_checkable
+class AnalysisInputFingerprintProvider(Protocol):
+    """Declare optional source-external inputs to incremental analysis.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Optional analyzer contract; source-only analyzers need not implement it.
+
+    Notes
+    -----
+    Implementations own deterministic resolution semantics and must include
+    negative lookups that can change their analysis. Fingerprinting must not
+    execute a compiler, build script or another source-generating process.
+    """
+
+    def analysis_input_fingerprint(self, path: Path, root: Path) -> str:
+        """Identify every external input affecting this file's analysis.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Source file being analyzed.
+        root : pathlib.Path
+            Repository boundary and resolution context.
+
+        Returns
+        -------
+        str
+            Nonempty deterministic input identity, kept separate from the
+            source hash and analyzer version. Equal identities must license
+            reuse only when the external inputs cannot change the artifacts.
+
+        Raises
+        ------
+        OSError
+            If required input identity cannot be observed safely.
+        ValueError
+            If external analysis input configuration is invalid.
+        """
+        ...
+
+
+@runtime_checkable
+class AnalysisInputReuseValidator(Protocol):
+    """Offer an optional cheaper check of a previously captured input identity.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Optional analyzer contract for source-backed reuse validation.
+    """
+
+    def analysis_input_fingerprint_matches(
+        self, path: Path, root: Path, expected: str
+    ) -> bool:
+        """Verify that a captured identity still licenses reuse.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Source path being checked.
+        root : pathlib.Path
+            Repository resolution context.
+        expected : str
+            Exact identity captured by analysis_input_fingerprint.
+
+        Returns
+        -------
+        bool
+            True only if the external inputs remain equivalent. Implementations
+            must validate content and relevant negative resolution lookups.
+        """
+        ...
+
+
+@runtime_checkable
+class AnalysisInputStateBackend(Protocol):
+    """Declare backend persistence of per-file external analysis identity.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Optional capability required when an analyzer declares external inputs.
+
+    Notes
+    -----
+    Implementations must persist FileMetadataSnapshot.analysis_input_fingerprint
+    through both incremental and full-index writes, without changing the raw
+    source SHA-256. Source-only backends may omit this optional capability.
+    """
+
+    def load_existing_file_analysis_inputs(
+        self, root: Path, *, conn: object | None = None
+    ) -> dict[str, str]:
+        """Read persisted input fingerprints keyed by absolute source path.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository whose index owns the input identities.
+        conn : object | None, optional
+            Existing backend connection to reuse.
+
+        Returns
+        -------
+        dict[str, str]
+            Persisted identities, including empty values for source-only files.
+        """
+        ...
+
+
+@runtime_checkable
 class ConfigurablePlugin(Protocol):
     """
     Optional plugin contract for explicit configuration injection.
@@ -3471,13 +3595,14 @@ class IndexBackend(Protocol):
         """
         ...
 
-    def find_logical_symbols(
+    def find_logical_symbols(  # noqa: PLR0913 - query filters are independent.
         self,
         root: Path,
         module_name: str,
         logical_name: str,
         *,
         prefix: str | None = None,
+        stable_id: str | None = None,
         conn: object | None = None,
     ) -> list[SymbolRow]:
         """
@@ -3493,6 +3618,8 @@ class IndexBackend(Protocol):
             Logical symbol identity such as ``helper`` or ``Class.method``.
         prefix : str | None, optional
             Repo-root-relative path prefix used to restrict symbol files.
+        stable_id : str | None, optional
+            Optional exact analyzer-owned symbol identity.
         conn : object | None, optional
             Existing backend connection to reuse.
 
@@ -3937,7 +4064,19 @@ class IndexBackend(Protocol):
     def find_call_edges(
         self,
         request: BackendRelationQueryRequest,
-    ) -> list[tuple[str, str, str | None, str | None, str | None, str | None, int]]:
+    ) -> list[
+        tuple[
+            str,
+            str,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            int,
+        ]
+    ]:
         """
         Find exact call edges for a caller or callee logical name.
 
@@ -3948,7 +4087,12 @@ class IndexBackend(Protocol):
 
         Returns
         -------
-        list[tuple[str, str, str | None, str | None, str | None, str | None, int]]
+        list[
+            tuple[
+                str, str, str | None, str | None, str | None, str | None,
+                str | None, str | None, int,
+            ]
+        ]
             Matching call-edge rows ordered deterministically.
         """
         ...

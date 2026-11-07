@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
+from codira.analysis_inputs import analysis_inputs_changed
 from codira.config import (
     effective_config_cache,
     load_effective_config,
@@ -227,6 +228,9 @@ def member_state(member: BoundFamilyMember) -> dict[str, object]:
     }
     if hashes != current:
         message = "Member index is stale: source files changed"
+        raise FamilyError(message)
+    if analysis_inputs_changed(root, backend, analyzers, record.failed_files or ()):
+        message = "Member index is stale: external analysis inputs changed"
         raise FamilyError(message)
     return {
         "generation": record.generation,

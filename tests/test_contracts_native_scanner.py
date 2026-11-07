@@ -17,6 +17,7 @@ This module belongs to the **contract verification layer** and enforces the ADR-
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import sqlite3
 import sys
@@ -1099,8 +1100,9 @@ def test_c_analyzer_extracts_calls_returns_and_module_comment(tmp_path: Path) ->
             lineno=4,
             col_offset=16,
             base="obj",
-            external_target_kind="C:<external>",
+            external_target_kind=None,
             external_target_name="normalize",
+            resolution_mode="exact",
         ),
     )
     assert result.functions[1].returns_value == 1
@@ -1184,7 +1186,7 @@ def test_c_import_kinds_persist_through_sqlite_backend(tmp_path: Path) -> None:
     analysis = CAnalyzer().analyze_file(source, tmp_path)
     snapshot = FileMetadataSnapshot(
         path=source,
-        sha256="abc123",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
         mtime=1.0,
         size=source.stat().st_size,
     )
@@ -1258,7 +1260,7 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
     analysis = CAnalyzer().analyze_file(source, tmp_path)
     snapshot = FileMetadataSnapshot(
         path=source,
-        sha256="abc123",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
         mtime=1.0,
         size=source.stat().st_size,
     )
@@ -1313,7 +1315,9 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
     assert backend.find_symbol(tmp_path, "CALL") == [
         ("macro", "native.types", "CALL", str(source), 14),
     ]
-    assert backend.find_symbol(tmp_path, "fn") == []
+    assert backend.find_symbol(tmp_path, "fn") == [
+        ("function", "native.types", "fn", str(source), 12),
+    ]
     assert backend.find_symbol(tmp_path, "fp") == []
     assert backend.find_symbol(tmp_path, "Color") == [
         ("enum", "native.types", "Color", str(source), 16),
@@ -1486,7 +1490,7 @@ def test_c_declaration_comments_contribute_to_embedding_candidates(
     analysis = CAnalyzer().analyze_file(source, tmp_path)
     snapshot = FileMetadataSnapshot(
         path=source,
-        sha256="abc123",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
         mtime=1.0,
         size=source.stat().st_size,
     )
@@ -1980,7 +1984,7 @@ def test_collect_indexed_file_analyses_routes_paths_to_analyzers(
         {
             str(module): {
                 "path": str(module),
-                "hash": "abc123",
+                "hash": hashlib.sha256(module.read_bytes()).hexdigest(),
                 "mtime": 1.0,
                 "size": module.stat().st_size,
             }
@@ -1995,7 +1999,7 @@ def test_collect_indexed_file_analyses_routes_paths_to_analyzers(
     assert path == module
     assert snapshot == FileMetadataSnapshot(
         path=module,
-        sha256="abc123",
+        sha256=hashlib.sha256(module.read_bytes()).hexdigest(),
         mtime=1.0,
         size=module.stat().st_size,
         analyzer_name="fake-python",

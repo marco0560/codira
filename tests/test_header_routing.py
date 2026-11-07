@@ -25,6 +25,7 @@ from codira_analyzer_cpp import CppAnalyzer
 
 from codira.indexer import _select_language_analyzer, index_repo
 from codira.query.exact import symbol_inventory
+from codira.registry import active_index_backend
 
 
 @pytest.mark.parametrize(
@@ -119,10 +120,12 @@ def test_header_language_change_recovers_indexed_symbols(
     None
         Header-only C++ declarations survive full and incremental indexing.
     """
-    (tmp_path / ".codira.toml").write_text(
+    (tmp_path / ".codira").mkdir()
+    (tmp_path / ".codira/config.toml").write_text(
         f'config_version = 2\n[backend]\nname = "{backend}"\n'
         '[embeddings]\nenabled = false\nsimilarity_index = "exact"\n'
     )
+    assert active_index_backend(root=tmp_path).name == backend
     include = tmp_path / "include"
     include.mkdir()
     c_header = include / "c_api.h"

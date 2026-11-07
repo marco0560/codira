@@ -2,6 +2,12 @@
   "coordinated_version": "2.0.0",
   "packages": [
     {
+      "family": null,
+      "name": "codira-clang-frontend",
+      "path": "packages/codira-clang-frontend",
+      "selectable": false
+    },
+    {
       "configuration_schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -133,6 +139,40 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "clang_attempt_root": {
+            "default": ".artifacts/clang-frontend",
+            "description": "Durable root for immutable per-attempt Clang evidence; may be repository-relative or an explicit absolute path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "clang_build_receipt_path": {
+            "description": "Explicit path to the helper build receipt used for toolchain identity.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "clang_captured_profiles": {
+            "description": "Explicit generic captured-profile JSON file, selected by exact source path and digest.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "clang_compile_commands": {
+            "description": "Explicit compilation database used to select the exact C profile for each source file.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "clang_header_owner_profiles": {
+            "additionalProperties": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "description": "Optional explicit header-to-captured-profile identity selections from header preparation candidates; unresolved headers remain held.",
+            "type": "object"
+          },
+          "clang_helper_path": {
+            "description": "Explicit path to the packaged Clang frontend helper executable.",
+            "minLength": 1,
+            "type": "string"
+          },
           "emit_doxygen_documentation": {
             "default": true,
             "type": "boolean"
@@ -155,6 +195,20 @@
             },
             "type": "array"
           },
+          "expand_declaration_macros": {
+            "default": false,
+            "description": "Expand fully proven bounded file-scope declaration macros from captured source and contained headers; unsupported or uncertain sites remain partial.",
+            "type": "boolean"
+          },
+          "frontend": {
+            "default": "tree-sitter",
+            "description": "Select the optional Clang frontend explicitly; Tree-sitter remains the default.",
+            "enum": [
+              "tree-sitter",
+              "clang"
+            ],
+            "type": "string"
+          },
           "include_paths": {
             "default": [],
             "items": {
@@ -164,9 +218,27 @@
             },
             "type": "array"
           },
+          "include_search_paths": {
+            "default": [],
+            "description": "Ordered contained include search roots; quoted includes first search their own directory.",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
           "include_system_includes": {
             "default": true,
             "type": "boolean"
+          },
+          "preinclude_headers": {
+            "default": [],
+            "description": "Explicit contained caller-context headers whose definitions are available before the source begins.",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
           },
           "use_leading_comments": {
             "default": true,
@@ -185,6 +257,40 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "clang_attempt_root": {
+            "default": ".artifacts/clang-frontend",
+            "description": "Durable root for immutable per-attempt Clang evidence; may be repository-relative or an explicit absolute path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "clang_build_receipt_path": {
+            "description": "Explicit path to the helper build receipt used for toolchain identity.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "clang_captured_profiles": {
+            "description": "Explicit generic captured-profile JSON file, selected by exact source path and digest.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "clang_compile_commands": {
+            "description": "Explicit compilation database used to select the exact C++ profile for each source file.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "clang_header_owner_profiles": {
+            "additionalProperties": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "description": "Optional explicit header-to-captured-profile identity selections from header preparation candidates; unresolved headers remain held.",
+            "type": "object"
+          },
+          "clang_helper_path": {
+            "description": "Explicit path to the packaged Clang frontend helper executable.",
+            "minLength": 1,
+            "type": "string"
+          },
           "emit_doxygen_documentation": {
             "default": true,
             "type": "boolean"
@@ -211,6 +317,15 @@
             },
             "type": "array"
           },
+          "frontend": {
+            "default": "tree-sitter",
+            "description": "Select the optional Clang frontend explicitly; Tree-sitter remains the default.",
+            "enum": [
+              "tree-sitter",
+              "clang"
+            ],
+            "type": "string"
+          },
           "header_language": {
             "default": "auto",
             "description": "Language selection for ambiguous .h headers.",
@@ -230,9 +345,154 @@
             },
             "type": "array"
           },
+          "include_search_paths": {
+            "default": [],
+            "description": "Ordered include search roots, relative to the repository or absolute inside it. Quoted includes search their own directory first.",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
           "include_system_includes": {
             "default": true,
             "type": "boolean"
+          },
+          "namespace_macro_definitions": {
+            "additionalProperties": {
+              "pattern": "^[A-Za-z_][A-Za-z_0-9]*$",
+              "type": "string"
+            },
+            "default": {},
+            "description": "Explicit identifier bindings for namespace declaration names; no branch selection or general expression expansion.",
+            "propertyNames": {
+              "pattern": "^[A-Za-z_][A-Za-z_0-9]*$"
+            },
+            "type": "object"
+          },
+          "preprocessor_definitions": {
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "defined": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "defined"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "description": "Opt-in bounded captured declaration-macro analysis. Strings are object replacements, true is 1, false is explicitly undefined, and {defined: true} supplies opaque definedness. Missing names remain unknown.",
+            "maxProperties": 4096,
+            "propertyNames": {
+              "pattern": "^[A-Za-z_][A-Za-z_0-9]*$"
+            },
+            "type": "object"
+          },
+          "preprocessor_features": {
+            "additionalProperties": {
+              "maxLength": 32,
+              "type": "string"
+            },
+            "description": "Explicit exact native integer answers for pure compiler feature queries. Source overrides and changed argument macros remain unsupported.",
+            "maxProperties": 4096,
+            "type": "object"
+          },
+          "preprocessor_header_queries": {
+            "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+                "context_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "profile_fingerprint": {
+                  "pattern": "^[0-9a-f]{16}$",
+                  "type": "string"
+                },
+                "queries": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "expression": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "include_stack": {
+                        "items": {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "maxLength": 4096,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              {
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            ]
+                          },
+                          "maxItems": 2,
+                          "minItems": 2,
+                          "type": "array"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      },
+                      "path": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "span": {
+                        "items": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "type": "array"
+                      },
+                      "value": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "path",
+                      "span",
+                      "include_stack",
+                      "expression",
+                      "value"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 8192,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "context_sha256",
+                "profile_fingerprint",
+                "queries"
+              ],
+              "type": "object"
+            },
+            "description": "Offline native header-search answers bound to the complete contained input graph, exact prefix configuration, physical invocation and include directive chain. Missing or stale observations remain unknown.",
+            "maxProperties": 1024,
+            "type": "object"
           },
           "use_leading_comments": {
             "default": true,

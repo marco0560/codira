@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "codira context output",
   "type": "object",
-  "required": ["schema_version", "status", "page", "top_matches"],
+  "required": ["schema_version", "status", "page", "top_matches", "source_evidence"],
   "properties": {
     "schema_version": { "type": "string", "enum": ["2.0"] },
     "status": { "type": "string", "enum": ["ok", "no_matches"] },
@@ -22,6 +22,19 @@
     "context": {
       "type": "array",
       "items": { "type": "array", "items": { "type": "string" } }
+    },
+    "source_evidence": {
+      "type": "object",
+      "required": ["items", "truncated", "interpretation"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/source_evidence_item" }
+        },
+        "truncated": { "type": "boolean" },
+        "interpretation": { "type": "string" }
+      },
+      "additionalProperties": false
     },
     "module_expansion": {
       "type": "array",
@@ -129,6 +142,20 @@
     }
   },
   "definitions": {
+    "source_evidence_item": {
+      "type": "object",
+      "required": ["file", "lineno", "identifiers", "text", "file_sha256", "coverage_state", "line_truncated"],
+      "properties": {
+        "file": { "type": "string" },
+        "lineno": { "type": "integer", "minimum": 1 },
+        "identifiers": { "type": "array", "items": { "type": "string" } },
+        "text": { "type": "string" },
+        "file_sha256": { "type": "string" },
+        "coverage_state": { "type": ["string", "null"] },
+        "line_truncated": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
     "symbol": {
       "type": "object",
       "required": ["type", "module", "name", "file", "lineno"],

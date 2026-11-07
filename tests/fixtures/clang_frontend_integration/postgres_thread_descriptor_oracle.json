@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "source_authored_oracle": true,
+  "source_binding": {
+    "repository_id": "c-postgres",
+    "repository_revision": "7beefa8d46978341aed7ba14cc82bf37c0564948",
+    "repository_relative_path": "src/interfaces/ecpg/test/expected/thread-descriptor.c",
+    "source_sha256": "850c1e19b81cf38f423af9d4db0e667c66ccf27911ae7bbfa3e338815cc7fb10"
+  },
+  "profile_status": "complete",
+  "required_source_definitions": ["fn", "main"],
+  "source_written_call_counts": [
+    {"caller": "fn", "callee": "ECPGallocate_desc", "count": 1},
+    {"caller": "fn", "callee": "ECPGdeallocate_desc", "count": 1},
+    {"caller": "fn", "callee": "sqlprint", "count": 2},
+    {"caller": "main", "callee": "pthread_create", "count": 1},
+    {"caller": "main", "callee": "pthread_join", "count": 1}
+  ],
+  "callable_ownership": {
+    "fn": ["ECPGallocate_desc", "ECPGdeallocate_desc", "sqlprint"],
+    "main": ["pthread_create", "pthread_join"]
+  },
+  "inactive_branch_calls": [
+    {"caller": "main", "callee": "_beginthreadex"},
+    {"caller": "main", "callee": "WaitForMultipleObjects"},
+    {"caller": "main", "callee": "CloseHandle"}
+  ],
+  "notes": [
+    "The original C source and profile define no WIN32 macro, so the pthread branch is active.",
+    "The source contains #line remaps; physical line and column assertions are excluded from this initial oracle.",
+    "Macro-generated ECPGget_sqlca calls are not counted as source-written calls.",
+    "This oracle checks selected source-authored definitions and calls, not complete file closure or every included declaration."
+  ]
+}

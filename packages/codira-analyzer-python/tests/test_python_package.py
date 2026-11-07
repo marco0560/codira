@@ -56,6 +56,38 @@ def _golden_analysis_payload(
         "dict[str, object]",
         json.loads(json.dumps(asdict(result), default=str)),
     )
+    # The frozen pre-provenance fixture characterizes ordinary Python artifacts.
+    # Assert the new optional metadata is absent before projecting its old DTO.
+    callables = [*result.functions, *(m for c in result.classes for m in c.methods)]
+    for function in callables:
+        assert function.generated is None
+        assert all(overload.generated is None for overload in function.overloads)
+    functions = cast("list[dict[str, object]]", payload["functions"])
+    classes = cast("list[dict[str, object]]", payload["classes"])
+    methods = [
+        method
+        for klass in classes
+        for method in cast("list[dict[str, object]]", klass["methods"])
+    ]
+    for function_payload in [*functions, *methods]:
+        function_payload.pop("generated")
+        assert function_payload.pop("semantic_identity") is None
+        for call_payload in cast("list[dict[str, object]]", function_payload["calls"]):
+            for optional_key in ("target_identity", "resolution_mode", "origin"):
+                assert call_payload.pop(optional_key) is None
+        for overload_payload in cast(
+            "list[dict[str, object]]", function_payload["overloads"]
+        ):
+            overload_payload.pop("generated")
+    for declaration in cast("list[dict[str, object]]", payload["declarations"]):
+        for optional_key in (
+            "owner_name",
+            "owner_stable_id",
+            "access",
+            "type_text",
+            "generated",
+        ):
+            assert declaration.pop(optional_key) is None
     payload.pop("status")
     payload["source_path"] = str(
         Path(cast("str", payload["source_path"])).relative_to(root)
@@ -441,7 +473,7 @@ def test_python_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.1"
+    assert project["project"]["version"] == "2.0.2"
     assert project["project"]["dependencies"] == [
         "codira>=2.0.0,<3.0.0",
         "tree-sitter>=0.25.2",

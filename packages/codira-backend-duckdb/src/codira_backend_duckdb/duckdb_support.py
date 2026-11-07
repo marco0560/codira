@@ -27,6 +27,8 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
+from codira.generated import generated_provenance_rows
+
 from codira.contracts import (
     BackendError,
     EmbeddingIndexingMetrics,
@@ -85,6 +87,7 @@ from .duckdb_artifact_persistence import (
     _flush_docstring_issue_rows,
     _flush_import_rows,
     _flush_persisted_relationship_rows,
+    _flush_written_source_rows,
     _persist_class_artifacts,
     _persist_declaration_artifacts,
     _persist_documentation_artifacts,
@@ -101,10 +104,28 @@ if TYPE_CHECKING:
     )
     from codira.semantic.embeddings import EmbeddingBackendSpec
 
+from codira.source_evidence import source_evidence_rows
+
 CallRecord = dict[str, str | int]
-CallRow = tuple[int, str, str, str, str, str, str | None, str | None, int, int]
+CallRow = tuple[
+    int,
+    str,
+    str,
+    str | None,
+    str,
+    str,
+    str,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    int,
+    int,
+]
 RefRow = tuple[int, str, str, str, str, str, str, str | None, str | None, int, int]
-FileRow = tuple[int, str, str, float, int, str, str]
+FileRow = tuple[int, str, str, float, int, str, str, str]
 ModuleRow = tuple[int, int, str, str | None, int]
 ClassRow = tuple[int, int, str, int, int | None, str | None, int]
 FunctionRow = tuple[
@@ -119,8 +140,25 @@ FunctionRow = tuple[
     int,
     int,
     int,
+    str | None,
+    str | None,
 ]
-SymbolIndexRow = tuple[int, str, str, str, str, int, int]
+SymbolIndexRow = tuple[
+    int,
+    str,
+    str,
+    str,
+    str,
+    int,
+    int,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+]
 DocumentationArtifactRow = tuple[
     int,
     int,
@@ -176,8 +214,10 @@ _CALL_EDGES_REBUILD_TABLE_DDL = """
         caller_file_id INTEGER NOT NULL,
         caller_module TEXT NOT NULL,
         caller_name TEXT NOT NULL,
+        caller_stable_id TEXT,
         callee_module TEXT,
         callee_name TEXT,
+        callee_stable_id TEXT,
         unresolved_identity TEXT NOT NULL DEFAULT '',
         external_target_kind TEXT,
         external_target_name TEXT,
@@ -204,8 +244,10 @@ _DERIVED_GRAPH_INDEX_DDL = (
         caller_file_id,
         caller_module,
         caller_name,
+        COALESCE(caller_stable_id, ''),
         COALESCE(callee_module, ''),
         COALESCE(callee_name, ''),
+        COALESCE(callee_stable_id, ''),
         unresolved_identity
     );
     """,
@@ -292,13 +334,23 @@ def _flush_pending_relationship_rows(
     if pending_call_rows:
         _flush_call_record_rows(
             conn,
-            sorted(set(pending_call_rows)),
+            sorted(
+                set(pending_call_rows),
+                key=lambda item: tuple(
+                    (value is not None, str(value)) for value in item
+                ),
+            ),
             profiler=profiler,
         )
     if pending_ref_rows:
         _flush_callable_ref_record_rows(
             conn,
-            sorted(set(pending_ref_rows)),
+            sorted(
+                set(pending_ref_rows),
+                key=lambda item: tuple(
+                    (value is not None, str(value)) for value in item
+                ),
+            ),
             profiler=profiler,
         )
 
@@ -337,6 +389,9 @@ def _flush_structural_file_rows(
             "size": pa.array([row[4] for row in rows], type=pa.int64()),
             "analyzer_name": pa.array([row[5] for row in rows], type=pa.string()),
             "analyzer_version": pa.array([row[6] for row in rows], type=pa.string()),
+            "analysis_input_fingerprint": pa.array(
+                [row[7] for row in rows], type=pa.string()
+            ),
         }
     )
     _flush_registered_arrow_table(
@@ -344,8 +399,10 @@ def _flush_structural_file_rows(
         view_name="__codira_pending_file_rows",
         table=table,
         insert_sql="""
-            INSERT INTO files(id, path, hash, mtime, size, analyzer_name, analyzer_version)
-            SELECT id, path, hash, mtime, size, analyzer_name, analyzer_version
+            INSERT INTO files(id, path, hash, mtime, size, analyzer_name,
+                              analyzer_version, analysis_input_fingerprint)
+            SELECT id, path, hash, mtime, size, analyzer_name,
+                   analyzer_version, analysis_input_fingerprint
             FROM __codira_pending_file_rows
             """,
     )
@@ -480,6 +537,8 @@ def _flush_structural_function_rows(
             "has_docstring": pa.array([row[8] for row in rows], type=pa.int64()),
             "is_method": pa.array([row[9] for row in rows], type=pa.int64()),
             "is_public": pa.array([row[10] for row in rows], type=pa.int64()),
+            "owner_name": pa.array([row[11] for row in rows], type=pa.string()),
+            "owner_stable_id": pa.array([row[12] for row in rows], type=pa.string()),
         }
     )
     _flush_registered_arrow_table(
@@ -498,7 +557,9 @@ def _flush_structural_function_rows(
                 docstring,
                 has_docstring,
                 is_method,
-                is_public
+                is_public,
+                owner_name,
+                owner_stable_id
             )
             SELECT
                 id,
@@ -511,7 +572,9 @@ def _flush_structural_function_rows(
                 docstring,
                 has_docstring,
                 is_method,
-                is_public
+                is_public,
+                owner_name,
+                owner_stable_id
             FROM __codira_pending_function_rows
             """,
     )
@@ -550,6 +613,17 @@ def _flush_structural_symbol_index_rows(
             "module_name": pa.array([row[4] for row in rows], type=pa.string()),
             "file_id": pa.array([row[5] for row in rows], type=pa.int64()),
             "lineno": pa.array([row[6] for row in rows], type=pa.int64()),
+            "semantic_identity_namespace": pa.array(
+                [row[7] for row in rows], type=pa.string()
+            ),
+            "semantic_identity_value": pa.array(
+                [row[8] for row in rows], type=pa.string()
+            ),
+            "owner_name": pa.array([row[9] for row in rows], type=pa.string()),
+            "owner_stable_id": pa.array([row[10] for row in rows], type=pa.string()),
+            "access": pa.array([row[11] for row in rows], type=pa.string()),
+            "signature": pa.array([row[12] for row in rows], type=pa.string()),
+            "type_text": pa.array([row[13] for row in rows], type=pa.string()),
         }
     )
     _flush_registered_arrow_table(
@@ -557,8 +631,15 @@ def _flush_structural_symbol_index_rows(
         view_name="__codira_pending_symbol_index_rows",
         table=table,
         insert_sql="""
-            INSERT INTO symbol_index(id, name, stable_id, type, module_name, file_id, lineno)
-            SELECT id, name, stable_id, type, module_name, file_id, lineno
+            INSERT INTO symbol_index(
+                id, name, stable_id, type, module_name, file_id, lineno,
+                semantic_identity_namespace, semantic_identity_value,
+                owner_name, owner_stable_id, access, signature, type_text
+            )
+            SELECT
+                id, name, stable_id, type, module_name, file_id, lineno,
+                semantic_identity_namespace, semantic_identity_value,
+                owner_name, owner_stable_id, access, signature, type_text
             FROM __codira_pending_symbol_index_rows
             """,
     )
@@ -815,6 +896,11 @@ def _flush_structural_rows(
         Pending rows are inserted and buffers are cleared.
     """
     _flush_structural_file_rows(conn, rows.files)
+    _flush_written_source_rows(
+        conn,
+        rows.written_source_lines,
+        rows.written_source_tokens,
+    )
     _flush_structural_module_rows(conn, rows.modules)
     _flush_structural_class_rows(conn, rows.classes)
     _flush_structural_function_rows(conn, rows.functions)
@@ -1348,6 +1434,49 @@ def _process_pending_embedding_rows(
     return (recomputed, reused)
 
 
+def _flush_generated_provenance(
+    conn: _DuckDBPersistenceConnection,
+    file_id: int,
+    rows: Sequence[tuple[str, str]],
+) -> None:
+    """Persist generated callable provenance through a columnar replacement scan.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open backend-owned transaction connection.
+    file_id : int
+        Reserved identity for the containing source file.
+    rows : collections.abc.Sequence[tuple[str, str]]
+        Stable callable identities and deterministic provenance JSON.
+
+    Returns
+    -------
+    None
+        Inserts all available records and unregisters the temporary Arrow view.
+    """
+    if not rows:
+        return
+    import pyarrow as pa
+
+    table = pa.table(
+        {
+            "file_id": pa.array([file_id] * len(rows), type=pa.int64()),
+            "stable_id": pa.array([row[0] for row in rows], type=pa.string()),
+            "payload": pa.array([row[1] for row in rows], type=pa.string()),
+        }
+    )
+    _flush_registered_arrow_table(
+        conn,
+        view_name="_codira_generated_provenance",
+        table=table,
+        insert_sql=(
+            "INSERT INTO artifact_provenance(file_id, stable_id, payload) "
+            "SELECT file_id, stable_id, payload FROM _codira_generated_provenance"
+        ),
+    )
+
+
 def _append_analysis_rows(
     conn: _DuckDBPersistenceConnection,
     root: Path,
@@ -1446,6 +1575,16 @@ def _append_analysis_rows(
     )
 
     file_id = id_allocator.next_id("files")
+    if analysis.written_source is not None:
+        source_lines, source_tokens = source_evidence_rows(
+            analysis.written_source, file_metadata.sha256
+        )
+        structural_rows.written_source_lines.extend(
+            (file_id, lineno, line_text) for lineno, line_text in source_lines
+        )
+        structural_rows.written_source_tokens.extend(
+            (identifier, file_id, lineno) for identifier, lineno in source_tokens
+        )
     structural_rows.files.append(
         (
             file_id,
@@ -1455,6 +1594,7 @@ def _append_analysis_rows(
             file_metadata.size,
             file_metadata.analyzer_name,
             file_metadata.analyzer_version,
+            file_metadata.analysis_input_fingerprint,
         )
     )
     if analysis.status is not None:
@@ -1539,6 +1679,7 @@ def _append_analysis_rows(
     )
     _persist_class_artifacts(artifact_request)
     _persist_function_artifacts(artifact_request)
+    _flush_generated_provenance(conn, file_id, generated_provenance_rows(analysis))
     _persist_declaration_artifacts(artifact_request)
     _persist_import_artifacts(
         conn,
@@ -1959,5 +2100,8 @@ def _delete_indexed_file_data(
     conn.execute("DELETE FROM call_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM callable_ref_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM reference_scan_lines WHERE file_id = ?", (file_id,))
+    conn.execute("DELETE FROM written_source_tokens WHERE file_id = ?", (file_id,))
+    conn.execute("DELETE FROM written_source_lines WHERE file_id = ?", (file_id,))
+    conn.execute("DELETE FROM artifact_provenance WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM files WHERE path = ?", (file_path,))
     conn.execute("DELETE FROM analysis_status WHERE path = ?", (file_path,))

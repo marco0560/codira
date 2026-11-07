@@ -55,6 +55,8 @@ from codira.contracts import (
 )
 from codira.query.context import ContextRequest, context_for
 from codira.query.exact import (
+    CallableRefRow,
+    CallEdgeRow,
     CallTreeNode,
     CallTreeResult,
     EdgeQueryRequest,
@@ -101,7 +103,7 @@ from codira.version import package_version
 
 if TYPE_CHECKING:
     import argparse
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
     from typing import Protocol
 
     from codira.contracts import (
@@ -944,7 +946,7 @@ def _relation_query_metadata(
 
 
 def _relation_rows_payload(
-    rows: list[tuple[str, str, str | None, str | None, str | None, str | None, int]],
+    rows: Sequence[CallEdgeRow | CallableRefRow],
     spec: RelationCommandSpec,
 ) -> list[dict[str, object]]:
     """
@@ -952,7 +954,7 @@ def _relation_rows_payload(
 
     Parameters
     ----------
-    rows : list[tuple[str, str, str | None, str | None, str | None, str | None, int]]
+    rows : list[codira.query.exact.CallEdgeRow | codira.query.exact.CallableRefRow]
         Flat relation rows returned by the exact query layer.
     spec : RelationCommandSpec
         Command-specific rendering and naming hooks.
@@ -962,8 +964,33 @@ def _relation_rows_payload(
     list[dict[str, object]]
         JSON-serializable relation rows.
     """
-    return [
-        {
+    payloads: list[dict[str, object]] = []
+    for row in rows:
+        if len(row) == 9:
+            (
+                source_module,
+                source_name,
+                source_stable_id,
+                target_module,
+                target_name,
+                target_stable_id,
+                external_target_kind,
+                external_target_name,
+                resolved,
+            ) = cast("CallEdgeRow", row)
+        else:
+            (
+                source_module,
+                source_name,
+                target_module,
+                target_name,
+                external_target_kind,
+                external_target_name,
+                resolved,
+            ) = cast("CallableRefRow", row)
+            source_stable_id = None
+            target_stable_id = None
+        payload: dict[str, object] = {
             spec.source_module_key: source_module,
             spec.source_name_key: source_name,
             spec.target_module_key: target_module,
@@ -980,20 +1007,16 @@ def _relation_rows_payload(
             ),
             "resolved": bool(resolved),
         }
-        for (
-            source_module,
-            source_name,
-            target_module,
-            target_name,
-            external_target_kind,
-            external_target_name,
-            resolved,
-        ) in rows
-    ]
+        if source_stable_id is not None:
+            payload[f"{spec.source_module_key[:-7]}_stable_id"] = source_stable_id
+        if target_stable_id is not None:
+            payload[f"{spec.target_module_key[:-7]}_stable_id"] = target_stable_id
+        payloads.append(payload)
+    return payloads
 
 
 def _print_relation_rows(
-    rows: list[tuple[str, str, str | None, str | None, str | None, str | None, int]],
+    rows: Sequence[CallEdgeRow | CallableRefRow],
     spec: RelationCommandSpec,
 ) -> None:
     """
@@ -1001,7 +1024,7 @@ def _print_relation_rows(
 
     Parameters
     ----------
-    rows : list[tuple[str, str, str | None, str | None, str | None, str | None, int]]
+    rows : list[codira.query.exact.CallEdgeRow | codira.query.exact.CallableRefRow]
         Flat relation rows returned by the exact query layer.
     spec : RelationCommandSpec
         Command-specific rendering and naming hooks.
@@ -1011,15 +1034,29 @@ def _print_relation_rows(
     None
         Relation rows are printed to standard output.
     """
-    for (
-        source_module,
-        source_name,
-        target_module,
-        target_name,
-        external_target_kind,
-        external_target_name,
-        resolved,
-    ) in rows:
+    for row in rows:
+        if len(row) == 9:
+            (
+                source_module,
+                source_name,
+                _source_id,
+                target_module,
+                target_name,
+                _target_id,
+                external_target_kind,
+                external_target_name,
+                resolved,
+            ) = cast("CallEdgeRow", row)
+        else:
+            (
+                source_module,
+                source_name,
+                target_module,
+                target_name,
+                external_target_kind,
+                external_target_name,
+                resolved,
+            ) = cast("CallableRefRow", row)
         source = f"{source_module}.{source_name}"
         if resolved:
             assert target_module is not None
@@ -1397,6 +1434,8 @@ def _call_tree_node_payload(node: CallTreeNode) -> dict[str, object]:
         "cycle": node.cycle,
         "children": [_call_tree_node_payload(child) for child in node.children],
     }
+    if node.stable_id is not None:
+        payload["stable_id"] = node.stable_id
     if node.external_target_kind is not None:
         payload["external_target_kind"] = node.external_target_kind
     if node.external_target_name is not None:
@@ -1421,6 +1460,11 @@ def _call_tree_result_payload(tree: CallTreeResult) -> dict[str, object]:
     return {
         "module": tree.root_module,
         "name": tree.root_name,
+        **(
+            {"stable_id": tree.root_stable_id}
+            if tree.root_stable_id is not None
+            else {}
+        ),
         "display": _call_tree_display(
             tree.root_module,
             tree.root_name,

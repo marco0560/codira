@@ -24,7 +24,18 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from codira.generated import GeneratedCallableEvidence, GeneratedDeclarationEvidence
+
 CallKind = Literal["name", "attribute", "unresolved"]
+CallResolutionMode = Literal["legacy", "exact"]
+CallOrigin = Literal[
+    "source_written",
+    "macro_replacement",
+    "macro_argument",
+    "implicit",
+    "template_instantiation",
+    "unknown",
+]
 CallableReferenceKind = Literal[
     "mapping_value",
     "sequence_item",
@@ -59,6 +70,7 @@ DeclarationKind = Literal[
     "json_release_plugin",
     "json_release_branch",
 ]
+DeclarationAccess = Literal["public", "protected", "private"]
 DocumentationKind = Literal["module", "file", "section", "declaration"]
 DocumentationSourceFormat = Literal[
     "markdown_section",
@@ -96,6 +108,14 @@ class OverloadArtifact:
         Inclusive last source line when reported by the parser.
     docstring : str | None
         Overload docstring when present.
+    generated : codira.generated.GeneratedCallableEvidence | None, optional
+        Generated declaration evidence, including version-three compiler-observed
+        alias identity when directly resolved; distinct from physical spelling.
+
+    Returns
+    -------
+    None
+        Immutable overload metadata.
     """
 
     stable_id: str
@@ -105,6 +125,8 @@ class OverloadArtifact:
     lineno: int
     end_lineno: int | None
     docstring: str | None
+
+    generated: GeneratedCallableEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -155,6 +177,14 @@ class FileMetadataSnapshot:
         Analyzer name responsible for the indexed file.
     analyzer_version : str, optional
         Analyzer version responsible for the indexed file.
+    analysis_input_fingerprint : str, optional
+        Analyzer-owned identity of external analysis inputs, separate from the
+        original source SHA-256. Empty for source-only analysis.
+
+    Returns
+    -------
+    None
+        Immutable source metadata and analysis-input identity.
     """
 
     path: Path
@@ -163,6 +193,7 @@ class FileMetadataSnapshot:
     size: int
     analyzer_name: str = ""
     analyzer_version: str = ""
+    analysis_input_fingerprint: str = ""
 
 
 @dataclass(frozen=True)
@@ -210,6 +241,21 @@ class DeclarationArtifact:
     enum_members : tuple[codira.models.EnumMemberArtifact, ...], optional
         Ordered enum members attached to the declaration when ``kind`` is
         ``"enum"``.
+    owner_name : str | None, optional
+        Qualified lexical owner for member declarations when known.
+    owner_stable_id : str | None, optional
+        Analyzer-owned stable identity of the member declaration's owner.
+    access : DeclarationAccess | None, optional
+        Language-neutral access classification when the language defines one.
+    type_text : str | None, optional
+        Analyzer-reported declaration type, without a source-spelling guarantee.
+    generated : codira.generated.GeneratedDeclarationEvidence | None, optional
+        Compiler-observed macro origin for an existing variable or constant.
+
+    Returns
+    -------
+    None
+        Immutable declaration metadata and optional compiler-observed origin.
     """
 
     name: str
@@ -219,6 +265,32 @@ class DeclarationArtifact:
     signature: str
     docstring: str | None = None
     enum_members: tuple[EnumMemberArtifact, ...] = ()
+    owner_name: str | None = None
+    owner_stable_id: str | None = None
+    access: DeclarationAccess | None = None
+    type_text: str | None = None
+    generated: GeneratedDeclarationEvidence | None = None
+
+
+@dataclass(frozen=True)
+class SemanticIdentity:
+    """Opaque analyzer-provided identity used for exact callable matching.
+
+    Parameters
+    ----------
+    namespace : str
+        Identity scheme identifier chosen by the producing analyzer.
+    value : str
+        Opaque identity value whose interpretation remains analyzer-owned.
+
+    Returns
+    -------
+    None
+        Immutable semantic identity pair.
+    """
+
+    namespace: str
+    value: str
 
 
 @dataclass(frozen=True)
@@ -242,6 +314,14 @@ class CallSite:
         Analyzer-provided classifier for unresolved external targets.
     external_target_name : str | None, optional
         Analyzer-provided display name for unresolved external targets.
+    target_identity : codira.models.SemanticIdentity | None, optional
+        Exact analyzer-provided target identity when known.
+    resolution_mode : {"legacy", "exact"} | None, optional
+        Resolution policy. ``"exact"`` prevents name-based fallback even when
+        ``target_identity`` is absent; ``None`` preserves legacy behavior.
+    origin : CallOrigin | None, optional
+        Source origin classification when the analyzer can distinguish written,
+        macro-generated, implicit, or instantiated calls.
     """
 
     kind: CallKind
@@ -251,6 +331,9 @@ class CallSite:
     base: str = ""
     external_target_kind: str | None = None
     external_target_name: str | None = None
+    target_identity: SemanticIdentity | None = None
+    resolution_mode: CallResolutionMode | None = None
+    origin: CallOrigin | None = None
 
 
 @dataclass(frozen=True)
@@ -331,6 +414,20 @@ class FunctionArtifact:
         Ordered callable-object reference records owned by the function.
     overloads : tuple[codira.models.OverloadArtifact, ...], optional
         Ordered overload declarations attached to the canonical callable.
+    owner_name : str | None, optional
+        Explicit class owner for a method whose declaration lives in another file.
+    owner_stable_id : str | None, optional
+        Proven declaration identity of that owner when uniquely known.
+    generated : codira.generated.GeneratedCallableEvidence | None, optional
+        Generated declaration evidence, including version-three compiler-observed
+        alias identity when directly resolved; distinct from physical spelling.
+    semantic_identity : codira.models.SemanticIdentity | None, optional
+        Exact analyzer-provided callable identity when known.
+
+    Returns
+    -------
+    None
+        Immutable callable data without copying an external class declaration.
     """
 
     name: str
@@ -351,6 +448,10 @@ class FunctionArtifact:
     calls: tuple[CallSite, ...]
     callable_refs: tuple[CallableReference, ...]
     overloads: tuple[OverloadArtifact, ...] = ()
+    owner_name: str | None = None
+    owner_stable_id: str | None = None
+    generated: GeneratedCallableEvidence | None = None
+    semantic_identity: SemanticIdentity | None = None
 
     def logical_name(self, *, class_name: str | None = None) -> str:
         """
@@ -359,13 +460,16 @@ class FunctionArtifact:
         Parameters
         ----------
         class_name : str | None, optional
-            Owning class name for method artifacts.
+            Owning class name for method artifacts; defaults to an explicit
+            external owner reference when present.
 
         Returns
         -------
         str
             Unqualified function name or ``Class.method`` for methods.
         """
+        if class_name is None:
+            class_name = self.owner_name
         if class_name is None:
             return self.name
         return f"{class_name}.{self.name}"
@@ -607,6 +711,8 @@ class AnalysisResult:
     index_symbols : bool, optional
         Whether backend persistence should index the module, symbol, relation,
         and reference artifacts as code symbols.
+    written_source : bytes or None, optional
+        Exact bytes captured for neutral written-source evidence, when available.
 
     Notes
     -----
@@ -623,6 +729,7 @@ class AnalysisResult:
     documentation: tuple[DocumentationArtifact, ...] = ()
     index_symbols: bool = True
     status: AnalysisStatus | None = None
+    written_source: bytes | None = None
 
     def iter_functions(self) -> tuple[FunctionArtifact, ...]:
         """

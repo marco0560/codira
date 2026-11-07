@@ -20,12 +20,15 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, TextIO
+from typing import TYPE_CHECKING, Any, TextIO
 from unittest.mock import Mock
 
 import pytest
 
 from scripts import run_test_material_benchmarks as RUNNER
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def test_stage_progress_numbers_measurements_and_prunes_exclusions(
@@ -443,13 +446,109 @@ def test_unusable_partial_index_withholds_queries(
     assert campaign.results[-1]["reason"] == "full index is partial"
 
 
-def test_architecture_timeout_stops_descendants(tmp_path: Path) -> None:
+def test_missing_daemon_member_reports_retained_index_evidence_without_traceback(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Report the failed daemon prerequisite concisely and preserve its evidence.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable run directory containing the failed index checkpoint.
+    caplog : pytest.LogCaptureFixture
+        Captures the concise prerequisite diagnostic.
+
+    Returns
+    -------
+    None
+        The message identifies its repository and retains the source result.
+    """
+    evidence = tmp_path / "stages/primary/fixture/index-full/result.json"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text(
+        json.dumps({"key": "primary/fixture/index-full", "status": "failed"})
+    )
+    spec = {"daemon_repository": "fixture", "profiles": [{"id": "primary"}]}
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"temporary_root": str(tmp_path)}))
+
+    with pytest.raises(RUNNER.MissingDaemonPrerequisite) as raised:
+        RUNNER.missing_daemon_prerequisite(spec, tmp_path)
+    campaign = RUNNER.Campaign(manifest, tmp_path, False)
+    result = RUNNER.record_extension_failure(
+        campaign, tmp_path, "daemons", raised.value
+    )
+
+    diagnostic = caplog.records[-1]
+    assert "repository 'fixture'" in diagnostic.message
+    assert "upstream index status is failed" in diagnostic.message
+    assert str(evidence) in diagnostic.message
+    assert diagnostic.exc_info is None
+    assert json.loads(evidence.read_text())["status"] == "failed"
+    assert campaign.results == [result]
+    assert (
+        json.loads((tmp_path / "stages/daemons/exception/result.json").read_text())
+        == result
+    )
+
+
+def test_missing_daemon_member_tolerates_non_object_index_record(
+    tmp_path: Path,
+) -> None:
+    """Keep the prerequisite diagnostic actionable for malformed JSON shape.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable run directory containing an unexpected JSON value.
+
+    Returns
+    -------
+    None
+        A non-object record is reported as unreadable instead of crashing.
+    """
+    evidence = tmp_path / "stages/primary/fixture/index-full/result.json"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("[]")
+    spec = {"daemon_repository": "fixture", "profiles": [{"id": "primary"}]}
+
+    with pytest.raises(RUNNER.MissingDaemonPrerequisite, match="status is unreadable"):
+        RUNNER.missing_daemon_prerequisite(spec, tmp_path)
+
+
+def test_unexpected_extension_failure_keeps_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Keep traceback diagnostics for faults outside expected prerequisites.
+
+    Parameters
+    ----------
+    caplog : pytest.LogCaptureFixture
+        Captures the unexpected extension failure diagnostic.
+
+    Returns
+    -------
+    None
+        The error remains logged with its traceback.
+    """
+    error = RuntimeError("unexpected runner fault")
+    RUNNER.log_stage_failure(error)
+
+    assert caplog.records[-1].exc_info is not None
+    assert caplog.records[-1].message == "Benchmark stage failed; retaining checkpoint"
+
+
+def test_architecture_timeout_stops_descendants(
+    tmp_path: Path, assert_process_terminated: Callable[[int], None]
+) -> None:
     """Bound a dummy rendering process and terminate its sleeping descendant.
 
     Parameters
     ----------
     tmp_path : pathlib.Path
         Disposable workspace for dummy executable and logs.
+    assert_process_terminated : collections.abc.Callable[[int], None]
+        Bounded observer of owned descendant termination.
 
     Returns
     -------
@@ -476,8 +575,7 @@ def test_architecture_timeout_stops_descendants(tmp_path: Path) -> None:
     assert result["samples"][0]["timing_valid"] is False
     assert result["samples"][0]["timeout_seconds"] == 0.5
     child_pid = int(Path(result["stdout"]).read_text().strip())
-    status = Path(f"/proc/{child_pid}/status")
-    assert not status.exists() or "State:\tZ" in status.read_text()
+    assert_process_terminated(child_pid)
     assert (tmp_path / "run/stages/arch/result.json").is_file()
 
 
@@ -882,7 +980,7 @@ def test_baseline_preparation_and_resume_identity_guard(
     tmp_path : pathlib.Path
         Disposable source and run receipts.
     monkeypatch : pytest.MonkeyPatch
-        Blocks external process launch.
+        Supplies a consistent version prerequisite and blocks process launch.
 
     Returns
     -------
@@ -921,10 +1019,19 @@ def test_baseline_preparation_and_resume_identity_guard(
         ["runner", str(prepared), "--run", "--resume", "--run-id", "partial-run"],
     )
     monkeypatch.setattr(subprocess, "check_output", Mock(return_value="commit\n"))
+    provenance = Mock(
+        return_value={
+            "distribution": "test-version",
+            "generated": "test-version",
+            "consistent": True,
+        }
+    )
+    monkeypatch.setattr(RUNNER, "version_provenance", provenance)
     launch = Mock()
     monkeypatch.setattr(subprocess, "Popen", launch)
     with pytest.raises(ValueError, match="resume identity differs"):
         RUNNER.main()
+    provenance.assert_called_once_with()
     launch.assert_not_called()
     assert json.loads((run / "identity.json").read_text())["partial"] is True
 

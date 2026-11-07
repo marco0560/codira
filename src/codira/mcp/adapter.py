@@ -49,6 +49,8 @@ from codira.query.context import ContextRequest, context_for
 from codira.query.context_orchestration import context_page_reader
 from codira.query.evidence import expand_symbol, symbol_identity
 from codira.query.exact import (
+    CallableRefRow,
+    CallEdgeRow,
     EdgeQueryRequest,
     docstring_issues,
     find_call_edges,
@@ -604,6 +606,10 @@ class MCPAdapter:
             return {
                 "status": context.get("status"),
                 "items": items,
+                "source_evidence": context.get(
+                    "source_evidence",
+                    {"items": [], "truncated": False},
+                ),
                 "_total": page_info.get("total", 0),
                 **({"explain": context.get("explain")} if explain else {}),
             }
@@ -614,6 +620,8 @@ class MCPAdapter:
             message = "Core context page returned an invalid total count"
             raise TypeError(message)
         total = total_value
+        source_evidence = cast("dict[str, object]", result.get("source_evidence", {}))
+        source_evidence_truncated = source_evidence.get("truncated") is True
         next_offset = offset + len(cast("list[object]", result["items"]))
         has_more = next_offset < total
         next_cursor = (
@@ -636,7 +644,12 @@ class MCPAdapter:
         return self._envelope(
             result,
             page=page,
-            truncation={"truncated": False, "reasons": []},
+            truncation={
+                "truncated": source_evidence_truncated,
+                "reasons": (
+                    ["source_evidence_limit"] if source_evidence_truncated else []
+                ),
+            },
             output_budget=None,
         )
 
@@ -1846,7 +1859,18 @@ class MCPAdapter:
 
     @staticmethod
     def _relation_payload(
-        row: tuple[str, str, str | None, str | None, str | None, str | None, int],
+        row: tuple[str, str, str | None, str | None, str | None, str | None, int]
+        | tuple[
+            str,
+            str,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            int,
+        ],
         *,
         source_prefix: str,
         target_prefix: str,
@@ -1855,7 +1879,8 @@ class MCPAdapter:
 
         Parameters
         ----------
-        row : tuple[str, str, str | None, str | None, str | None, str | None, int]
+        row : tuple[str, str, str | None, str | None, str | None, str | None, int] or tuple
+            with caller and callee stable identities for call edges.
             Direct-core relation row.
         source_prefix : str
             Semantic prefix for the source endpoint fields.
@@ -1867,15 +1892,30 @@ class MCPAdapter:
         dict[str, object]
             JSON-compatible relation endpoints and resolution metadata.
         """
-        (
-            source_module,
-            source_name,
-            target_module,
-            target_name,
-            external_target_kind,
-            external_target_name,
-            resolved,
-        ) = row
+        if len(row) == 9:
+            (
+                source_module,
+                source_name,
+                source_stable_id,
+                target_module,
+                target_name,
+                target_stable_id,
+                external_target_kind,
+                external_target_name,
+                resolved,
+            ) = cast("CallEdgeRow", row)
+        else:
+            (
+                source_module,
+                source_name,
+                target_module,
+                target_name,
+                external_target_kind,
+                external_target_name,
+                resolved,
+            ) = cast("CallableRefRow", row)
+            source_stable_id = None
+            target_stable_id = None
         result: dict[str, object] = {
             f"{source_prefix}_module": source_module,
             f"{source_prefix}_name": source_name,
@@ -1883,6 +1923,10 @@ class MCPAdapter:
             f"{target_prefix}_name": target_name,
             "resolved": bool(resolved),
         }
+        if source_stable_id is not None:
+            result[f"{source_prefix}_stable_id"] = source_stable_id
+        if target_stable_id is not None:
+            result[f"{target_prefix}_stable_id"] = target_stable_id
         if external_target_kind is not None:
             result["external_target_kind"] = external_target_kind
         if external_target_name is not None:

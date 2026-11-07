@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -225,7 +226,7 @@ def test_thread_workers_reuse_parent_configured_analyzers(
     metadata = {
         str(module): {
             "path": str(module),
-            "hash": "abc123",
+            "hash": hashlib.sha256(module.read_bytes()).hexdigest(),
             "mtime": 1.0,
             "size": module.stat().st_size,
         }
@@ -296,7 +297,7 @@ def test_process_worker_reuses_initialized_analyzers(
     module.write_text("value = 1\n", encoding="utf-8")
     metadata = {
         "path": str(module),
-        "hash": "abc123",
+        "hash": hashlib.sha256(module.read_bytes()).hexdigest(),
         "mtime": 1.0,
         "size": module.stat().st_size,
     }

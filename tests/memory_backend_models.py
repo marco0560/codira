@@ -15,7 +15,18 @@ if TYPE_CHECKING:
     from codira.types import DocumentationRow, SymbolRow
 
 
-CallEdgeRow = tuple[str, str, str | None, str | None, str | None, str | None, int]
+CallEdgeRow = tuple[
+    str,
+    str,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    int,
+]
+CallableRefRow = tuple[str, str, str | None, str | None, str | None, str | None, int]
 
 
 @dataclass(frozen=True)

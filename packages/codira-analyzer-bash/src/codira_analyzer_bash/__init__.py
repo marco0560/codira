@@ -20,6 +20,8 @@ analysis path for Bash and POSIX-style `.sh` scripts.
 from __future__ import annotations
 
 from dataclasses import replace
+from collections import Counter
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -30,6 +32,8 @@ if TYPE_CHECKING:
 
 from tree_sitter import Language, Node, Parser
 from tree_sitter_bash import language
+
+from codira_analyzer_bash.bash_syntax import bash_parse_root
 
 from codira.contracts import (
     AnalyzerCapabilityDeclaration,
@@ -56,6 +60,7 @@ _LANGUAGE = Language(language())
 _SHELL_BUILTINS = frozenset(
     {
         ".",
+        "[",
         ":",
         "alias",
         "bg",
@@ -235,6 +240,52 @@ def _extract_calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
     calls: list[CallSite] = []
 
     for node in _named_descendants(body):
+        ancestor = node.parent
+        nested = False
+        while ancestor is not None and ancestor != body:
+            if ancestor.type == "function_definition":
+                nested = True
+                break
+            if (
+                ancestor.type == "command_substitution"
+                and source[ancestor.start_byte : ancestor.start_byte + 2] == b"$("
+            ):
+                before = ancestor.start_byte - 1
+                while before >= 0 and source[before] == ord("\\"):
+                    before -= 1
+                if (ancestor.start_byte - before - 1) % 2:
+                    nested = True
+                    break
+            ancestor = ancestor.parent
+        if nested:
+            continue
+        if node.type == "unset_command":
+            calls.append(
+                CallSite(
+                    kind="name",
+                    target="unset",
+                    lineno=node.start_point.row + 1,
+                    col_offset=node.start_point.column,
+                    external_target_kind="Bash:<builtin>",
+                    external_target_name="unset",
+                )
+            )
+            continue
+        if (
+            node.type == "test_command"
+            and source[node.start_byte : node.start_byte + 2] != b"[["
+        ):
+            calls.append(
+                CallSite(
+                    kind="name",
+                    target="[",
+                    lineno=node.start_point.row + 1,
+                    col_offset=node.start_point.column,
+                    external_target_kind="Bash:<builtin>",
+                    external_target_name="[",
+                )
+            )
+            continue
         if node.type != "command":
             continue
 
@@ -244,6 +295,11 @@ def _extract_calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
 
         target = _node_text(name_node, source).strip()
         if not target:
+            continue
+        if (
+            re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", target)
+            and source[name_node.end_byte : name_node.end_byte + 1] == b"="
+        ):
             continue
 
         external_target_kind = (
@@ -260,6 +316,100 @@ def _extract_calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
             )
         )
 
+    additional = _heredoc_calls(body, source)
+    existing = {(call.target, call.lineno, call.col_offset) for call in calls}
+    missing: list[CallSite] = []
+    for call in additional:
+        key = (call.target, call.lineno, call.col_offset)
+        if key not in existing:
+            missing.append(call)
+            existing.add(key)
+    if missing:
+        calls.extend(missing)
+        calls.sort(key=lambda call: (call.lineno, call.col_offset, call.target))
+    return tuple(calls)
+
+
+def _heredoc_calls(body: Node, source: bytes) -> tuple[CallSite, ...]:
+    """Recover complete command substitutions from expanding heredoc content.
+
+    Parameters
+    ----------
+    body : tree_sitter.Node
+        Lexical function body with provider-recognized heredoc content.
+    source : bytes
+        Original bytes used for every command name and physical coordinate.
+
+    Returns
+    -------
+    tuple[codira.models.CallSite, ...]
+        Complete substitution calls, deduplicated by the caller.
+
+    Notes
+    -----
+    Quoted delimiters and escaped dollar signs remain literal. A fragment is
+    eligible only when its first substitution is complete and error-free.
+    Parsing never executes shell code.
+    """
+    calls: list[CallSite] = []
+    for node in _named_descendants(body):
+        if node.type != "heredoc_body":
+            continue
+        ancestor = node.parent
+        redirect: Node | None = None
+        nested_function = False
+        while ancestor is not None and ancestor != body:
+            if ancestor.type == "function_definition":
+                nested_function = True
+                break
+            if ancestor.type == "heredoc_redirect":
+                redirect = ancestor
+            ancestor = ancestor.parent
+        if nested_function or redirect is None:
+            continue
+        delimiter = next(
+            (n for n in redirect.named_children if n.type == "heredoc_start"), None
+        )
+        if delimiter is None or any(
+            byte in _node_text(delimiter, source) for byte in "'\"\\"
+        ):
+            continue
+        content = source[node.start_byte : node.end_byte]
+        heredoc = next(
+            (n for n in redirect.named_children if n.type == "heredoc_body"), None
+        )
+        if heredoc is None:
+            continue
+        for match in re.finditer(rb"\$\(", content):
+            start = node.start_byte + match.start()
+            before = start - 1
+            while before >= node.start_byte and source[before] == ord("\\"):
+                before -= 1
+            if (start - before - 1) % 2:
+                continue
+            probe = b"echo " + source[start : heredoc.end_byte]
+            tree = _new_parser().parse(probe).root_node
+            substitution = next(
+                (
+                    n
+                    for n in _named_descendants(tree)
+                    if n.type == "command_substitution"
+                    and n.start_byte == 5
+                    and not n.has_error
+                ),
+                None,
+            )
+            if substitution is None:
+                continue
+            line_starts = [0]
+            for index, byte in enumerate(probe):
+                if byte == ord("\n"):
+                    line_starts.append(index + 1)
+            for call in _extract_calls(substitution, probe):
+                offset = start + line_starts[call.lineno - 1] + call.col_offset - 5
+                line = source.count(b"\n", 0, offset) + 1
+                column = offset - source.rfind(b"\n", 0, offset) - 1
+                calls.append(replace(call, lineno=line, col_offset=column))
     return tuple(calls)
 
 
@@ -270,7 +420,7 @@ def _extract_functions(
     module_name: str,
 ) -> tuple[FunctionArtifact, ...]:
     """
-    Extract top-level shell function definitions from one source file.
+    Extract lexical functions with the established direct-definition policy.
 
     Parameters
     ----------
@@ -285,10 +435,21 @@ def _extract_functions(
     -------
     tuple[codira.models.FunctionArtifact, ...]
         Deterministic function artifacts ordered by source position.
-    """
-    functions_by_name: dict[str, FunctionArtifact] = {}
 
-    for child in root.children:
+    Notes
+    -----
+    Direct program definitions keep the last occurrence of each name, matching
+    the existing analyzer contract. Conditional and nested definitions remain
+    explicit variants; no execution branch is selected.
+    """
+    functions: list[FunctionArtifact] = []
+    last_direct: dict[str, Node] = {}
+    for child in root.named_children:
+        name_node = child.child_by_field_name("name")
+        if child.type == "function_definition" and name_node is not None:
+            last_direct[_node_text(name_node, source).strip()] = child
+
+    for child in _named_descendants(root):
         if child.type != "function_definition":
             continue
 
@@ -300,33 +461,48 @@ def _extract_functions(
         name = _node_text(name_node, source).strip()
         if not name:
             continue
+        if child.parent == root and last_direct.get(name) != child:
+            continue
 
         signature_end = body.start_byte if body is not None else child.end_byte
         signature = source[child.start_byte : signature_end].decode("utf-8").strip()
 
-        functions_by_name[name] = FunctionArtifact(
-            name=name,
-            stable_id=_function_stable_id(module_name, name),
-            lineno=child.start_point.row + 1,
-            end_lineno=body.end_point.row + 1 if body is not None else None,
-            signature=" ".join(signature.split()),
-            docstring=None,
-            has_docstring=0,
-            is_method=0,
-            is_public=1,
-            parameters=(),
-            returns_value=0,
-            yields_value=0,
-            raises=0,
-            has_asserts=0,
-            decorators=(),
-            calls=_extract_calls(body, source),
-            callable_refs=(),
+        functions.append(
+            FunctionArtifact(
+                name=name,
+                stable_id=_function_stable_id(module_name, name),
+                lineno=child.start_point.row + 1,
+                end_lineno=body.end_point.row + 1 if body is not None else None,
+                signature=" ".join(signature.split()),
+                docstring=None,
+                has_docstring=0,
+                is_method=0,
+                is_public=1,
+                parameters=(),
+                returns_value=0,
+                yields_value=0,
+                raises=0,
+                has_asserts=0,
+                decorators=(),
+                calls=_extract_calls(body, source),
+                callable_refs=(),
+            )
         )
 
+    counts = Counter(function.stable_id for function in functions)
+    occurrences: Counter[str] = Counter()
+    distinct: list[FunctionArtifact] = []
+    for function in functions:
+        if counts[function.stable_id] > 1:
+            occurrences[function.stable_id] += 1
+            function = replace(
+                function,
+                stable_id=f"{function.stable_id}:definition:{function.lineno}:{occurrences[function.stable_id]}",
+            )
+        distinct.append(function)
     return tuple(
         sorted(
-            functions_by_name.values(),
+            distinct,
             key=lambda artifact: artifact.lineno,
         )
     )
@@ -340,14 +516,19 @@ class BashAnalyzer:
     ----------
     None
 
+    Returns
+    -------
+    None
+        Instances provide syntax-only shell extraction.
+
     Notes
     -----
-    This analyzer is backed by ``tree-sitter-bash`` so shell extraction work
-    can evolve from a real parse tree instead of regex heuristics.
+    Isolated Tree-sitter parses and source-owned views retain written functions
+    and lexical command sites without executing shell code.
     """
 
     name = "bash"
-    version = "2"
+    version = "3"
     discovery_globs: tuple[str, ...] = ("*.sh", "*.bash")
     default_coverage_roots: tuple[str, ...] = ("scripts",)
 
@@ -498,7 +679,7 @@ class BashAnalyzer:
             Normalized analysis result for the file.
         """
         source = path.read_bytes()
-        root_node = _new_parser().parse(source).root_node
+        root_node = bash_parse_root(_new_parser(), source)
         module_name = _module_name_for_path(path, root)
         return replace(
             AnalysisResult(

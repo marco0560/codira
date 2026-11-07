@@ -160,8 +160,8 @@ def test_call_edges_are_resolved_and_deduplicated(tmp_path: Path) -> None:
     assert find_call_edges(
         EdgeQueryRequest(root=tmp_path, name="caller", module="pkg.a")
     ) == [
-        ("pkg.a", "caller", "pkg.a", "dynamic", None, None, 1),
-        ("pkg.a", "caller", "pkg.a", "helper", None, None, 1),
+        ("pkg.a", "caller", None, "pkg.a", "dynamic", None, None, None, 1),
+        ("pkg.a", "caller", None, "pkg.a", "helper", None, None, None, 1),
     ]
     assert find_call_edges(
         EdgeQueryRequest(
@@ -171,7 +171,17 @@ def test_call_edges_are_resolved_and_deduplicated(tmp_path: Path) -> None:
             incoming=True,
         )
     ) == [
-        ("pkg.a", "imported_caller", "pkg.b", "imported_helper", None, None, 1),
+        (
+            "pkg.a",
+            "imported_caller",
+            None,
+            "pkg.b",
+            "imported_helper",
+            None,
+            None,
+            None,
+            1,
+        ),
     ]
 
     assert find_callable_refs(
@@ -448,9 +458,9 @@ def test_refs_cli_tree_prints_bounded_incoming_references(
     ]
 
 
-def test_c_call_edges_are_indexed_for_same_module_functions(tmp_path: Path) -> None:
+def test_c_source_calls_bind_unique_static_helpers(tmp_path: Path) -> None:
     """
-    Ensure lightweight C call extraction reaches the stored call-edge graph.
+    Resolve a source-only call to its unique file-scope static definition.
 
     Parameters
     ----------
@@ -460,7 +470,7 @@ def test_c_call_edges_are_indexed_for_same_module_functions(tmp_path: Path) -> N
     Returns
     -------
     None
-        The test asserts same-module C call-edge resolution.
+        The exact target identity links the call and helper definition.
     """
     module = tmp_path / "native" / "sample.c"
     module.parent.mkdir()
@@ -481,7 +491,17 @@ def test_c_call_edges_are_indexed_for_same_module_functions(tmp_path: Path) -> N
     assert find_call_edges(
         EdgeQueryRequest(root=tmp_path, name="public_api", module="native.sample")
     ) == [
-        ("native.sample", "public_api", "native.sample", "helper", None, None, 1),
+        (
+            "native.sample",
+            "public_api",
+            "c:function:native/sample.c:public_api",
+            "native.sample",
+            "helper",
+            "c:function:native/sample.c:helper",
+            None,
+            None,
+            1,
+        ),
     ]
     assert find_call_edges(
         EdgeQueryRequest(
@@ -490,7 +510,19 @@ def test_c_call_edges_are_indexed_for_same_module_functions(tmp_path: Path) -> N
             module="native.sample",
             incoming=True,
         )
-    ) == [("native.sample", "public_api", "native.sample", "helper", None, None, 1)]
+    ) == [
+        (
+            "native.sample",
+            "public_api",
+            "c:function:native/sample.c:public_api",
+            "native.sample",
+            "helper",
+            "c:function:native/sample.c:helper",
+            None,
+            None,
+            1,
+        ),
+    ]
 
 
 def test_top_level_help_includes_examples_and_calls_command() -> None:

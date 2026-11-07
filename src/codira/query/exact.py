@@ -27,7 +27,7 @@ None
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from codira.contracts import BackendRelationQueryRequest, BackendSymbolInventoryItem
 from codira.query.symbol_resolution import alias_candidates
@@ -45,8 +45,19 @@ if TYPE_CHECKING:
         SymbolRow,
     )
 
-CallEdgeRow = tuple[str, str, str | None, str | None, str | None, str | None, int]
+CallEdgeRow = tuple[
+    str,
+    str,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    int,
+]
 CallableRefRow = tuple[str, str, str | None, str | None, str | None, str | None, int]
+RelationRow = CallEdgeRow | CallableRefRow
 EmbeddingInventoryRow = tuple[str, str, int, int]
 BackendConnection = object
 
@@ -73,6 +84,8 @@ class CallTreeNode:
         Analyzer-provided classifier for unresolved external targets.
     external_target_name : str | None, optional
         Analyzer-provided display name for unresolved external targets.
+    stable_id : str | None, optional
+        Stable identity for an exact callable endpoint.
     """
 
     module: str | None
@@ -82,6 +95,7 @@ class CallTreeNode:
     cycle: bool = False
     external_target_kind: str | None = None
     external_target_name: str | None = None
+    stable_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +110,8 @@ class CallTreeResult:
         deterministically.
     root_name : str
         Root logical symbol name requested by the user.
+    root_stable_id : str | None, optional
+        Stable identity of the root callable when the tree is identity-bound.
     children : tuple[codira.query.exact.CallTreeNode, ...]
         Deterministically ordered first-level traversal nodes.
     incoming : bool
@@ -112,6 +128,7 @@ class CallTreeResult:
 
     root_module: str | None
     root_name: str
+    root_stable_id: str | None
     children: tuple[CallTreeNode, ...]
     incoming: bool
     truncated_by_depth: bool
@@ -370,7 +387,7 @@ def find_symbol_enum_members(
 
 def _find_relation_rows(
     request: EdgeQueryRequest, *, callable_refs: bool
-) -> list[CallEdgeRow]:
+) -> list[RelationRow]:
     """Resolve method aliases after an exact graph name has no matches.
 
     Parameters
@@ -382,7 +399,7 @@ def _find_relation_rows(
 
     Returns
     -------
-    list[CallEdgeRow]
+    list[codira.query.exact.RelationRow]
         Exact rows, or deduplicated method rows with canonical owner names.
         Existing exact-name matches take precedence over short-name aliases.
     """
@@ -390,8 +407,49 @@ def _find_relation_rows(
     owns_connection = request.conn is None
     conn = backend.open_connection(request.root) if owns_connection else request.conn
     fetch = backend.find_callable_refs if callable_refs else backend.find_call_edges
+
+    def fetch_normalized(request: EdgeQueryRequest) -> list[RelationRow]:
+        """Normalize legacy or current backend relation tuples.
+
+        Parameters
+        ----------
+        request : EdgeQueryRequest
+            Query parameters and active connection for one relation fetch.
+
+        Returns
+        -------
+        list[codira.query.exact.RelationRow]
+            Backend-independent relation rows with exact-call endpoint slots.
+
+        Raises
+        ------
+        ValueError
+            If a backend returns an unsupported row shape.
+        """
+        raw_rows = fetch(replace(request, conn=conn))
+        normalized: list[RelationRow] = []
+        for row in raw_rows:
+            if callable_refs:
+                if len(row) != 7:
+                    msg = "Callable-reference backends must return seven-field rows."
+                    raise ValueError(msg)
+                normalized.append(row)
+            elif len(row) == 7:
+                normalized.append(
+                    cast(
+                        "CallEdgeRow",
+                        (row[0], row[1], None, row[2], row[3], None, *row[4:]),
+                    )
+                )
+            elif len(row) == 9:
+                normalized.append(row)
+            else:
+                msg = "Call-edge backends must return seven- or nine-field rows."
+                raise ValueError(msg)
+        return normalized
+
     try:
-        rows = fetch(replace(request, conn=conn))
+        rows = fetch_normalized(request)
         if rows:
             return rows
         identities: set[tuple[str, str]] = set()
@@ -405,7 +463,9 @@ def _find_relation_rows(
             if name == request.name or identity in identities:
                 continue
             identities.add(identity)
-            for row in fetch(replace(request, name=name, module=symbol[1], conn=conn)):
+            for row in fetch_normalized(
+                replace(request, name=name, module=symbol[1], conn=conn)
+            ):
                 if row not in rows:
                     rows.append(row)
         return rows
@@ -430,7 +490,7 @@ def find_call_edges(
     list[CallEdgeRow]
         Matching call-edge rows ordered deterministically.
     """
-    return _find_relation_rows(request, callable_refs=False)
+    return cast("list[CallEdgeRow]", _find_relation_rows(request, callable_refs=False))
 
 
 def build_call_tree(
@@ -463,28 +523,30 @@ def build_call_tree(
     if not initial_rows:
         return None
 
-    root_candidates: set[tuple[str | None, str]] = {
+    root_candidates: set[tuple[str | None, str, str | None]] = {
         (
-            (callee_module, callee_name)
+            (callee_module, callee_name, callee_stable_id)
             if request.incoming
             and callee_module is not None
             and callee_name is not None
-            else (caller_module, caller_name)
+            else (caller_module, caller_name, caller_stable_id)
         )
         for (
             caller_module,
             caller_name,
+            caller_stable_id,
             callee_module,
             callee_name,
+            callee_stable_id,
             _external_target_kind,
             _external_target_name,
             _resolved,
         ) in initial_rows
     }
     if len(root_candidates) == 1:
-        root_module, root_name = next(iter(root_candidates))
+        root_module, root_name, root_stable_id = next(iter(root_candidates))
     else:
-        root_module, root_name = request.module, request.name
+        root_module, root_name, root_stable_id = request.module, request.name, None
 
     rendered_nodes = 1
     rendered_edges = 0
@@ -493,25 +555,27 @@ def build_call_tree(
 
     def ordered_neighbors(
         rows: list[CallEdgeRow],
-    ) -> list[tuple[str | None, str, bool, str | None, str | None]]:
+    ) -> list[tuple[str | None, str, str | None, bool, str | None, str | None]]:
         deduped: dict[
-            tuple[str | None, str, bool, str | None, str | None],
-            tuple[str | None, str, bool, str | None, str | None],
+            tuple[str | None, str, str | None, bool, str | None, str | None],
+            tuple[str | None, str, str | None, bool, str | None, str | None],
         ] = {}
         for (
             caller_module,
             caller_name,
+            caller_stable_id,
             callee_module,
             callee_name,
+            callee_stable_id,
             external_target_kind,
             external_target_name,
             resolved,
         ) in rows:
-            key: tuple[str | None, str, bool, str | None, str | None]
+            key: tuple[str | None, str, str | None, bool, str | None, str | None]
             if request.incoming:
-                key = (caller_module, caller_name, True, None, None)
+                key = (caller_module, caller_name, caller_stable_id, True, None, None)
             elif resolved and callee_module is not None and callee_name is not None:
-                key = (callee_module, callee_name, True, None, None)
+                key = (callee_module, callee_name, callee_stable_id, True, None, None)
             else:
                 key = (
                     None,
@@ -519,6 +583,7 @@ def build_call_tree(
                         external_target_kind,
                         external_target_name,
                     ),
+                    None,
                     False,
                     external_target_kind,
                     external_target_name,
@@ -527,18 +592,20 @@ def build_call_tree(
         return sorted(
             deduped.values(),
             key=lambda item: (
-                0 if item[2] else 1,
+                0 if item[3] else 1,
                 item[0] or "",
                 item[1],
+                item[2] or "",
             ),
         )
 
     def build_children(
         current_module: str | None,
         current_name: str,
+        current_stable_id: str | None,
         *,
         depth: int,
-        path: tuple[tuple[str | None, str], ...],
+        path: tuple[tuple[str | None, str, str | None], ...],
     ) -> tuple[CallTreeNode, ...]:
         nonlocal rendered_edges, rendered_nodes, truncated_by_depth, truncated_by_nodes
 
@@ -550,6 +617,7 @@ def build_call_tree(
                 incoming=request.incoming,
                 prefix=request.prefix,
                 conn=request.conn,
+                stable_id=current_stable_id,
             )
         )
         if not rows:
@@ -562,6 +630,7 @@ def build_call_tree(
         for (
             child_module,
             child_name,
+            child_stable_id,
             child_resolved,
             external_target_kind,
             external_target_name,
@@ -585,7 +654,7 @@ def build_call_tree(
                 )
                 continue
 
-            child_identity = (child_module, child_name)
+            child_identity = (child_module, child_name, child_stable_id)
             if child_identity in path:
                 children.append(
                     CallTreeNode(
@@ -593,6 +662,7 @@ def build_call_tree(
                         name=child_name,
                         resolved=True,
                         cycle=True,
+                        stable_id=child_stable_id,
                     )
                 )
                 continue
@@ -600,6 +670,7 @@ def build_call_tree(
             grandchildren = build_children(
                 child_module,
                 child_name,
+                child_stable_id,
                 depth=depth + 1,
                 path=path + (child_identity,),
             )
@@ -609,6 +680,7 @@ def build_call_tree(
                     name=child_name,
                     resolved=True,
                     children=grandchildren,
+                    stable_id=child_stable_id,
                 )
             )
 
@@ -617,11 +689,13 @@ def build_call_tree(
     return CallTreeResult(
         root_module=root_module,
         root_name=root_name,
+        root_stable_id=root_stable_id,
         children=build_children(
             root_module,
             root_name,
+            root_stable_id,
             depth=0,
-            path=((root_module, root_name),),
+            path=((root_module, root_name, root_stable_id),),
         ),
         incoming=request.incoming,
         truncated_by_depth=truncated_by_depth,
@@ -647,7 +721,9 @@ def find_callable_refs(
     list[CallableRefRow]
         Matching callable-reference rows ordered deterministically.
     """
-    return _find_relation_rows(request, callable_refs=True)
+    return cast(
+        "list[CallableRefRow]", _find_relation_rows(request, callable_refs=True)
+    )
 
 
 def build_ref_tree(
@@ -834,6 +910,7 @@ def build_ref_tree(
     return CallTreeResult(
         root_module=root_module,
         root_name=root_name,
+        root_stable_id=None,
         children=build_children(
             root_module,
             root_name,
@@ -869,12 +946,13 @@ def find_include_edges(
     return backend.find_include_edges(request)
 
 
-def find_logical_symbols(
+def find_logical_symbols(  # noqa: PLR0913 - independent endpoint query filters.
     root: Path,
     module_name: str,
     logical_name: str,
     *,
     prefix: str | None = None,
+    stable_id: str | None = None,
     conn: BackendConnection | None = None,
 ) -> list[SymbolRow]:
     """
@@ -890,6 +968,8 @@ def find_logical_symbols(
         Logical symbol identity such as ``helper`` or ``Class.method``.
     prefix : str | None, optional
         Repo-root-relative path prefix used to restrict symbol files.
+    stable_id : str | None, optional
+        Optional exact analyzer-owned identity used to select one symbol.
     conn : object | None, optional
         Existing database connection to reuse. When omitted, the function
         opens and closes its own connection.
@@ -898,15 +978,35 @@ def find_logical_symbols(
     -------
     list[codira.types.SymbolRow]
         Matching indexed symbol rows ordered deterministically.
+
+    Raises
+    ------
+    TypeError
+        If the backend raises a type error unrelated to an unsupported
+        ``stable_id`` keyword on a legacy provider.
     """
     backend = active_index_backend(root=root)
-    return backend.find_logical_symbols(
-        root,
-        module_name,
-        logical_name,
-        prefix=prefix,
-        conn=conn,
-    )
+    if stable_id is None:
+        return backend.find_logical_symbols(
+            root,
+            module_name,
+            logical_name,
+            prefix=prefix,
+            conn=conn,
+        )
+    try:
+        return backend.find_logical_symbols(
+            root,
+            module_name,
+            logical_name,
+            prefix=prefix,
+            stable_id=stable_id,
+            conn=conn,
+        )
+    except TypeError as exc:
+        if "stable_id" not in str(exc) or "keyword" not in str(exc):
+            raise
+        return []
 
 
 def logical_symbol_name(

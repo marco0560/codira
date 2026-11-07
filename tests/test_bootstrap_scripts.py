@@ -2266,6 +2266,7 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
             str(helper.RUN_REPO_TOOL),
             "semgrep",
             "scan",
+            "--error",
             "--config",
             "semgrep/rules",
             "--metrics=off",
@@ -3228,7 +3229,7 @@ def test_release_artifact_helper_builds_build_and_twine_commands() -> None:
             "build",
             "--wheel",
             "--sdist",
-            "/tmp/codira/packages/codira-analyzer-python",
+            "/tmp/codira/packages/codira-clang-frontend",
         ),
     )
     assert release_plan[-3:] == tuple(

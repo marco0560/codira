@@ -42,7 +42,7 @@ from codira.query.context_source import (
     _symbol_sort_key,
     _tokenize,
 )
-from codira.query.exact import find_symbol
+from codira.query.exact import find_symbol, logical_symbol_name
 from codira.query.signals import (
     RetrievalSignal,
     RetrievalSignalFamily,
@@ -113,6 +113,54 @@ def _extract_target_symbol(query_tokens: list[str]) -> str | None:
         if "_" in token and token.isidentifier():
             return token
     return None
+
+
+def _unique_exact_callable_target(
+    root: Path,
+    query: str,
+    conn: BackendQueryConnection,
+    prefix: str | None,
+) -> SymbolRow | None:
+    """Resolve one explicitly qualified exact callable target, if unambiguous.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Root directory of the indexed repository.
+    query : str
+        User query whose complete qualified name is being checked.
+    conn : codira.contracts.BackendQueryConnection
+        Existing backend connection used for exact resolution.
+    prefix : str | None
+        Absolute normalized prefix restricting the exact lookup.
+
+    Returns
+    -------
+    codira.types.SymbolRow | None
+        The sole exact function or method row, or ``None`` when the query is
+        short, ambiguous, non-callable, or not an exact canonical name.
+
+    Notes
+    -----
+    Full row identity is used for deduplication. Rows that share a logical
+    name but differ by source location remain ambiguous, as with overloads.
+    """
+    requested_name = query.strip()
+    if not requested_name or ("." not in requested_name and "::" not in requested_name):
+        return None
+
+    exact_rows = set(find_symbol(root, requested_name, prefix=prefix, conn=conn))
+    canonical_matches: set[SymbolRow] = set()
+    for row in exact_rows:
+        logical_name = logical_symbol_name(root, row, conn=conn)
+        full_names = {row[2], logical_name, f"{row[1]}.{logical_name}"}
+        if requested_name in full_names:
+            canonical_matches.add(row)
+
+    if len(canonical_matches) != 1:
+        return None
+    target = next(iter(canonical_matches))
+    return target if target[0] in {"function", "method"} else None
 
 
 def _backend_row_int(value: object) -> int:

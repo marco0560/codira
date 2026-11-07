@@ -75,6 +75,10 @@ DuckDB guidance:
   larger analytical or document-heavy repository indexes
 - prefer it over a service database when the repository remains a local
   single-operator or single-workspace workflow
+- after upgrading from an affected DuckDB backend version, run `codira index
+  --full` to rebuild an index whose prior CSV load failed or stored nullable
+  call targets as empty strings; incremental indexing skips unchanged files and
+  cannot repair rows already persisted incorrectly
 
 Current implementation note:
 

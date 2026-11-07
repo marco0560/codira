@@ -125,7 +125,7 @@ def test_relation_aliases_keep_qualified_owners_and_filters(
     incoming = find_call_edges(
         EdgeQueryRequest(method_repository, "run", incoming=True)
     )
-    assert {(x[1], x[3]) for x in incoming} == {("Alpha.invoke", "Alpha.run")}
+    assert {(x[1], x[4]) for x in incoming} == {("Alpha.invoke", "Alpha.run")}
     refs = find_callable_refs(EdgeQueryRequest(method_repository, "run"))
     assert {(x[1], x[3]) for x in refs} == {("Alpha.run", "helper")}
     incoming_refs = find_callable_refs(

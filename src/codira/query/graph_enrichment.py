@@ -37,9 +37,10 @@ from codira.query.producers import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from codira.contracts import BackendQueryConnection
+    from codira.query.exact import CallableRefRow, CallEdgeRow
     from codira.query.signals import RetrievalSignal
     from codira.types import IncludeEdgeRow, SymbolRow
 
@@ -140,7 +141,7 @@ class ResolvedEdgeExpansionRequest:
 
     Parameters
     ----------
-    edges : list[tuple[str, str, str | None, str | None, str | None, str | None, int]]
+    edges : collections.abc.Sequence[CallEdgeRow | CallableRefRow]
         Stored graph edge rows to expand.
     graph_request : GraphExpansionRequest
         Graph expansion request carrying storage and signal buffers.
@@ -150,17 +151,21 @@ class ResolvedEdgeExpansionRequest:
         Edge tuple index containing the related module.
     name_index : int
         Edge tuple index containing the related logical name.
+    stable_id_index : int | None
+        Edge tuple index containing the optional exact stable identity, or
+        ``None`` for callable-reference rows without endpoint identities.
     producer : codira.query.producers.GraphRetrievalProducer
         Retrieval producer used to build relation signals.
     add_related : collections.abc.Callable[[codira.types.SymbolRow], None]
         Callback admitting symbols into the expanded result set.
     """
 
-    edges: list[tuple[str, str, str | None, str | None, str | None, str | None, int]]
+    edges: Sequence[CallEdgeRow | CallableRefRow]
     graph_request: GraphExpansionRequest
     source_symbol: SymbolRow
     module_index: int
     name_index: int
+    stable_id_index: int | None
     producer: GraphRetrievalProducer
     add_related: Callable[[SymbolRow], None]
 
@@ -416,9 +421,22 @@ def _expand_resolved_edges(request: ResolvedEdgeExpansionRequest) -> None:
     """
     graph_request = request.graph_request
     for edge in request.edges:
-        resolved = bool(edge[6])
+        if len(edge) == 9:
+            call_edge = cast("CallEdgeRow", edge)
+            resolved = bool(call_edge[8])
+        else:
+            reference_edge = cast("CallableRefRow", edge)
+            resolved = bool(reference_edge[6])
         related_module = cast("str | None", edge[request.module_index])
         related_name = cast("str | None", edge[request.name_index])
+        related_stable_id = (
+            None
+            if request.stable_id_index is None
+            else cast(
+                "str | None",
+                cast("CallEdgeRow", edge)[request.stable_id_index],
+            )
+        )
         if not resolved or related_module is None or related_name is None:
             continue
         for related in find_logical_symbols(
@@ -426,6 +444,7 @@ def _expand_resolved_edges(request: ResolvedEdgeExpansionRequest) -> None:
             related_module,
             related_name,
             prefix=graph_request.prefix,
+            stable_id=related_stable_id,
             conn=graph_request.conn,
         ):
             request.add_related(related)
@@ -492,8 +511,9 @@ def _expand_call_relations(
             edges=outgoing_edges,
             graph_request=request,
             source_symbol=symbol,
-            module_index=2,
-            name_index=3,
+            module_index=3,
+            name_index=4,
+            stable_id_index=5,
             producer=CALL_GRAPH_RETRIEVAL_PRODUCER,
             add_related=add_related,
         )
@@ -505,6 +525,7 @@ def _expand_call_relations(
             source_symbol=symbol,
             module_index=0,
             name_index=1,
+            stable_id_index=2,
             producer=CALL_GRAPH_RETRIEVAL_PRODUCER,
             add_related=add_related,
         )
@@ -567,6 +588,7 @@ def _expand_reference_relations(
             source_symbol=symbol,
             module_index=2,
             name_index=3,
+            stable_id_index=None,
             producer=REFERENCE_RETRIEVAL_PRODUCER,
             add_related=add_related,
         )
@@ -578,6 +600,7 @@ def _expand_reference_relations(
             source_symbol=symbol,
             module_index=0,
             name_index=1,
+            stable_id_index=None,
             producer=REFERENCE_RETRIEVAL_PRODUCER,
             add_related=add_related,
         )

@@ -24,3 +24,97 @@ Package-local verification:
 ```bash
 pytest -q packages/codira-analyzer-c/tests
 ```
+
+## Explicit C header context
+
+The analyzer can recover source-backed annotations and function specifiers from
+contained headers, using ordered search roots:
+
+```toml
+[plugins.analyzer-c]
+include_search_paths = ["include"]
+```
+
+Quoted includes search their own directory first. System includes search only
+these explicit roots. No dependency outside the indexed repository is read, and
+missing ordinary includes remain recorded unresolved inputs.
+
+Headers that normally rely on a caller can declare that context explicitly. For
+example, relative to a CPython checkout:
+
+```toml
+[plugins.analyzer-c]
+include_search_paths = ["Include", "Include/internal"]
+preinclude_headers = ["Include/Python.h"]
+```
+
+For a PostgreSQL checkout, use `include_search_paths = ["src/include"]` and
+`preinclude_headers = ["src/include/postgres.h"]`. A configured context header
+must exist inside that repository. Its definitions are available before the
+source begins; ordinary included definitions become available at their source
+include boundary. Defaults are empty; caller context is never inferred by name.
+No compiler or build command runs during analysis, and conditional branches are
+not selected.
+
+Compatible object macros containing annotations, `inline` variants or `_Noreturn`
+can recover declarations without changing original signatures or coordinates.
+Plain data-field macros can recover record bodies: the C model does not emit data
+fields, and their original written text remains available for source signatures.
+Conflicting definitions, undefinitions, function-like prefixes, macro-dependent
+field types, nested types, constants, arrays, function fields and expressions
+remain outside this recovery. The resulting complete tree must be clean.
+
+Header bytes, lookup outcomes, search/context order, symlink targets and
+configuration participate in incremental identity. A dependency change requires
+fresh analysis even when source bytes and header modification time are unchanged.
+
+Parameter metadata can recover a plain `Type name` object replacement or a
+single-identifier wrapper, including identifier token pasting and compiler
+annotations. Every captured alternative must agree on the resulting name.
+Conflicting alternatives, undefinitions, recursive macro inputs, multi-argument
+wrappers and larger expressions retain the original extraction result. This
+changes parameter names only; signatures and call coordinates retain the written
+source.
+
+## Declaration-generating macros
+
+`expand_declaration_macros` is an explicit opt-in, defaulting to `false`:
+
+```toml
+[plugins.analyzer-c]
+expand_declaration_macros = true
+include_search_paths = ["src/include"]
+preinclude_headers = ["src/include/postgres.h"]
+```
+
+The analyzer expands only bounded file-scope function-like macros whose exact
+source and contained-header definitions are available in invocation order.
+Generated callables use the existing generated-provenance metadata. A
+prototype and definition for the same function use the existing C behavior of
+retaining the definition. Calls from source arguments keep their physical
+coordinates; replacement-only calls anchor to the macro invocation. Unsupported
+or ambiguous definitions, unknown conditional alternatives, `#undef`, token
+stringification/pasting, over-budget inputs, and generated top-level artifacts
+outside the callable model retain the original partial result. Ordinary calls
+and function-body macros are not expanded. The default analyzer result remains
+unchanged when this option is omitted.
+
+## Statement-shaped loop macros
+
+A source-defined function macro that supplies one or more complete `for` headers
+before a written statement can recover that statement's grammar. The analyzer
+requires reaching definitions in the source or configured contained headers,
+compatible alternatives and matching fixed arity. A forwarding function macro
+can inherit the same proven statement role.
+
+The written macro invocation remains a call at its original position. Calls in
+its arguments and following body also remain. Replacement-body variables and
+helper calls are not emitted, and no macro replacement is expanded or compilation
+condition selected. Original signatures, source bytes and line/column positions
+are preserved.
+
+This recovery currently requires names at least five bytes long, non-variadic
+parameters, balanced literal loop headers and a completely clean final tree.
+Resolution is bounded to eight loop headers per replacement and 64 alias passes.
+Missing or late definitions, undefinitions, incompatible alternatives, keyword
+overrides, invalid arity and unrelated parser errors retain partial status.

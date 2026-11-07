@@ -21,6 +21,7 @@ python-preference = "only-managed"
 
 [dependency-groups]
 dev = [
+    "codira-clang-frontend==0.4.1",
     "mypy",
     "ruff",
     "semgrep",
@@ -35,16 +36,16 @@ dev = [
     "setuptools-scm>=8,<10",
     "wheel",
     "twine>=6.2,<7.0",
-    "codira-installer==2.0.2",
-    "codira-analyzer-python==2.0.1",
+    "codira-installer==2.0.8",
+    "codira-analyzer-python==2.0.2",
     "codira-analyzer-json==2.0.0",
-    "codira-analyzer-c==2.0.0",
-    "codira-analyzer-cpp==2.0.1",
-    "codira-analyzer-rust==2.0.2",
+    "codira-analyzer-c==2.0.25",
+    "codira-analyzer-cpp==2.0.55",
+    "codira-analyzer-rust==2.0.4",
     "codira-analyzer-javascript==2.0.0",
-    "codira-analyzer-typescript==2.0.1",
-    "codira-analyzer-go==2.0.2",
-    "codira-analyzer-bash==2.0.0",
+    "codira-analyzer-typescript==2.0.3",
+    "codira-analyzer-go==2.0.3",
+    "codira-analyzer-bash==2.0.1",
     "codira-analyzer-markdown==2.0.0",
     "codira-analyzer-text==2.0.0",
     "codira-documentation-audit-numpy==2.0.1",
@@ -54,8 +55,8 @@ dev = [
     "codira-documentation-audit-jsdoc==2.0.0",
     "codira-documentation-audit-tsdoc==2.0.0",
     "codira-documentation-audit-go-doc-comments==2.0.0",
-    "codira-backend-sqlite==2.0.3",
-    "codira-backend-duckdb==2.0.5",
+    "codira-backend-sqlite==2.0.9",
+    "codira-backend-duckdb==2.0.13",
     "codira-embedding-sentence-transformers==2.0.1",
     "codira-embedding-onnx==2.0.0",
     "codira-vector-store-sqlite==2.0.0",
@@ -77,15 +78,15 @@ semantic = [
 bundle-official = [
     "sentence-transformers>=5.4,<6.0",
     "einops>=0.8,<1.0",
-    "codira-analyzer-python==2.0.1",
+    "codira-analyzer-python==2.0.2",
     "codira-analyzer-json==2.0.0",
-    "codira-analyzer-c==2.0.0",
-    "codira-analyzer-cpp==2.0.1",
-    "codira-analyzer-rust==2.0.2",
+    "codira-analyzer-c==2.0.25",
+    "codira-analyzer-cpp==2.0.55",
+    "codira-analyzer-rust==2.0.4",
     "codira-analyzer-javascript==2.0.0",
-    "codira-analyzer-typescript==2.0.1",
-    "codira-analyzer-go==2.0.2",
-    "codira-analyzer-bash==2.0.0",
+    "codira-analyzer-typescript==2.0.3",
+    "codira-analyzer-go==2.0.3",
+    "codira-analyzer-bash==2.0.1",
     "codira-analyzer-markdown==2.0.0",
     "codira-analyzer-text==2.0.0",
     "codira-documentation-audit-numpy==2.0.1",
@@ -95,8 +96,8 @@ bundle-official = [
     "codira-documentation-audit-jsdoc==2.0.0",
     "codira-documentation-audit-tsdoc==2.0.0",
     "codira-documentation-audit-go-doc-comments==2.0.0",
-    "codira-backend-sqlite==2.0.3",
-    "codira-backend-duckdb==2.0.5",
+    "codira-backend-sqlite==2.0.9",
+    "codira-backend-duckdb==2.0.13",
     "codira-embedding-sentence-transformers==2.0.1",
     "codira-embedding-onnx==2.0.0",
     "codira-vector-store-sqlite==2.0.0",
@@ -134,6 +135,7 @@ codira-mcp = "codira.mcp.server:main"
 codira-mcp-config = "codira.mcp.presets:main"
 
 [tool.uv.sources]
+codira-clang-frontend = { path = "packages/codira-clang-frontend", editable = true }
 codira-analyzer-python = { path = "packages/codira-analyzer-python", editable = true }
 codira-analyzer-json = { path = "packages/codira-analyzer-json", editable = true }
 codira-analyzer-c = { path = "packages/codira-analyzer-c", editable = true }

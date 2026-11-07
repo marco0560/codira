@@ -271,6 +271,45 @@ def test_family_strict_partial_stale_and_filtered_members(
         runtime.query("symbol", "helper", repositories=("undeclared",))
 
 
+@pytest.mark.parametrize("member_index", [0, 1])
+def test_family_rejects_changes_to_unindexed_cpp_header(
+    family_setup: tuple[Path, WorkspaceRegistry, FamilyDefinition], member_index: int
+) -> None:
+    """Reject stale member artifacts after only a dependency changes.
+
+    Parameters
+    ----------
+    family_setup : tuple
+        Independent mixed-backend family fixture.
+    member_index : int
+        SQLite or DuckDB member selected for the dependency edit.
+
+    Returns
+    -------
+    None
+        Family reads reject stale headers and recover after explicit indexing.
+    """
+    family = family_setup[2]
+    member = family.members[member_index]
+    with member_scope(member) as adapter:
+        root = adapter.root
+        header = root / "marker.inc"
+        header.write_bytes(b"#define API __declspec(dllexport)\n")
+        (root / "extra.cpp").write_bytes(
+            b'#include "marker.inc"\nAPI int answer() { return 42; }\n'
+        )
+        assert index_repo(root).failed == 0
+    runtime = FamilyRuntime(family)
+    assert _items(runtime.query("symbol", "answer"))
+    header.write_bytes(b"#define API Widget\n")
+    with pytest.raises(FamilyError, match="external analysis inputs changed"):
+        runtime.query("symbol", "answer")
+    header.write_bytes(b"#define API __declspec(dllexport)\n// restored\n")
+    with member_scope(member) as adapter:
+        assert index_repo(adapter.root).failed == 0
+    assert _items(runtime.query("symbol", "answer"))
+
+
 def test_family_explicit_references_and_missing_endpoints(
     family_setup: tuple[Path, WorkspaceRegistry, FamilyDefinition],
 ) -> None:

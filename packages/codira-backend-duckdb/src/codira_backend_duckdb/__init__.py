@@ -105,6 +105,7 @@ _INDEX_NAME_PATTERN = re.compile(
 )
 _SEQUENCED_TABLES: tuple[str, ...] = SEQUENCED_TABLES
 _INDEX_DATA_TABLES: tuple[str, ...] = INDEX_DATA_TABLES
+_STRUCTURAL_ROW_FLUSH_THRESHOLD = 50_000
 
 
 class _DuckDBIndexWriteSession:
@@ -406,6 +407,8 @@ class _DuckDBIndexWriteSession:
                     id_allocator=self._id_allocator,
                 )
             self._flush_pending_embeddings_if_needed()
+            if self._structural_row_count() >= _STRUCTURAL_ROW_FLUSH_THRESHOLD:
+                self._flush_structural_rows()
             return result
         except duckdb_error as exc:
             _delete_indexed_file_data(
@@ -537,16 +540,7 @@ class _DuckDBIndexWriteSession:
         int
             Total rows currently buffered across structural tables.
         """
-        return (
-            len(self._structural_rows.files)
-            + len(self._structural_rows.modules)
-            + len(self._structural_rows.classes)
-            + len(self._structural_rows.functions)
-            + len(self._structural_rows.symbol_index)
-            + len(self._structural_rows.documentation_artifacts)
-            + len(self._structural_rows.overloads)
-            + len(self._structural_rows.enum_members)
-        )
+        return self._structural_rows.row_count
 
     def _flush_structural_rows(self) -> None:
         """
@@ -1871,6 +1865,8 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                     )
                     embeddings_recomputed += recomputed
                     embeddings_reused += reused
+                    if structural_rows.row_count >= _STRUCTURAL_ROW_FLUSH_THRESHOLD:
+                        _flush_structural_rows(persistence_conn, structural_rows)
             with profiler.span("bulk_full_index.load_structural_tables"):
                 _flush_structural_rows(persistence_conn, structural_rows)
                 _flush_import_rows(persistence_conn, pending_import_rows)

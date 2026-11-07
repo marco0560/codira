@@ -96,6 +96,75 @@ def _indexed_repository(root: Path) -> None:
     index_repo(root)
 
 
+def test_context_source_evidence_survives_public_no_symbol_envelope(
+    tmp_path: Path,
+) -> None:
+    """Keep lexical matches separate from unrelated module symbol output.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root used for indexing.
+
+    Returns
+    -------
+    None
+        The adapter keeps source evidence separate from ranked symbols.
+    """
+    (tmp_path / "sample.cpp").write_text(
+        "// translucentQuasar marker\n",
+        encoding="utf-8",
+    )
+    active_index_backend().initialize(tmp_path)
+    index_repo(tmp_path)
+
+    response = MCPAdapter(tmp_path).context_for_task("translucentQuasar")
+    result = cast("dict[str, object]", response["result"])
+    assert result["status"] == "ok"
+    items = cast("list[dict[str, object]]", result["items"])
+    assert all(item.get("name") != "translucentQuasar" for item in items)
+    evidence = cast("dict[str, object]", result["source_evidence"])
+    lines = cast("list[dict[str, object]]", evidence["items"])
+    assert len(lines) == 1
+    assert lines[0]["identifiers"] == ["translucentQuasar"]
+    assert lines[0]["file"] == "sample.cpp"
+    assert "identity" not in lines[0]
+
+
+def test_context_source_evidence_survives_public_symbol_envelope(
+    tmp_path: Path,
+) -> None:
+    """Keep exact written C source beside the independently ranked symbol.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root used for indexing.
+
+    Returns
+    -------
+    None
+        The adapter exposes lexical evidence independently from its symbol.
+    """
+    (tmp_path / "sample.c").write_text(
+        "int ceil(int value) { return value; }\n", encoding="utf-8"
+    )
+    active_index_backend().initialize(tmp_path)
+    index_repo(tmp_path)
+
+    response = MCPAdapter(tmp_path).context_for_task("ceil")
+    result = cast("dict[str, object]", response["result"])
+    items = cast("list[dict[str, object]]", result["items"])
+    evidence = cast("dict[str, object]", result["source_evidence"])
+    lines = cast("list[dict[str, object]]", evidence["items"])
+    assert result["status"] == "ok"
+    assert any(item["name"] == "ceil" for item in items)
+    assert len(lines) == 1
+    assert lines[0]["identifiers"] == ["ceil"]
+    assert lines[0]["text"] == "int ceil(int value) { return value; }"
+    assert lines[0]["file_sha256"]
+
+
 def test_context_items_page_complete_evidence_and_method_owner(tmp_path: Path) -> None:
     """Return complete context items with stable method ownership and cursors.
 
@@ -584,7 +653,9 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
         "issues": [],
     }
     status_metadata = cast("dict[str, str]", status_result["metadata"])
-    assert status_metadata["schema_version"] == "25"
+    assert status_metadata["schema_version"] == str(
+        active_index_backend(root=tmp_path).version
+    )
     assert status_metadata["backend_name"] == "sqlite"
     codira_capabilities = cast(
         "dict[str, object]", cast("dict[str, object]", capabilities["result"])["codira"]
@@ -595,8 +666,8 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
         for plugin in plugins
         if plugin["family"] == "analyzer" and plugin["name"] == "python"
     )
-    assert python_plugin["version"] == "12"
-    assert python_plugin["distribution_version"] == "2.0.1"
+    assert python_plugin["version"] == "13"
+    assert python_plugin["distribution_version"] == "2.0.2"
     assert inventory["result"] == {
         "symbols": [
             {
@@ -639,6 +710,9 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
     assert context_result["status"] == "ok"
     assert context_items[0]["name"] == "answer"
     assert "evidence" in context_items[0]
+    source_evidence = cast("dict[str, object]", context_result["source_evidence"])
+    source_lines = cast("list[dict[str, object]]", source_evidence["items"])
+    assert all("identity" not in item for item in source_lines)
     context_page = cast("dict[str, object]", context["page"])
     assert context_page["has_more"] is False
     impact_result = cast("dict[str, object]", impact["result"])
@@ -813,7 +887,9 @@ def test_server_symbol_tool_invokes_the_direct_adapter(tmp_path: Path) -> None:
         "index_coverage": index_coverage(tmp_path),
     }
     freshness = cast("dict[str, str]", structured["freshness"])
-    assert freshness["schema_version"] == "25"
+    assert freshness["schema_version"] == str(
+        active_index_backend(root=tmp_path).version
+    )
     assert freshness["backend_name"] == "sqlite"
     assert structured["page"] == {
         "offset": 0,
