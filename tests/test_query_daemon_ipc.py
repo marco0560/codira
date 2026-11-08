@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event, Thread
 from typing import TYPE_CHECKING, Literal, cast
+from unittest.mock import Mock
 
 import pytest
 
@@ -754,6 +755,27 @@ def test_named_pipe_adapter_uses_bytes_methods_without_pickle() -> None:
     channel.send({"message": "to-pipe"})
     channel.close()
     assert connection.sent == [b'{"message":"to-pipe"}']
+
+
+def test_named_pipe_receive_respects_timeout() -> None:
+    """Bound pipe receives and avoid reading when no frame is ready.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        A stalled pipe raises a timeout without attempting a blocking read.
+    """
+    connection = Mock()
+    connection.poll.return_value = False
+    channel = NamedPipeFrameChannel(connection, timeout_seconds=0.05)
+    with pytest.raises(TimeoutError):
+        channel.receive()
+    connection.poll.assert_called_once_with(0.05)
+    connection.recv_bytes.assert_not_called()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows named-pipe coverage")

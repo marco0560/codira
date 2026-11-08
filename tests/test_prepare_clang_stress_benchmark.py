@@ -934,13 +934,13 @@ def test_source_inventory_holds_file_symlinks_outside_repository(
     assert directories == []
     assert held_files == [
         {
-            "path": str(header_link),
-            "target": str(outside_header),
+            "path": str(source_link),
+            "target": str(outside_source),
             "outside_repository": True,
         },
         {
-            "path": str(source_link),
-            "target": str(outside_source),
+            "path": str(header_link),
+            "target": str(outside_header),
             "outside_repository": True,
         },
     ]

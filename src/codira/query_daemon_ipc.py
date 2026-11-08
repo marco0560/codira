@@ -593,6 +593,8 @@ class NamedPipeFrameChannel:
         Maximum incoming JSON payload size.
     response_limit : int, optional
         Maximum outgoing JSON payload size.
+    timeout_seconds : float | None, optional
+        Maximum wait for an incoming frame, or None for an unbounded wait.
     """
 
     def __init__(
@@ -601,6 +603,7 @@ class NamedPipeFrameChannel:
         *,
         request_limit: int = DEFAULT_REQUEST_LIMIT,
         response_limit: int = DEFAULT_RESPONSE_LIMIT,
+        timeout_seconds: float | None = None,
     ) -> None:
         """Initialize a bytes-only named-pipe channel.
 
@@ -612,6 +615,8 @@ class NamedPipeFrameChannel:
             Maximum incoming JSON payload size.
         response_limit : int, optional
             Maximum outgoing JSON payload size.
+        timeout_seconds : float | None, optional
+            Maximum wait for an incoming frame, or None for an unbounded wait.
 
         Returns
         -------
@@ -620,6 +625,7 @@ class NamedPipeFrameChannel:
         self._connection = connection
         self._request_limit = request_limit
         self._response_limit = response_limit
+        self._timeout_seconds = timeout_seconds
 
     def receive(self) -> dict[str, object]:
         """Receive one bytes-only JSON frame without pickle deserialization.
@@ -637,11 +643,21 @@ class NamedPipeFrameChannel:
         ------
         QueryDaemonProtocolError
             If bytes-only receive support is absent or the frame is invalid.
+        TimeoutError
+            If no incoming frame becomes available before the timeout.
         """
         receiver = getattr(self._connection, "recv_bytes", None)
         if not callable(receiver):
             msg = "Named-pipe transport does not provide recv_bytes()."
             raise QueryDaemonProtocolError(msg)
+        if self._timeout_seconds is not None:
+            poll = getattr(self._connection, "poll", None)
+            if not callable(poll):
+                msg = "Named-pipe transport does not provide poll()."
+                raise QueryDaemonProtocolError(msg)
+            if not poll(self._timeout_seconds):
+                msg = "Named-pipe receive timed out."
+                raise TimeoutError(msg)
         received = receiver()
         if not isinstance(received, bytes):
             msg = "Named-pipe transport returned a non-bytes frame."
@@ -1553,6 +1569,7 @@ class QueryDaemonIpcClient:
                 connection,
                 request_limit=self._response_limit,
                 response_limit=self._request_limit,
+                timeout_seconds=self._timeout_seconds,
             )
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.settimeout(self._timeout_seconds)

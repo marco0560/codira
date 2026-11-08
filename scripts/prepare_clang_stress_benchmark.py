@@ -241,7 +241,7 @@ def _scan_source_inventory(
                 continue
             retained_directories.append(name)
         dirnames[:] = retained_directories
-        for name in filenames:
+        for name in sorted(filenames):
             path = current / name
             if (
                 path.suffix in SOURCE_SUFFIXES[language] | HEADER_SUFFIXES[language]
