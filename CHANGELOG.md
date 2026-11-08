@@ -1,3 +1,9 @@
+## [2.5.1](https://github.com/marco0560/codira/compare/v2.5.0...v2.5.1) (2026-11-08)
+
+### Bug Fixes
+
+* **ci:** address inventory ordering and pipe timeouts ([46e501d](https://github.com/marco0560/codira/commit/46e501ddf43a6a427d4795b891c0f94197967c1d))
+
 ## [2.5.0](https://github.com/marco0560/codira/compare/v2.4.8...v2.5.0) (2026-11-08)
 
 ### Features
