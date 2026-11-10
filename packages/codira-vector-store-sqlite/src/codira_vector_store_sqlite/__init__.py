@@ -53,7 +53,7 @@ __all__ = [
     "get_vector_store_path",
 ]
 
-PACKAGE_VERSION = "1.0.6"
+PACKAGE_VERSION = "1.0.7"
 FORMAT_VERSION = "4"
 _CACHE_LOOKUP_HASH_BATCH_SIZE = 900
 
@@ -268,6 +268,8 @@ class SQLiteVectorStore:
                     PRIMARY KEY (vector_set_id, object_type, stable_id),
                     FOREIGN KEY (vector_set_id) REFERENCES vector_sets(id)
                 );
+                CREATE INDEX IF NOT EXISTS idx_pending_by_object
+                ON pending_vectors (vector_set_id, object_type, object_id);
                 """
             )
 

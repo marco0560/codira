@@ -59,7 +59,7 @@ dev = [
     "codira-backend-duckdb==2.0.13",
     "codira-embedding-sentence-transformers==2.0.1",
     "codira-embedding-onnx==2.0.0",
-    "codira-vector-store-sqlite==2.0.0",
+    "codira-vector-store-sqlite==2.0.1",
     "codira-vector-store-duckdb==2.0.0",
     "codira-similarity-index-faiss==2.0.1",
     "codira-similarity-index-qdrant==2.0.0",
@@ -71,7 +71,7 @@ semantic = [
     "einops>=0.8,<1.0",
     "codira-embedding-sentence-transformers==2.0.1",
     "codira-embedding-onnx==2.0.0",
-    "codira-vector-store-sqlite==2.0.0",
+    "codira-vector-store-sqlite==2.0.1",
     "codira-vector-store-duckdb==2.0.0",
 ]
 
@@ -100,7 +100,7 @@ bundle-official = [
     "codira-backend-duckdb==2.0.13",
     "codira-embedding-sentence-transformers==2.0.1",
     "codira-embedding-onnx==2.0.0",
-    "codira-vector-store-sqlite==2.0.0",
+    "codira-vector-store-sqlite==2.0.1",
     "codira-vector-store-duckdb==2.0.0",
 ]
 

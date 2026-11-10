@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import tomllib
+from dataclasses import replace
 from threading import Event, Thread
 from pathlib import Path
 
@@ -114,7 +115,7 @@ def test_sqlite_vector_store_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.0"
+    assert project["project"]["version"] == "2.0.1"
     assert project["project"]["entry-points"]["codira.vector_stores"] == {
         "sqlite": "codira_vector_store_sqlite:build_vector_store"
     }
@@ -634,3 +635,113 @@ def test_sqlite_vector_store_purges_stale_sets_with_retention(
             """
         ).fetchall()
     assert remaining == [("active",), ("stale-new",)]
+
+
+def test_pending_delete_uses_object_id_and_isolates_vector_sets(tmp_path: Path) -> None:
+    """Delete all matching object IDs without deleting other identities.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated store root.
+
+    Returns
+    -------
+    None
+        Duplicate object IDs are deleted only in the selected set and type.
+    """
+    store = SQLiteVectorStore()
+    identity = _vector_identity(store)
+    other = _vector_identity(store, model_version="other")
+    set_id = store.ensure_vector_set(tmp_path, identity, {})
+    other_id = store.ensure_vector_set(tmp_path, other, {})
+    with sqlite3.connect(get_vector_store_path(tmp_path)) as conn:
+        conn.executemany(
+            "INSERT INTO pending_vectors VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (set_id, "symbol", 1, "first", "h", "t"),
+                (set_id, "symbol", 1, "second", "h", "t"),
+                (set_id, "symbol", 9, "symbol:one", "h", "t"),
+                (set_id, "documentation", 1, "doc", "h", "t"),
+                (other_id, "symbol", 1, "other", "h", "t"),
+            ],
+        )
+    store.delete_pending_vectors(tmp_path, identity, _prepared_rows()[:1], {})
+    with sqlite3.connect(get_vector_store_path(tmp_path)) as conn:
+        remaining = conn.execute(
+            "SELECT vector_set_id, object_type, object_id, stable_id "
+            "FROM pending_vectors ORDER BY stable_id"
+        ).fetchall()
+    assert remaining == [
+        (set_id, "documentation", 1, "doc"),
+        (other_id, "symbol", 1, "other"),
+        (set_id, "symbol", 9, "symbol:one"),
+    ]
+
+
+def test_pending_index_bootstrap_and_existing_store_upgrade(tmp_path: Path) -> None:
+    """Create the lookup index for new and existing stores without losing rows.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated store root.
+
+    Returns
+    -------
+    None
+        Initialization is idempotent and the delete plan uses all lookup keys.
+    """
+    store = SQLiteVectorStore()
+    identity = _vector_identity(store)
+    set_id = store.ensure_vector_set(tmp_path, identity, {})
+    path = get_vector_store_path(tmp_path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='index' AND name='idx_pending_by_object'"
+        ).fetchone() == (1,)
+        conn.execute("DROP INDEX idx_pending_by_object")
+        conn.execute(
+            "INSERT INTO pending_vectors VALUES (?, 'symbol', 1, 'old', 'h', 't')",
+            (set_id,),
+        )
+    store.initialize(tmp_path, {})
+    store.initialize(tmp_path, {})
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT stable_id FROM pending_vectors").fetchall() == [
+            ("old",)
+        ]
+        plan = conn.execute(
+            "EXPLAIN QUERY PLAN DELETE FROM pending_vectors "
+            "WHERE vector_set_id=? AND object_type=? AND object_id=?",
+            (set_id, "symbol", 1),
+        ).fetchall()
+    assert any(
+        "idx_pending_by_object" in str(row[3]) and "object_id=?" in str(row[3])
+        for row in plan
+    )
+
+
+def test_previous_runtime_vector_set_remains_separate(tmp_path: Path) -> None:
+    """Preserve old cache data while selecting a new runtime identity.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated existing store root.
+
+    Returns
+    -------
+    None
+        Old vectors remain available only under the old identity.
+    """
+    store = SQLiteVectorStore()
+    current = _vector_identity(store)
+    previous = replace(
+        current, vector_store=replace(current.vector_store, store_version="1.0.6")
+    )
+    vector = serialize_vector([1.0, 0.0, 0.0])
+    store.store_cached_vectors(tmp_path, previous, {"old": vector}, {})
+    assert store.load_cached_vectors(tmp_path, current, ["old"], {}) == {}
+    assert store.load_cached_vectors(tmp_path, previous, ["old"], {}) == {"old": vector}
