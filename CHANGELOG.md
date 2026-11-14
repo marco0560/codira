@@ -1,3 +1,13 @@
+## [2.5.2](https://github.com/marco0560/codira/compare/v2.5.1...v2.5.2) (2026-11-14)
+
+### Bug Fixes
+
+* **indexer:** bound memory during full indexing ([693a4b4](https://github.com/marco0560/codira/commit/693a4b48cc6a174cac2319f1a791715314a994fd))
+
+### Performance Improvements
+
+* **storage:** index pending SQLite vectors by object ([bae6c7b](https://github.com/marco0560/codira/commit/bae6c7b8dc421c24860982a86df1ee97d1c940de))
+
 ## [2.5.1](https://github.com/marco0560/codira/compare/v2.5.0...v2.5.1) (2026-11-08)
 
 ### Bug Fixes
