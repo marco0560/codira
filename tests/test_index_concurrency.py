@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -21,6 +22,7 @@ from codira.indexer import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
     from codira.models import AnalysisResult
@@ -127,6 +129,64 @@ class _UndeclaredAnalyzer:
 
     name = "test"
     version = "1"
+
+
+def test_parallel_analysis_keeps_work_bounded_and_ordered() -> None:
+    """Keep outstanding tasks bounded while preserving source order.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The scheduler consumes only a bounded prefix before each result.
+    """
+    consumed: list[int] = []
+
+    def tasks() -> Iterator[indexer_module._AnalysisTask]:
+        """Yield tasks while recording how far the input has been consumed.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        collections.abc.Iterator
+            Ordered synthetic tasks.
+        """
+        for ordinal in range(20):
+            consumed.append(ordinal)
+            yield indexer_module._AnalysisTask(ordinal, str(ordinal), {})
+
+    def analyze(
+        task: indexer_module._AnalysisTask,
+    ) -> indexer_module._AnalysisTaskResult:
+        """Return an empty analysis outcome for a synthetic task.
+
+        Parameters
+        ----------
+        task : codira.indexer._AnalysisTask
+            Task whose ordinal identifies the result.
+
+        Returns
+        -------
+        codira.indexer._AnalysisTaskResult
+            Empty successful scheduling outcome.
+        """
+        return indexer_module._AnalysisTaskResult(task.ordinal, None, None, ())
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = indexer_module._bounded_analysis_results(
+            executor, analyze, tasks(), 2
+        )
+        assert next(results).ordinal == 0
+        assert len(consumed) == 4
+        assert next(results).ordinal == 1
+        assert len(consumed) == 5
+        assert [result.ordinal for result in results] == list(range(2, 20))
 
 
 def test_auto_concurrency_uses_process_workers_above_threshold() -> None:

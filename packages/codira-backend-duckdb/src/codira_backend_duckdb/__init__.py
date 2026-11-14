@@ -31,6 +31,7 @@ import atexit
 import importlib
 import json
 import re
+from contextlib import suppress
 from typing import TYPE_CHECKING, Protocol, cast
 
 from codira.contracts import (
@@ -86,6 +87,7 @@ from codira.plugin_config import analyzer_inventory_discovery_json, plugin_json_
 from .schema import DDL, INDEX_DATA_TABLES, SCHEMA_VERSION, SEQUENCED_TABLES
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from collections.abc import Mapping
     from collections.abc import Sequence
     from pathlib import Path
@@ -93,9 +95,13 @@ if TYPE_CHECKING:
     from codira.contracts import (
         IndexBackend,
         IndexWriteSession,
-        VectorSetIdentity,
+        LanguageAnalyzer,
         VectorStore,
+        VectorSetIdentity,
     )
+    from codira.index_stream_contracts import BackendPersistFullIndexStreamRequest
+    from codira.vector_write_adapter import VectorStoreWriteAdapter
+    from codira.vector_write_session import VectorStoreWriteSession
 
 PACKAGE_VERSION = "1.50.3"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
@@ -1893,73 +1899,85 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                     pending_ref_rows=pending_ref_rows,
                     profiler=profiler,
                 )
-            with profiler.span("bulk_full_index.rebuild_derived_indexes"):
-                self.rebuild_derived_indexes(request.root, conn=conn)
-            _persist_runtime_inventory(
-                persistence_conn,
-                backend_name=str(self.name),
-                backend_version=str(self.version),
-                coverage_complete=request.coverage_complete,
-                analyzers=list(request.analyzers),
-            )
-            with profiler.span(
-                "bulk_full_index.load_embeddings",
-                rows=len(pending_embedding_rows),
-            ):
-                if request.defer_embeddings:
-                    if (
-                        request.vector_store is not None
-                        and request.vector_set_identity is not None
-                    ):
-                        prepared_rows = [
-                            PreparedVectorRow(
-                                row=row,
-                                content_hash=content_hash,
-                                vector=stored_vector,
+
+            def load_embeddings() -> None:
+                """Flush the legacy request's complete embedding batch.
+
+                Parameters
+                ----------
+                None
+
+                Returns
+                -------
+                None
+                    Embeddings are stored after inventory and before indexes.
+                """
+                nonlocal pending_embedding_rows
+                nonlocal embeddings_recomputed, embeddings_reused
+                with profiler.span(
+                    "bulk_full_index.load_embeddings",
+                    rows=len(pending_embedding_rows),
+                ):
+                    if request.defer_embeddings:
+                        if (
+                            request.vector_store is not None
+                            and request.vector_set_identity is not None
+                        ):
+                            prepared_rows = [
+                                PreparedVectorRow(
+                                    row=row,
+                                    content_hash=content_hash,
+                                    vector=stored_vector,
+                                )
+                                for row, content_hash, stored_vector in pending_embedding_rows
+                            ]
+                            request.vector_store.store_pending_vectors(
+                                request.root,
+                                request.vector_set_identity,
+                                prepared_rows,
+                                request.vector_store_config,
                             )
-                            for row, content_hash, stored_vector in pending_embedding_rows
-                        ]
-                        request.vector_store.store_pending_vectors(
-                            request.root,
-                            request.vector_set_identity,
-                            prepared_rows,
-                            request.vector_store_config,
+                        _store_pending_embedding_rows(
+                            persistence_conn,
+                            prepared_rows=pending_embedding_rows,
+                            backend=request.embedding_backend,
+                            profiler=profiler,
                         )
-                    _store_pending_embedding_rows(
-                        persistence_conn,
-                        prepared_rows=pending_embedding_rows,
-                        backend=request.embedding_backend,
-                        profiler=profiler,
-                    )
-                else:
-                    (
-                        pending_embedding_rows,
-                        embeddings_recomputed,
-                        embeddings_reused,
-                    ) = _resolve_cached_prepared_embedding_rows(
-                        prepared_rows=pending_embedding_rows,
-                        root=request.root,
-                        vector_store=request.vector_store,
-                        vector_set_identity=request.vector_set_identity,
-                        vector_store_config=request.vector_store_config,
-                        profiler=profiler,
-                    )
-                    _flush_pending_embedding_rows(
-                        persistence_conn,
-                        request.root,
-                        pending_embedding_rows=pending_embedding_rows,
-                        backend=request.embedding_backend,
-                        vector_store=request.vector_store,
-                        vector_set_identity=request.vector_set_identity,
-                        vector_store_config=request.vector_store_config,
-                        backend_connection=conn,
-                        profiler=profiler,
-                        fresh_full_index=True,
-                    )
-            with profiler.span("bulk_full_index.create_indexes"):
-                _create_duckdb_schema_indexes(conn)
-            with profiler.span("bulk_full_index.commit_full_index"):
-                self.commit(request.root, conn=conn)
+                    else:
+                        (
+                            pending_embedding_rows,
+                            embeddings_recomputed,
+                            embeddings_reused,
+                        ) = _resolve_cached_prepared_embedding_rows(
+                            prepared_rows=pending_embedding_rows,
+                            root=request.root,
+                            vector_store=request.vector_store,
+                            vector_set_identity=request.vector_set_identity,
+                            vector_store_config=request.vector_store_config,
+                            profiler=profiler,
+                        )
+                        _flush_pending_embedding_rows(
+                            persistence_conn,
+                            request.root,
+                            pending_embedding_rows=pending_embedding_rows,
+                            backend=request.embedding_backend,
+                            vector_store=request.vector_store,
+                            vector_set_identity=request.vector_set_identity,
+                            vector_store_config=request.vector_store_config,
+                            backend_connection=conn,
+                            profiler=profiler,
+                            fresh_full_index=True,
+                        )
+
+            self._publish_full_index(
+                root=request.root,
+                conn=conn,
+                persistence_conn=persistence_conn,
+                profiler=profiler,
+                coverage_complete=request.coverage_complete,
+                analyzers=request.analyzers,
+                load_embeddings=load_embeddings,
+            )
             transaction_open = False
             profiler.write(
                 duckdb_profile_path(get_codira_dir(request.root)),
@@ -1979,6 +1997,354 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
             embeddings_skipped=embedding_metrics.skipped,
             embeddings_pending=embedding_metrics.pending,
         )
+
+    def persist_full_index_stream(
+        self,
+        request: BackendPersistFullIndexStreamRequest,
+    ) -> BackendPersistFullIndexResult:
+        """Persist a full index from an ordered iterator with bounded buffers.
+
+        Parameters
+        ----------
+        request : codira.index_stream_contracts.BackendPersistFullIndexStreamRequest
+            Ordered file stream and full-index runtime metadata.
+
+        Returns
+        -------
+        codira.contracts.BackendPersistFullIndexResult
+            Embedding counters for the completed persistence run.
+
+        Raises
+        ------
+        BaseException
+            Propagates failures after rolling back the active DuckDB transaction.
+
+        Notes
+        -----
+        Every DuckDB row-family buffer is flushed at the configured batch
+        threshold. The late coverage callback is evaluated only after the file
+        iterator is exhausted and before runtime inventory and commit. A
+        configured vector store must provide a transactional write session.
+        """
+        from codira.vector_write_adapter import VectorStoreWriteAdapter
+
+        write_session: VectorStoreWriteSession | None = None
+        write_adapter: VectorStoreWriteAdapter | None = None
+        session_vector_store: VectorStore | None = request.vector_store
+        if request.vector_store is not None and request.vector_set_identity is not None:
+            begin_write_session = getattr(
+                request.vector_store,
+                "begin_write_session",
+                None,
+            )
+            if not callable(begin_write_session):
+                msg = (
+                    "Streaming full-index persistence requires the configured "
+                    "vector store to support transactional write sessions."
+                )
+                raise TypeError(msg)
+            write_session = begin_write_session(
+                request.root,
+                request.vector_set_identity,
+                request.vector_store_config,
+            )
+            try:
+                write_adapter = VectorStoreWriteAdapter(
+                    request.vector_store,
+                    write_session,
+                    root=request.root,
+                    identity=request.vector_set_identity,
+                    config=request.vector_store_config,
+                )
+            except BaseException:
+                with suppress(BaseException):
+                    write_session.abort()
+                with suppress(BaseException):
+                    write_session.close()
+                raise
+            session_vector_store = cast(
+                "VectorStore",
+                write_adapter,
+            )
+
+        conn: _BackendCompatibleConnectionAdapter | None = None
+        duckdb_conn: DuckDBConnection | None = None
+        profiler = DuckDBProfileRecorder(enabled=self._profiling_enabled)
+        structural_rows = DuckDBStructuralRowBuffers()
+        pending_embedding_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = []
+        pending_reference_scan_rows: list[tuple[int, int, str]] = []
+        pending_call_rows: list[CallRow] = []
+        pending_ref_rows: list[RefRow] = []
+        pending_import_rows: list[ImportRow] = []
+        pending_docstring_issue_rows: list[DocstringIssueRow] = []
+        embedding_metrics = EmbeddingIndexingMetrics()
+        embeddings_recomputed = 0
+        embeddings_reused = 0
+        transaction_open = False
+
+        def flush_row_families(*, include_embeddings: bool = True) -> None:
+            """Flush every populated row-family buffer within the transaction.
+
+            Parameters
+            ----------
+            include_embeddings : bool, optional
+                Whether to flush the current embedding batch with other rows.
+
+            Returns
+            -------
+            None
+                All currently buffered rows are written and buffers cleared.
+            """
+            nonlocal embeddings_recomputed, embeddings_reused
+            with profiler.span("bulk_full_index.load_structural_tables"):
+                _flush_structural_rows(persistence_conn, structural_rows)
+                _flush_import_rows(persistence_conn, pending_import_rows)
+                pending_import_rows.clear()
+                _flush_docstring_issue_rows(
+                    persistence_conn,
+                    pending_docstring_issue_rows,
+                )
+                pending_docstring_issue_rows.clear()
+            _flush_pending_reference_scan_rows(
+                persistence_conn,
+                pending_reference_scan_rows,
+                profiler=profiler,
+            )
+            pending_reference_scan_rows.clear()
+            _flush_pending_relationship_rows(
+                persistence_conn,
+                pending_call_rows=pending_call_rows,
+                pending_ref_rows=pending_ref_rows,
+                profiler=profiler,
+            )
+            pending_call_rows.clear()
+            pending_ref_rows.clear()
+            if include_embeddings and pending_embedding_rows:
+                if request.defer_embeddings:
+                    if (
+                        request.vector_store is not None
+                        and request.vector_set_identity is not None
+                    ):
+                        prepared_rows = [
+                            PreparedVectorRow(
+                                row=row,
+                                content_hash=content_hash,
+                                vector=stored_vector,
+                            )
+                            for row, content_hash, stored_vector in pending_embedding_rows
+                        ]
+                        assert session_vector_store is not None
+                        session_vector_store.store_pending_vectors(
+                            request.root,
+                            request.vector_set_identity,
+                            prepared_rows,
+                            request.vector_store_config,
+                        )
+                    _store_pending_embedding_rows(
+                        persistence_conn,
+                        prepared_rows=pending_embedding_rows,
+                        backend=request.embedding_backend,
+                        profiler=profiler,
+                    )
+                else:
+                    (
+                        resolved_embedding_rows,
+                        recomputed,
+                        reused,
+                    ) = _resolve_cached_prepared_embedding_rows(
+                        prepared_rows=pending_embedding_rows,
+                        root=request.root,
+                        vector_store=session_vector_store,
+                        vector_set_identity=request.vector_set_identity,
+                        vector_store_config=request.vector_store_config,
+                        profiler=profiler,
+                    )
+                    embeddings_recomputed += recomputed
+                    embeddings_reused += reused
+                    _flush_pending_embedding_rows(
+                        persistence_conn,
+                        request.root,
+                        pending_embedding_rows=resolved_embedding_rows,
+                        backend=request.embedding_backend,
+                        vector_store=session_vector_store,
+                        vector_set_identity=request.vector_set_identity,
+                        vector_store_config=request.vector_store_config,
+                        backend_connection=conn,
+                        profiler=profiler,
+                        fresh_full_index=True,
+                    )
+                pending_embedding_rows.clear()
+
+        try:
+            conn = self.open_connection(request.root)
+            duckdb_conn = cast("DuckDBConnection", conn)
+            duckdb_conn.set_profile_recorder(profiler)
+            persistence_conn = cast("_DuckDBPersistenceConnection", conn)
+            id_allocator = DuckDBIdAllocator(
+                persistence_conn,
+                {table_name: 1 for table_name in _SEQUENCED_TABLES},
+            )
+            with profiler.span("bulk_full_index.begin"):
+                conn.execute("BEGIN TRANSACTION")
+            transaction_open = True
+            with profiler.span("bulk_full_index.recreate_tables"):
+                _drop_duckdb_schema_indexes(conn)
+                _recreate_duckdb_index_tables(conn)
+            with profiler.span("bulk_full_index.plan_rows"):
+                for item in request.files:
+                    recomputed, reused = _append_analysis_rows(
+                        persistence_conn,
+                        request.root,
+                        item.file_metadata,
+                        item.analysis,
+                        backend=request.embedding_backend,
+                        embedding_indexing=request.embedding_indexing,
+                        embedding_metrics=embedding_metrics,
+                        defer_embeddings=request.defer_embeddings,
+                        previous_embeddings={},
+                        pending_embedding_rows=pending_embedding_rows,
+                        vector_store=session_vector_store,
+                        vector_set_identity=request.vector_set_identity,
+                        vector_store_config=request.vector_store_config,
+                        pending_reference_scan_rows=pending_reference_scan_rows,
+                        pending_call_rows=pending_call_rows,
+                        pending_ref_rows=pending_ref_rows,
+                        pending_import_rows=pending_import_rows,
+                        pending_docstring_issue_rows=pending_docstring_issue_rows,
+                        structural_rows=structural_rows,
+                        id_allocator=id_allocator,
+                        defer_embedding_cache_lookup=True,
+                    )
+                    embeddings_recomputed += recomputed
+                    embeddings_reused += reused
+                    if (
+                        structural_rows.row_count >= _STRUCTURAL_ROW_FLUSH_THRESHOLD
+                        or len(pending_embedding_rows)
+                        >= _STRUCTURAL_ROW_FLUSH_THRESHOLD
+                        or len(pending_reference_scan_rows)
+                        >= _STRUCTURAL_ROW_FLUSH_THRESHOLD
+                        or len(pending_call_rows) >= _STRUCTURAL_ROW_FLUSH_THRESHOLD
+                        or len(pending_ref_rows) >= _STRUCTURAL_ROW_FLUSH_THRESHOLD
+                        or len(pending_import_rows) >= _STRUCTURAL_ROW_FLUSH_THRESHOLD
+                        or len(pending_docstring_issue_rows)
+                        >= _STRUCTURAL_ROW_FLUSH_THRESHOLD
+                    ):
+                        flush_row_families()
+
+            coverage_complete = bool(request.coverage_complete())
+            with profiler.span("bulk_full_index.flush_final_rows"):
+                flush_row_families(include_embeddings=False)
+
+            def load_embeddings() -> None:
+                """Flush the final streamed embedding batch after inventory.
+
+                Parameters
+                ----------
+                None
+
+                Returns
+                -------
+                None
+                    The final bounded batch is persisted in the active session.
+                """
+                with profiler.span(
+                    "bulk_full_index.load_embeddings",
+                    rows=len(pending_embedding_rows),
+                ):
+                    flush_row_families(include_embeddings=True)
+
+            self._publish_full_index(
+                root=request.root,
+                conn=conn,
+                persistence_conn=persistence_conn,
+                profiler=profiler,
+                coverage_complete=coverage_complete,
+                analyzers=request.analyzers,
+                load_embeddings=load_embeddings,
+            )
+            transaction_open = False
+            if write_adapter is not None:
+                write_adapter.commit()
+            profiler.write(
+                duckdb_profile_path(get_codira_dir(request.root)),
+                backend_name=str(self.name),
+                backend_version=str(self.version),
+            )
+        except BaseException:
+            if transaction_open and conn is not None:
+                conn.execute("ROLLBACK")
+            if write_adapter is not None:
+                write_adapter.abort()
+            elif write_session is not None:
+                write_session.abort()
+            raise
+        finally:
+            if duckdb_conn is not None:
+                duckdb_conn.reset_profile_recorder()
+            if conn is not None:
+                self.close_connection(conn)
+            if write_adapter is not None:
+                write_adapter.close()
+            elif write_session is not None:
+                write_session.close()
+        return BackendPersistFullIndexResult(
+            embeddings_recomputed=embeddings_recomputed,
+            embeddings_reused=embeddings_reused,
+            embeddings_skipped=embedding_metrics.skipped,
+            embeddings_pending=embedding_metrics.pending,
+        )
+
+    def _publish_full_index(  # noqa: PLR0913
+        self,
+        *,
+        root: Path,
+        conn: _BackendCompatibleConnectionAdapter,
+        persistence_conn: _DuckDBPersistenceConnection,
+        profiler: DuckDBProfileRecorder,
+        coverage_complete: bool,
+        analyzers: Sequence[LanguageAnalyzer],
+        load_embeddings: Callable[[], None],
+    ) -> None:
+        """Run the shared derived-index and publication phases.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root being indexed.
+        conn : _BackendCompatibleConnectionAdapter
+            Connection with the caller's active DuckDB transaction.
+        persistence_conn : _DuckDBPersistenceConnection
+            Typed connection passed to backend persistence helpers.
+        profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder
+            Recorder retaining the established full-index span names.
+        coverage_complete : bool
+            Final coverage value after any streaming callback has run.
+        analyzers : collections.abc.Sequence[codira.contracts.LanguageAnalyzer]
+            Active analyzers for this index run.
+        load_embeddings : collections.abc.Callable[[], None]
+            Caller-owned embedding flush preserving its bulk or streaming
+            batching policy.
+
+        Returns
+        -------
+        None
+            Derived graph state, inventory, embeddings, indexes, and publication
+            are completed in order inside the caller's transaction.
+        """
+        with profiler.span("bulk_full_index.rebuild_derived_indexes"):
+            self.rebuild_derived_indexes(root, conn=conn)
+        _persist_runtime_inventory(
+            persistence_conn,
+            backend_name=str(self.name),
+            backend_version=str(self.version),
+            coverage_complete=coverage_complete,
+            analyzers=list(analyzers),
+        )
+        load_embeddings()
+        with profiler.span("bulk_full_index.create_indexes"):
+            _create_duckdb_schema_indexes(conn)
+        with profiler.span("bulk_full_index.commit_full_index"):
+            self.commit(root, conn=conn)
 
     def initialize(self, root: Path) -> None:
         """

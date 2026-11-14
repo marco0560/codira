@@ -28,8 +28,10 @@ from __future__ import annotations
 import json
 import os
 import warnings
-from collections import Counter
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from collections import Counter, deque
+from collections.abc import Iterator
+from concurrent.futures import Executor, Future, ProcessPoolExecutor, ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatch
 from functools import partial
@@ -68,10 +70,15 @@ from codira.contracts import (
     StoredEmbeddingRow,
     VectorSetIdentity,
     VectorStore,
+    VectorStoreError,
 )
 from codira.git import read_head_commit
 from codira.index_coverage import analysis_fingerprint
 from codira.index_generation import IndexGenerationStore, transition_record
+from codira.index_stream_contracts import (
+    BackendPersistFullIndexStreamRequest,
+    FullIndexStreamingBulkBackend,
+)
 from codira.models import (
     AnalysisResult,
     FileMetadataSnapshot,
@@ -101,9 +108,14 @@ from codira.storage import (
     get_metadata_path,
 )
 from codira.vector_store import active_vector_store_context
+from codira.vector_write_adapter import VectorStoreWriteAdapter
+from codira.vector_write_session import VectorStoreWriteSessionFactory
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Generator, Iterable, Iterator
+
     from codira.contracts import IndexWriteSession, LanguageAnalyzer
+    from codira.vector_store import ActiveVectorStoreContext
 
 ParsedFile = tuple[Path, FileMetadataSnapshot, AnalysisResult]
 _IGNORED_COVERAGE_SUFFIXES = frozenset({"<no-suffix>", ".md", ".txt", ".typed"})
@@ -425,7 +437,7 @@ class PersistIndexedFileAnalysesRequest:
         Repository root being indexed.
     session : codira.contracts.IndexWriteSession
         Active backend write session reused across indexed files.
-    parsed_files : list[ParsedFile]
+    parsed_files : collections.abc.Iterable[ParsedFile]
         Analyzed file snapshots in deterministic order.
     embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
         Active embedding backend metadata.
@@ -441,11 +453,16 @@ class PersistIndexedFileAnalysesRequest:
         Active vector-set identity for separated vector-store writes.
     vector_store_config : dict[str, object]
         Vector-store-specific configuration table.
+
+    Returns
+    -------
+    None
+        Carries the ordered persistence inputs and backend context.
     """
 
     root: Path
     session: IndexWriteSession
-    parsed_files: list[ParsedFile]
+    parsed_files: Iterable[ParsedFile]
     embedding_backend: EmbeddingBackendSpec
     embedding_indexing: EmbeddingIndexingPolicy
     defer_embeddings: bool
@@ -464,8 +481,8 @@ class FinalizeIndexReportRequest:
     ----------
     plan : IndexPlan
         Deterministic file-level plan executed during the run.
-    parsed_files : list[ParsedFile]
-        Successfully analyzed files persisted during the run.
+    indexed_count : int
+        Number of successfully persisted files.
     failures : list[IndexFailure]
         Per-file analysis failures collected during parsing.
     warnings : list[IndexWarning]
@@ -499,7 +516,7 @@ class FinalizeIndexReportRequest:
     """
 
     plan: IndexPlan
-    parsed_files: list[ParsedFile]
+    indexed_count: int
     failures: list[IndexFailure]
     warnings: list[IndexWarning]
     coverage_issues: list[CoverageIssue]
@@ -1117,6 +1134,8 @@ def _collect_indexed_file_analyses(
         Scanner metadata keyed by absolute file path.
     analyzers : list[codira.contracts.LanguageAnalyzer]
         Analyzer instances available for path routing.
+    concurrency : IndexConcurrencyReport | None, optional
+        Effective scheduler; defaults to serial execution.
 
     Returns
     -------
@@ -1124,30 +1143,13 @@ def _collect_indexed_file_analyses(
         Successful analyzed file snapshots plus deterministic failures and
         warnings.
     """
-    tasks = [
-        _AnalysisTask(ordinal, path, current_metadata[path])
-        for ordinal, path in enumerate(indexed_paths)
-    ]
-    effective = concurrency or IndexConcurrencyReport("off", "off", 1)
-    if effective.effective_strategy == "off":
-        results = [_analyze_index_task(task, root, analyzers) for task in tasks]
-    elif effective.effective_strategy == "process":
-        with ProcessPoolExecutor(
-            max_workers=effective.workers,
-            mp_context=get_context("spawn"),
-            initializer=_initialize_process_analysis_worker,
-            initargs=(root, repo_config_path(root)),
-        ) as executor:
-            results = list(executor.map(_analyze_index_task_in_process_worker, tasks))
-    else:
-        analyze_task = partial(_analyze_index_task, root=root, analyzers=analyzers)
-        with ThreadPoolExecutor(max_workers=effective.workers) as executor:
-            results = list(executor.map(analyze_task, tasks))
-
+    results = _iter_indexed_file_analyses(
+        root, indexed_paths, current_metadata, analyzers, concurrency
+    )
     parsed_files: list[ParsedFile] = []
     failures: list[IndexFailure] = []
     collected_warnings: list[IndexWarning] = []
-    for result in sorted(results, key=lambda item: item.ordinal):
+    for result in results:
         if result.parsed_file is not None:
             parsed_files.append(result.parsed_file)
         if result.failure is not None:
@@ -1155,6 +1157,100 @@ def _collect_indexed_file_analyses(
         collected_warnings.extend(result.warnings)
 
     return parsed_files, failures, collected_warnings
+
+
+def _bounded_analysis_results(
+    executor: Executor,
+    analyze: Callable[[_AnalysisTask], _AnalysisTaskResult],
+    tasks: Iterable[_AnalysisTask],
+    workers: int,
+) -> Iterator[_AnalysisTaskResult]:
+    """Yield results in submission order with bounded work in flight.
+
+    Parameters
+    ----------
+    executor : concurrent.futures.Executor
+        Worker pool used for file analysis.
+    analyze : collections.abc.Callable
+        Function that analyzes one task.
+    tasks : collections.abc.Iterable
+        Tasks in deterministic path order.
+    workers : int
+        Number of workers in the pool.
+
+    Returns
+    -------
+    collections.abc.Iterator
+        Results in task order, with at most twice the worker count submitted.
+    """
+    remaining = iter(tasks)
+    pending: deque[Future[_AnalysisTaskResult]] = deque()
+    for _ in range(workers * 2):
+        task = next(remaining, None)
+        if task is None:
+            break
+        pending.append(executor.submit(analyze, task))
+    while pending:
+        yield pending.popleft().result()
+        task = next(remaining, None)
+        if task is not None:
+            pending.append(executor.submit(analyze, task))
+
+
+def _iter_indexed_file_analyses(
+    root: Path,
+    indexed_paths: list[str],
+    current_metadata: dict[str, dict[str, object]],
+    analyzers: list[LanguageAnalyzer],
+    concurrency: IndexConcurrencyReport | None = None,
+) -> Iterator[_AnalysisTaskResult]:
+    """Analyze selected files in order without queuing the entire repository.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root being indexed.
+    indexed_paths : list[str]
+        Selected absolute paths in deterministic order.
+    current_metadata : dict[str, dict[str, object]]
+        Scanner metadata keyed by path.
+    analyzers : list[codira.contracts.LanguageAnalyzer]
+        Configured analyzers for path routing.
+    concurrency : IndexConcurrencyReport | None, optional
+        Effective scheduler; defaults to serial execution.
+
+    Returns
+    -------
+    collections.abc.Iterator
+        One analysis result per path in deterministic order.
+    """
+    tasks = (
+        _AnalysisTask(ordinal, path, current_metadata[path])
+        for ordinal, path in enumerate(indexed_paths)
+    )
+    effective = concurrency or IndexConcurrencyReport("off", "off", 1)
+    if effective.effective_strategy == "off":
+        for task in tasks:
+            yield _analyze_index_task(task, root, analyzers)
+    elif effective.effective_strategy == "process":
+        with ProcessPoolExecutor(
+            max_workers=effective.workers,
+            mp_context=get_context("spawn"),
+            initializer=_initialize_process_analysis_worker,
+            initargs=(root, repo_config_path(root)),
+        ) as executor:
+            yield from _bounded_analysis_results(
+                executor,
+                _analyze_index_task_in_process_worker,
+                tasks,
+                effective.workers,
+            )
+    else:
+        analyze_task = partial(_analyze_index_task, root=root, analyzers=analyzers)
+        with ThreadPoolExecutor(max_workers=effective.workers) as executor:
+            yield from _bounded_analysis_results(
+                executor, analyze_task, tasks, effective.workers
+            )
 
 
 def _analysis_status_coverage_issues(
@@ -1187,6 +1283,124 @@ def _analysis_status_coverage_issues(
             )
         )
     return issues
+
+
+def _successful_analyses(
+    results: Iterable[_AnalysisTaskResult],
+    failures: list[IndexFailure],
+    collected_warnings: list[IndexWarning],
+    coverage_issues: list[CoverageIssue],
+) -> Iterator[ParsedFile]:
+    """Collect diagnostics while yielding successful analyses for persistence.
+
+    Parameters
+    ----------
+    results : collections.abc.Iterable
+        Analysis results in deterministic path order.
+    failures : list[IndexFailure]
+        Destination for file-level failures.
+    collected_warnings : list[IndexWarning]
+        Destination for analyzer warnings.
+    coverage_issues : list[CoverageIssue]
+        Destination for partial-analysis coverage issues.
+
+    Returns
+    -------
+    collections.abc.Iterator
+        Successful analyses, released by the caller after persistence.
+    """
+    for result in results:
+        if result.failure is not None:
+            failures.append(result.failure)
+        collected_warnings.extend(result.warnings)
+        if result.parsed_file is not None:
+            coverage_issues.extend(
+                _analysis_status_coverage_issues([result.parsed_file])
+            )
+            yield result.parsed_file
+
+
+def _stream_bulk_files(
+    root: Path,
+    analyses: Iterable[ParsedFile],
+    failures: list[IndexFailure],
+    accepted: list[tuple[str, str]],
+) -> Generator[BackendPersistFullIndexFile]:
+    """Validate and yield bulk files without retaining their analyses.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root used for diagnostics.
+    analyses : collections.abc.Iterable[ParsedFile]
+        Successful file analyses in deterministic order.
+    failures : list[IndexFailure]
+        Destination for validation failures.
+    accepted : list[tuple[str, str]]
+        Compact path and analyzer identities retained for failure reporting.
+
+    Returns
+    -------
+    collections.abc.Iterator
+        Validated backend requests in source order.
+    """
+    for path, metadata, analysis in analyses:
+        duplicates = _duplicate_analysis_stable_ids(analysis)
+        if duplicates:
+            try:
+                _raise_duplicate_stable_ids(metadata.path, root, duplicates)
+            except ValueError as exc:
+                failures.append(
+                    IndexFailure(
+                        path=str(path),
+                        analyzer_name=metadata.analyzer_name,
+                        error_type=type(exc).__name__,
+                        reason=str(exc),
+                    )
+                )
+            continue
+        accepted.append((str(path), metadata.analyzer_name))
+        yield BackendPersistFullIndexFile(
+            path=path, file_metadata=metadata, analysis=analysis
+        )
+
+
+class _BulkAnalysisError(Exception):
+    """Distinguish analysis errors from backend bulk-write failures.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Carries the original analysis exception as its cause.
+    """
+
+
+def _guard_bulk_analyses(analyses: Iterable[ParsedFile]) -> Iterator[ParsedFile]:
+    """Preserve the origin of unexpected analysis errors during bulk streaming.
+
+    Parameters
+    ----------
+    analyses : collections.abc.Iterable[ParsedFile]
+        Ordered successful analyses.
+
+    Returns
+    -------
+    collections.abc.Iterator
+        The same analyses, with unexpected errors tagged for the caller.
+
+    Raises
+    ------
+    _BulkAnalysisError
+        If the analysis iterator raises an unexpected exception.
+    """
+    try:
+        yield from analyses
+    except Exception as exc:
+        raise _BulkAnalysisError from exc
 
 
 def persisted_analysis_coverage_issues(
@@ -1296,7 +1510,7 @@ def _raise_duplicate_stable_ids(path: Path, root: Path, stable_ids: list[str]) -
 
 def _persist_indexed_file_analyses(
     request: PersistIndexedFileAnalysesRequest,
-) -> tuple[int, int, int, int, list[ParsedFile], list[IndexFailure]]:
+) -> tuple[int, int, int, int, int, list[IndexFailure]]:
     """
     Persist analyzed file snapshots through the selected index backend.
 
@@ -1307,14 +1521,14 @@ def _persist_indexed_file_analyses(
 
     Returns
     -------
-    tuple[int, int, int, int, list[ParsedFile], list[IndexFailure]]
-        ``(recomputed, reused, skipped, pending, persisted_files, failures)`` for
+    tuple[int, int, int, int, int, list[IndexFailure]]
+        ``(recomputed, reused, skipped, pending, persisted_count, failures)`` for
         analyzed files.
     """
     embeddings_recomputed = 0
     embeddings_reused = 0
     embedding_metrics = EmbeddingIndexingMetrics()
-    persisted_files: list[ParsedFile] = []
+    persisted_count = 0
     failures: list[IndexFailure] = []
 
     for path, file_metadata_snapshot, analysis in request.parsed_files:
@@ -1344,6 +1558,8 @@ def _persist_indexed_file_analyses(
                     vector_store_config=request.vector_store_config,
                 )
             )
+        except VectorStoreError:
+            raise
         except (OSError, BackendError, RuntimeError, ValueError) as exc:
             failures.append(
                 IndexFailure(
@@ -1356,14 +1572,14 @@ def _persist_indexed_file_analyses(
             continue
         embeddings_recomputed += recomputed
         embeddings_reused += reused
-        persisted_files.append((path, file_metadata_snapshot, analysis))
+        persisted_count += 1
 
     return (
         embeddings_recomputed,
         embeddings_reused,
         embedding_metrics.skipped,
         embedding_metrics.pending,
-        persisted_files,
+        persisted_count,
         failures,
     )
 
@@ -1773,7 +1989,7 @@ def _index_run_mutated_graph_inputs(
     full: bool,
     plan: IndexPlan,
     existing_state: ExistingIndexState,
-    persisted_files: list[ParsedFile],
+    persisted_count: int,
 ) -> bool:
     """
     Return whether the completed run changed graph-derived source rows.
@@ -1786,15 +2002,15 @@ def _index_run_mutated_graph_inputs(
         Deterministic indexing plan for the current run.
     existing_state : ExistingIndexState
         Persisted state observed before the current run.
-    persisted_files : list[ParsedFile]
-        Successfully persisted parsed-file rows.
+    persisted_count : int
+        Number of successfully persisted files.
 
     Returns
     -------
     bool
         ``True`` when derived graph indexes may need rebuilding.
     """
-    if full or plan.deleted_paths or persisted_files:
+    if full or plan.deleted_paths or persisted_count:
         return True
 
     existing_paths = set(existing_state.paths)
@@ -1843,7 +2059,7 @@ def _finalize_index_report(request: FinalizeIndexReportRequest) -> IndexReport:
         ),
     )
     return IndexReport(
-        indexed=len(request.parsed_files),
+        indexed=request.indexed_count,
         reused=len(request.plan.reused_paths),
         deleted=len(request.plan.deleted_paths),
         failed=len(sorted_failures),
@@ -2033,6 +2249,216 @@ def index_repo(
             return report
 
 
+@dataclass(frozen=True)
+class StreamingBulkRun:
+    """Inputs for one backend-owned streamed full-index transaction.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository being indexed.
+    index_backend : codira.index_stream_contracts.FullIndexStreamingBulkBackend
+        Backend providing atomic streamed full-index persistence.
+    plan : IndexPlan
+        Deterministic index plan.
+    metadata : dict[str, dict[str, object]]
+        Scanner metadata for selected paths.
+    analyzers_by_path : dict[str, codira.contracts.LanguageAnalyzer]
+        Analyzer ownership determined by the scanner for selected paths.
+    analyzers : list[codira.contracts.LanguageAnalyzer]
+        Active analyzers.
+    concurrency : IndexConcurrencyReport
+        Effective analysis scheduling.
+    cached_failures : list[IndexFailure]
+        Previously retained analysis failures.
+    coverage_issues : list[CoverageIssue]
+        Coverage diagnostics collected during scanning and analysis.
+    embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
+        Active embedding backend.
+    embedding_indexing : codira.contracts.EmbeddingIndexingPolicy
+        Embedding eligibility policy.
+    embedding_mode : str
+        Effective immediate or deferred embedding mode.
+    embeddings_enabled : bool
+        Whether vector-store writes are needed.
+    vector_context : codira.vector_store.ActiveVectorStoreContext
+        Selected vector store, identity and configuration.
+    reused_embeddings : int
+        Existing embeddings retained from unchanged files.
+    scan_hashes : dict[str, str]
+        Current source hashes.
+    scan_inputs : dict[str, str]
+        Current analysis input fingerprints.
+
+    Returns
+    -------
+    None
+        Carries the inputs and shared diagnostics for one transaction.
+    """
+
+    root: Path
+    index_backend: FullIndexStreamingBulkBackend
+    plan: IndexPlan
+    metadata: dict[str, dict[str, object]]
+    analyzers_by_path: dict[str, LanguageAnalyzer]
+    analyzers: list[LanguageAnalyzer]
+    concurrency: IndexConcurrencyReport
+    cached_failures: list[IndexFailure]
+    coverage_issues: list[CoverageIssue]
+    embedding_backend: EmbeddingBackendSpec
+    embedding_indexing: EmbeddingIndexingPolicy
+    embedding_mode: str
+    embeddings_enabled: bool
+    vector_context: ActiveVectorStoreContext
+    reused_embeddings: int
+    scan_hashes: dict[str, str]
+    scan_inputs: dict[str, str]
+
+
+def _require_complete_bulk_stream(processed: int, expected: int) -> None:
+    """Reject a backend result that omitted analyzed input files.
+
+    Parameters
+    ----------
+    processed : int
+        Number of analysis outcomes consumed by the backend.
+    expected : int
+        Number of files in the index plan.
+
+    Returns
+    -------
+    None
+        Matching counts need no further action.
+
+    Raises
+    ------
+    BackendError
+        If the backend returned before consuming its complete input.
+    """
+    if processed != expected:
+        message = "streaming backend did not consume every analyzed file"
+        raise BackendError(message)
+
+
+def _run_streaming_bulk(request: StreamingBulkRun) -> IndexReport:
+    """Run one streamed bulk index and preserve failure reporting.
+
+    Parameters
+    ----------
+    request : StreamingBulkRun
+        Backend, analysis plan, vector context, and report inputs.
+
+    Returns
+    -------
+    IndexReport
+        Published result or explicitly unavailable failed publication.
+    """
+    root = request.root
+    index_backend = request.index_backend
+    plan = request.plan
+    analyzers = request.analyzers
+    cached_failures = request.cached_failures
+    coverage_issues = request.coverage_issues
+    backend = request.embedding_backend
+    embedding_indexing = request.embedding_indexing
+    scan_hashes = request.scan_hashes
+    scan_inputs = request.scan_inputs
+    failures = list(cached_failures)
+    collected_warnings: list[IndexWarning] = []
+    accepted: list[tuple[str, str]] = []
+    ordered_analyses = _successful_analyses(
+        _iter_indexed_file_analyses(
+            root,
+            plan.indexed_paths,
+            request.metadata,
+            analyzers,
+            request.concurrency,
+        ),
+        failures,
+        collected_warnings,
+        coverage_issues,
+    )
+    bulk_files = _stream_bulk_files(
+        root, _guard_bulk_analyses(ordered_analyses), failures, accepted
+    )
+    try:
+        bulk_result = index_backend.persist_full_index_stream(
+            BackendPersistFullIndexStreamRequest(
+                root=root,
+                files=bulk_files,
+                embedding_backend=backend,
+                embedding_indexing=embedding_indexing,
+                defer_embeddings=request.embedding_mode == "deferred",
+                vector_store=request.vector_context.store
+                if request.embeddings_enabled
+                else None,
+                vector_set_identity=request.vector_context.identity
+                if request.embeddings_enabled
+                else None,
+                vector_store_config=request.vector_context.config,
+                coverage_complete=lambda: not coverage_issues and not failures,
+                analyzers=analyzers,
+            )
+        )
+        _require_complete_bulk_stream(
+            len(accepted) + len(failures) - len(cached_failures),
+            len(plan.indexed_paths),
+        )
+    except _BulkAnalysisError as exc:
+        assert exc.__cause__ is not None
+        raise exc.__cause__ from None
+    except VectorStoreError:
+        raise
+    except (OSError, BackendError, RuntimeError, ValueError) as exc:
+        failed_paths = {failure.path for failure in failures}
+        failures.extend(
+            IndexFailure(
+                path=path,
+                analyzer_name=str(request.analyzers_by_path[path].name),
+                error_type=type(exc).__name__,
+                reason=str(exc),
+            )
+            for path in plan.indexed_paths
+            if path not in failed_paths
+        )
+        return _finalize_index_report(
+            FinalizeIndexReportRequest(
+                plan=plan,
+                file_hashes=scan_hashes,
+                file_analysis_inputs=scan_inputs,
+                indexed_count=0,
+                failures=failures,
+                warnings=collected_warnings,
+                coverage_issues=coverage_issues,
+                embeddings_recomputed=0,
+                embeddings_reused=request.reused_embeddings,
+                embedding_index_mode=request.embedding_mode,
+                publication_ready=False,
+                analysis_concurrency=request.concurrency,
+            )
+        )
+    finally:
+        bulk_files.close()
+    return _finalize_index_report(
+        FinalizeIndexReportRequest(
+            plan=plan,
+            file_hashes=scan_hashes,
+            file_analysis_inputs=scan_inputs,
+            indexed_count=len(accepted),
+            failures=failures,
+            warnings=collected_warnings,
+            coverage_issues=coverage_issues,
+            embeddings_recomputed=bulk_result.embeddings_recomputed,
+            embeddings_reused=request.reused_embeddings + bulk_result.embeddings_reused,
+            embeddings_skipped=bulk_result.embeddings_skipped,
+            embeddings_pending=bulk_result.embeddings_pending,
+            embedding_index_mode=request.embedding_mode,
+            embedding_complete=bulk_result.embeddings_pending == 0,
+            analysis_concurrency=request.concurrency,
+        )
+    )
+
+
 def _index_repo_unlocked(
     root: Path,
     *,
@@ -2193,7 +2619,7 @@ def _index_repo_unlocked(
                 plan=plan,
                 file_hashes=scan_hashes,
                 file_analysis_inputs=scan_inputs,
-                parsed_files=[],
+                indexed_count=0,
                 failures=cached_failures,
                 warnings=[],
                 coverage_issues=coverage_issues,
@@ -2204,139 +2630,230 @@ def _index_repo_unlocked(
             )
         )
 
-    parsed_files, failures, collected_warnings = _collect_indexed_file_analyses(
-        root,
-        plan.indexed_paths,
-        current_state.metadata_by_path,
-        analyzers,
-        resolved_analysis_concurrency,
-    )
-    failures.extend(cached_failures)
-    coverage_issues.extend(_analysis_status_coverage_issues(parsed_files))
-    if full and isinstance(index_backend, FullIndexBulkBackend):
-        (
-            embeddings_recomputed,
-            changed_file_embeddings_reused,
-            changed_file_embeddings_skipped,
-            changed_file_embeddings_pending,
-            persisted_files,
-            persistence_failures,
-            publication_ready,
-        ) = _persist_full_index_bulk(
-            root=root,
-            backend=index_backend,
-            parsed_files=parsed_files,
-            embedding_backend=backend,
-            embedding_indexing=embedding_indexing,
-            defer_embeddings=effective_embedding_index_mode == "deferred",
-            vector_store=vector_store_context.store,
-            vector_set_identity=vector_store_context.identity,
-            vector_store_config=vector_store_context.config,
-            coverage_complete=not coverage_issues and not failures,
-            analyzers=analyzers,
-        )
-        failures.extend(persistence_failures)
-        embeddings_reused = unchanged_embeddings_reused + changed_file_embeddings_reused
-        return _finalize_index_report(
-            FinalizeIndexReportRequest(
-                plan=plan,
-                file_hashes=scan_hashes,
-                file_analysis_inputs=scan_inputs,
-                parsed_files=persisted_files,
-                failures=failures,
-                warnings=collected_warnings,
-                coverage_issues=coverage_issues,
-                embeddings_recomputed=embeddings_recomputed,
-                embeddings_reused=embeddings_reused,
-                embeddings_skipped=changed_file_embeddings_skipped,
-                embeddings_pending=changed_file_embeddings_pending,
-                embedding_index_mode=effective_embedding_index_mode,
-                embedding_complete=changed_file_embeddings_pending == 0,
-                publication_ready=publication_ready,
-                analysis_concurrency=resolved_analysis_concurrency,
+    with ExitStack() as vector_cleanup:
+        vector_adapter: VectorStoreWriteAdapter | None = None
+        active_vector_store = vector_store_context.store
+        legacy_bulk = full and isinstance(index_backend, FullIndexBulkBackend)
+        streaming_bulk = (
+            full
+            and isinstance(index_backend, FullIndexStreamingBulkBackend)
+            and (
+                not effective_config.embeddings.enabled
+                or isinstance(
+                    vector_store_context.store, VectorStoreWriteSessionFactory
+                )
             )
         )
-
-    session = index_backend.begin_index_session(root)
-    try:
-        session.purge_skipped_docstring_issues()
-        session.prune_orphaned_embeddings()
-        previous_embeddings_by_path = (
-            {}
-            if full
-            else session.load_previous_embeddings_by_path(
-                paths=plan.indexed_paths,
-                embedding_backend=backend,
+        if (
+            effective_config.embeddings.enabled
+            and not legacy_bulk
+            and not streaming_bulk
+            and isinstance(active_vector_store, VectorStoreWriteSessionFactory)
+        ):
+            vector_session = active_vector_store.begin_write_session(
+                root, vector_store_context.identity, vector_store_context.config
             )
-        )
-        _prepare_index_storage(
-            full=full,
-            plan=plan,
-            session=session,
-        )
-
-        (
-            embeddings_recomputed,
-            changed_file_embeddings_reused,
-            changed_file_embeddings_skipped,
-            changed_file_embeddings_pending,
-            persisted_files,
-            persistence_failures,
-        ) = _persist_indexed_file_analyses(
-            PersistIndexedFileAnalysesRequest(
+            vector_cleanup.callback(vector_session.close)
+            vector_adapter = VectorStoreWriteAdapter(
+                active_vector_store,
+                vector_session,
                 root=root,
-                session=session,
+                identity=vector_store_context.identity,
+                config=vector_store_context.config,
+            )
+            active_vector_store = vector_adapter
+        stream_safe = (
+            not effective_config.embeddings.enabled or vector_adapter is not None
+        )
+        if streaming_bulk:
+            assert isinstance(index_backend, FullIndexStreamingBulkBackend)
+            return _run_streaming_bulk(
+                StreamingBulkRun(
+                    root=root,
+                    index_backend=index_backend,
+                    plan=plan,
+                    metadata=current_state.metadata_by_path,
+                    analyzers_by_path=current_state.analyzers_by_path,
+                    analyzers=analyzers,
+                    concurrency=resolved_analysis_concurrency,
+                    cached_failures=cached_failures,
+                    coverage_issues=coverage_issues,
+                    embedding_backend=backend,
+                    embedding_indexing=embedding_indexing,
+                    embedding_mode=effective_embedding_index_mode,
+                    embeddings_enabled=effective_config.embeddings.enabled,
+                    vector_context=vector_store_context,
+                    reused_embeddings=unchanged_embeddings_reused,
+                    scan_hashes=scan_hashes,
+                    scan_inputs=scan_inputs,
+                )
+            )
+        if full and isinstance(index_backend, FullIndexBulkBackend):
+            parsed_files, failures, collected_warnings = _collect_indexed_file_analyses(
+                root,
+                plan.indexed_paths,
+                current_state.metadata_by_path,
+                analyzers,
+                resolved_analysis_concurrency,
+            )
+            failures.extend(cached_failures)
+            coverage_issues.extend(_analysis_status_coverage_issues(parsed_files))
+            (
+                embeddings_recomputed,
+                changed_file_embeddings_reused,
+                changed_file_embeddings_skipped,
+                changed_file_embeddings_pending,
+                persisted_files,
+                persistence_failures,
+                publication_ready,
+            ) = _persist_full_index_bulk(
+                root=root,
+                backend=index_backend,
                 parsed_files=parsed_files,
                 embedding_backend=backend,
                 embedding_indexing=embedding_indexing,
                 defer_embeddings=effective_embedding_index_mode == "deferred",
-                previous_embeddings_by_path=previous_embeddings_by_path,
                 vector_store=vector_store_context.store,
                 vector_set_identity=vector_store_context.identity,
                 vector_store_config=vector_store_context.config,
-            )
-        )
-        failures.extend(persistence_failures)
-        embeddings_reused = unchanged_embeddings_reused + changed_file_embeddings_reused
-
-        if _index_run_mutated_graph_inputs(
-            full=full,
-            plan=plan,
-            existing_state=existing_state,
-            persisted_files=persisted_files,
-        ):
-            session.rebuild_derived_indexes()
-        session.persist_runtime_inventory(
-            BackendRuntimeInventoryRequest(
-                root=root,
-                backend_name=str(index_backend.name),
-                backend_version=str(index_backend.version),
                 coverage_complete=not coverage_issues and not failures,
                 analyzers=analyzers,
             )
-        )
-        session.commit()
-
-        return _finalize_index_report(
-            FinalizeIndexReportRequest(
-                plan=plan,
-                file_hashes=scan_hashes,
-                file_analysis_inputs=scan_inputs,
-                parsed_files=persisted_files,
-                failures=failures,
-                warnings=collected_warnings,
-                coverage_issues=coverage_issues,
-                embeddings_recomputed=embeddings_recomputed,
-                embeddings_reused=embeddings_reused,
-                embeddings_skipped=changed_file_embeddings_skipped,
-                embeddings_pending=changed_file_embeddings_pending,
-                embedding_index_mode=effective_embedding_index_mode,
-                embedding_complete=changed_file_embeddings_pending == 0,
-                analysis_concurrency=resolved_analysis_concurrency,
+            failures.extend(persistence_failures)
+            embeddings_reused = (
+                unchanged_embeddings_reused + changed_file_embeddings_reused
             )
-        )
-    except BaseException:
-        session.abort()
-        raise
-    finally:
-        session.close()
+            return _finalize_index_report(
+                FinalizeIndexReportRequest(
+                    plan=plan,
+                    file_hashes=scan_hashes,
+                    file_analysis_inputs=scan_inputs,
+                    indexed_count=len(persisted_files),
+                    failures=failures,
+                    warnings=collected_warnings,
+                    coverage_issues=coverage_issues,
+                    embeddings_recomputed=embeddings_recomputed,
+                    embeddings_reused=embeddings_reused,
+                    embeddings_skipped=changed_file_embeddings_skipped,
+                    embeddings_pending=changed_file_embeddings_pending,
+                    embedding_index_mode=effective_embedding_index_mode,
+                    embedding_complete=changed_file_embeddings_pending == 0,
+                    publication_ready=publication_ready,
+                    analysis_concurrency=resolved_analysis_concurrency,
+                )
+            )
+
+        if stream_safe:
+            failures = list(cached_failures)
+            collected_warnings = []
+            analyses: Iterable[ParsedFile] = _successful_analyses(
+                _iter_indexed_file_analyses(
+                    root,
+                    plan.indexed_paths,
+                    current_state.metadata_by_path,
+                    analyzers,
+                    resolved_analysis_concurrency,
+                ),
+                failures,
+                collected_warnings,
+                coverage_issues,
+            )
+        else:
+            parsed_files, failures, collected_warnings = _collect_indexed_file_analyses(
+                root,
+                plan.indexed_paths,
+                current_state.metadata_by_path,
+                analyzers,
+                resolved_analysis_concurrency,
+            )
+            failures.extend(cached_failures)
+            coverage_issues.extend(_analysis_status_coverage_issues(parsed_files))
+            analyses = parsed_files
+
+        session = index_backend.begin_index_session(root)
+        try:
+            session.purge_skipped_docstring_issues()
+            session.prune_orphaned_embeddings()
+            previous_embeddings_by_path = (
+                {}
+                if full
+                else session.load_previous_embeddings_by_path(
+                    paths=plan.indexed_paths,
+                    embedding_backend=backend,
+                )
+            )
+            _prepare_index_storage(
+                full=full,
+                plan=plan,
+                session=session,
+            )
+
+            (
+                embeddings_recomputed,
+                changed_file_embeddings_reused,
+                changed_file_embeddings_skipped,
+                changed_file_embeddings_pending,
+                persisted_count,
+                persistence_failures,
+            ) = _persist_indexed_file_analyses(
+                PersistIndexedFileAnalysesRequest(
+                    root=root,
+                    session=session,
+                    parsed_files=analyses,
+                    embedding_backend=backend,
+                    embedding_indexing=embedding_indexing,
+                    defer_embeddings=effective_embedding_index_mode == "deferred",
+                    previous_embeddings_by_path=previous_embeddings_by_path,
+                    vector_store=active_vector_store,
+                    vector_set_identity=vector_store_context.identity,
+                    vector_store_config=vector_store_context.config,
+                )
+            )
+            failures.extend(persistence_failures)
+            embeddings_reused = (
+                unchanged_embeddings_reused + changed_file_embeddings_reused
+            )
+
+            if _index_run_mutated_graph_inputs(
+                full=full,
+                plan=plan,
+                existing_state=existing_state,
+                persisted_count=persisted_count,
+            ):
+                session.rebuild_derived_indexes()
+            session.persist_runtime_inventory(
+                BackendRuntimeInventoryRequest(
+                    root=root,
+                    backend_name=str(index_backend.name),
+                    backend_version=str(index_backend.version),
+                    coverage_complete=not coverage_issues and not failures,
+                    analyzers=analyzers,
+                )
+            )
+            session.commit()
+            if vector_adapter is not None:
+                vector_adapter.commit()
+
+            return _finalize_index_report(
+                FinalizeIndexReportRequest(
+                    plan=plan,
+                    file_hashes=scan_hashes,
+                    file_analysis_inputs=scan_inputs,
+                    indexed_count=persisted_count,
+                    failures=failures,
+                    warnings=collected_warnings,
+                    coverage_issues=coverage_issues,
+                    embeddings_recomputed=embeddings_recomputed,
+                    embeddings_reused=embeddings_reused,
+                    embeddings_skipped=changed_file_embeddings_skipped,
+                    embeddings_pending=changed_file_embeddings_pending,
+                    embedding_index_mode=effective_embedding_index_mode,
+                    embedding_complete=changed_file_embeddings_pending == 0,
+                    analysis_concurrency=resolved_analysis_concurrency,
+                )
+            )
+        except BaseException:
+            session.abort()
+            raise
+        finally:
+            session.close()

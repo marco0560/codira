@@ -217,6 +217,14 @@ def test_progress_inventory_matches_repository_execution_paths(
             "status": "passed",
             "usable": True,
             "embedding_complete": True,
+            "index_coverage": {
+                "attempted_file_count": 1,
+                "indexed_file_count": 1,
+                "failed_file_count": 0,
+                "complete": True,
+                "usable": True,
+                "failed_paths": [],
+            },
             "stdout": str(output),
         }
 
@@ -645,12 +653,14 @@ def test_interrupted_checkpoint_retries_without_failed_flag(
 @pytest.mark.parametrize("extended", [False, True])
 @pytest.mark.parametrize("embedding_ready", [False, True])
 @pytest.mark.parametrize("failed_source", [False, True])
+@pytest.mark.parametrize("scheduler_embedding_complete", [False, True])
 def test_queryable_partial_keeps_structural_queries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     extended: bool,
     embedding_ready: bool,
     failed_source: bool,
+    scheduler_embedding_complete: bool,
 ) -> None:
     """Separate source failures from coverage gaps in both suite paths.
 
@@ -666,6 +676,8 @@ def test_queryable_partial_keeps_structural_queries(
         Actual embedding population prerequisite.
     failed_source : bool
         Failed source attempt rather than unsupported-file coverage gaps.
+    scheduler_embedding_complete : bool
+        Whether the latest concurrency rebuild has complete embeddings.
 
     Returns
     -------
@@ -688,6 +700,8 @@ def test_queryable_partial_keeps_structural_queries(
         "usable": True,
         "partial": failed_source,
         "complete": False,
+        "attempted_file_count": 2,
+        "indexed_file_count": 2 - int(failed_source),
         "failed_file_count": int(failed_source),
         "failed_paths": ["broken.py"] if failed_source else [],
     }
@@ -738,7 +752,11 @@ def test_queryable_partial_keeps_structural_queries(
             "status": status,
             "usable": True,
             "index_coverage": coverage,
-            "embedding_complete": embedding_ready,
+            "embedding_complete": (
+                scheduler_embedding_complete
+                if key.endswith(("index-process", "index-thread"))
+                else embedding_ready
+            ),
             "stdout": str(output),
         }
         campaign.results.append(result)
@@ -759,11 +777,20 @@ def test_queryable_partial_keeps_structural_queries(
     assert any(argv[1] == "cov" for argv in invoked)
     assert any(argv[1] == "refs" for argv in invoked)
     assert any("--embeddings-only" in argv for argv in invoked)
-    assert any(argv[1] == "docs" for argv in invoked) == embedding_ready
-    assert any(argv[1] == "ctx" for argv in invoked) == embedding_ready
+    semantic_ready = embedding_ready and (not extended or scheduler_embedding_complete)
+    assert any(argv[1] == "docs" for argv in invoked) == semantic_ready
+    assert any(argv[1] == "ctx" for argv in invoked) == semantic_ready
     assert sum(
         argv[1] == "index" and "--embeddings-only" not in argv for argv in invoked
-    ) == (1 if failed_source else 4 if extended else 2)
+    ) == (
+        3
+        if failed_source and extended
+        else 1
+        if failed_source
+        else 4
+        if extended
+        else 2
+    )
     assert (
         any(
             r["key"].endswith("/index-incremental") and r["status"] == "excluded"
@@ -1168,6 +1195,193 @@ def test_error_classification_preserves_root_cause(command: str) -> None:
     assert "missing index summary" not in structured["reason"]
     malformed_success = RUNNER.classify_sample(argv, "broken", "", 0)
     assert malformed_success["reason"] == "malformed JSON output"
+
+
+def test_scheduler_coverage_requires_complete_evidence() -> None:
+    """Reject scheduler comparisons when required coverage counts are absent.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Missing dimensions cannot be treated as matching measurements.
+    """
+    incomplete = {"index_coverage": {"usable": True}}
+    assert not RUNNER.equivalent_index_coverage(incomplete, incomplete)
+
+
+def test_cgroup_memory_guard_checks_ancestor_limits_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """Enforce inherited memory caps and reject unavailable accounting.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated cgroup-v2 hierarchy and membership fixture.
+
+    Returns
+    -------
+    None
+        Guard checks accept enforced bounds and reject weaker or missing limits.
+    """
+    mount = tmp_path / "cgroup"
+    parent = mount / "parent"
+    child = parent / "child"
+    child.mkdir(parents=True)
+    membership = tmp_path / "membership"
+    membership.write_text("0::/parent/child\n")
+    (parent / "memory.max").write_text(str(32 * 1024 * 1024))
+    (parent / "memory.swap.max").write_text("0")
+    (child / "memory.max").write_text("max")
+    (child / "memory.swap.max").write_text(str(1024 * 1024))
+    (child / "memory.events").write_text("low 0\noom 8\noom_kill 3\n")
+    limits = RUNNER.cgroup_memory_limits(membership, mount)
+    assert limits == {"memory": 32 * 1024 * 1024, "swap": 0}
+    assert RUNNER.cgroup_oom_kills(membership, mount) == 3
+    RUNNER.require_cgroup_memory_limits(limits, 32, 0)
+    (mount / "memory.max").write_text(str(16 * 1024 * 1024))
+    (mount / "memory.swap.max").write_text("0")
+    assert RUNNER.cgroup_memory_limits(membership, mount) == {
+        "memory": 16 * 1024 * 1024,
+        "swap": 0,
+    }
+    with pytest.raises(ValueError, match="memory limit"):
+        RUNNER.require_cgroup_memory_limits(limits, 31, 0)
+    with pytest.raises(ValueError, match="cannot verify"):
+        RUNNER.require_cgroup_memory_limits(None, 32, 0)
+    with pytest.raises(ValueError, match="requires"):
+        RUNNER.require_cgroup_memory_limits(limits, 32, None)
+    (child / "memory.swap.max").unlink()
+    assert RUNNER.cgroup_memory_limits(membership, mount) is None
+
+
+def test_guarded_command_records_oom_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retain cgroup counter evidence when a child is killed during a stage.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated campaign and stage records.
+    monkeypatch : pytest.MonkeyPatch
+        Injected cgroup event counter readings.
+
+    Returns
+    -------
+    None
+        A killed child is recorded as failed with the observed counter change.
+    """
+    import sys
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"temporary_root": str(tmp_path)}))
+    campaign = RUNNER.Campaign(manifest, tmp_path / "run", False)
+    counts = iter((3, 4))
+    monkeypatch.setattr(RUNNER, "cgroup_oom_kills", lambda: next(counts))
+    result = campaign.command(
+        "guarded",
+        [
+            sys.executable,
+            "-c",
+            "import os,signal; os.kill(os.getpid(), signal.SIGKILL)",
+        ],
+    )
+    assert result["status"] == "failed"
+    sample = result["samples"][0]
+    assert sample["cgroup_oom_kills_before"] == 3
+    assert sample["cgroup_oom_kills_after"] == 4
+    assert "cgroup OOM counter increased" in sample["reason"]
+
+
+def test_guarded_run_rejects_unavailable_cgroup_before_creating_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail closed before creating a campaign when limits cannot be checked.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated manifest and prospective run root.
+    monkeypatch : pytest.MonkeyPatch
+        Replaces unrelated validation and cgroup discovery.
+
+    Returns
+    -------
+    None
+        No run directory or child process is created.
+    """
+    import sys
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "name": "fixture",
+                "repositories": [],
+                "profiles": [],
+                "capabilities": [],
+                "coverage_gaps": [],
+                "artifact_root": str(tmp_path / "runs"),
+            }
+        )
+    )
+    monkeypatch.setattr(RUNNER, "validate_plan", lambda *_args: None)
+    monkeypatch.setattr(RUNNER, "verify_clang_external_inputs", lambda *_args: {})
+    monkeypatch.setattr(RUNNER, "cgroup_memory_limits", lambda: None)
+    launch = Mock()
+    monkeypatch.setattr(subprocess, "Popen", launch)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "runner",
+            str(manifest),
+            "--run",
+            "--run-id",
+            "guarded",
+            "--memory-limit-mib",
+            "32",
+            "--swap-limit-mib",
+            "0",
+        ],
+    )
+    with pytest.raises(ValueError, match="cannot verify"):
+        RUNNER.main()
+    assert not (tmp_path / "runs").exists()
+    launch.assert_not_called()
+
+
+def test_resume_rejects_changed_guard_limits(tmp_path: Path) -> None:
+    """Require a new run identity when declared or effective caps change.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated identity receipt.
+
+    Returns
+    -------
+    None
+        Both requested and effective resource changes are rejected.
+    """
+    receipt = tmp_path / "identity.json"
+    original = {
+        "memory_guard_mib": {"memory": 32, "swap": 0},
+        "cgroup_memory_limits_bytes": {"memory": 32 * 1024 * 1024, "swap": 0},
+    }
+    RUNNER.write(receipt, original)
+    RUNNER.guard_resume_identity(receipt, original)
+    for key, value in (
+        ("memory_guard_mib", {"memory": 64, "swap": 0}),
+        ("cgroup_memory_limits_bytes", {"memory": 16 * 1024 * 1024, "swap": 0}),
+    ):
+        with pytest.raises(ValueError, match="resume identity differs"):
+            RUNNER.guard_resume_identity(receipt, {**original, key: value})
 
 
 @pytest.mark.skipif(

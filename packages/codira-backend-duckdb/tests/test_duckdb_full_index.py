@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+import subprocess
 import sys
+from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,11 +18,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from codira.contracts import (
     BackendPersistAnalysisRequest,
+    BackendPersistFullIndexFile,
+    BackendPersistFullIndexResult,
     EmbeddingEngineSpec,
     PendingEmbeddingRow,
     PreparedVectorRow,
     VectorSetIdentity,
+    VectorStoreError,
 )
+from codira.index_stream_contracts import BackendPersistFullIndexStreamRequest
 from codira.models import (
     AnalysisResult,
     FileMetadataSnapshot,
@@ -40,10 +48,13 @@ from codira_backend_duckdb.profiling import (
     DuckDBProfileRecorder,
 )
 from codira_backend_duckdb import duckdb_support as duckdb_support_module
-from codira_vector_store_sqlite import SQLiteVectorStore
+from codira_vector_store_sqlite import (
+    SQLiteVectorStore,
+    SQLiteVectorStoreWriteSession,
+    get_vector_store_path,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
     from codira_backend_duckdb.duckdb_support import _DuckDBPersistenceConnection
 
 
@@ -52,6 +63,47 @@ _UNRESOLVED_CALL_RECORDS = (
     ("name", "", "PyUnicode_AsUTF8AndSize", 2, 4),
     ("name", "", "system", 3, 4),
 )
+
+
+def test_duckdb_package_import_does_not_require_streaming_core_modules() -> None:
+    """Import the backend when newer optional core modules are unavailable.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The package imports without loading the streaming-only core modules.
+    """
+    package_src = Path(__file__).resolve().parents[1] / "src"
+    script = """
+import builtins
+import sys
+
+blocked = {
+    "codira.index_stream_contracts",
+    "codira.vector_write_adapter",
+    "codira.vector_write_session",
+}
+real_import = builtins.__import__
+
+def import_without_streaming_modules(name, *args, **kwargs):
+    if name in blocked:
+        raise ModuleNotFoundError(name=name)
+    return real_import(name, *args, **kwargs)
+
+builtins.__import__ = import_without_streaming_modules
+sys.path.insert(0, sys.argv[1])
+import codira_backend_duckdb
+"""
+    subprocess.run(
+        [sys.executable, "-c", script, str(package_src)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_duckdb_backend_full_prepare_clears_populated_database_in_session(
@@ -594,8 +646,8 @@ def test_duckdb_full_index_vector_failure_is_not_published_ready(
     Parameters
     ----------
     monkeypatch : pytest.MonkeyPatch
-        Fixture used to make the bulk vector-store write fail after DuckDB
-        commits structural rows.
+        Fixture used to make the staged vector-store transaction fail after
+        DuckDB commits structural rows.
     tmp_path : pathlib.Path
         Temporary workspace containing isolated source and output roots.
 
@@ -660,31 +712,24 @@ def test_duckdb_full_index_vector_failure_is_not_published_ready(
         assert first_report.failed == 0
         assert first_generation is not None
         assert first_generation.state == "ready"
+        vector_publication_before = _sqlite_vector_publication(source_root)
+        (source_root / "sample.py").write_text(
+            'def demo() -> int:\n    """Changed documentation."""\n    return 2\n',
+            encoding="utf-8",
+        )
 
         structural_file_counts: list[int] = []
 
         def raise_after_structural_commit(
-            self: SQLiteVectorStore,
-            root: Path,
-            identity: VectorSetIdentity,
-            rows: Sequence[PreparedVectorRow],
-            config: Mapping[str, object],
+            session: SQLiteVectorStoreWriteSession,
         ) -> None:
             """
-            Prove DuckDB committed structural rows before failing vector writes.
+            Prove DuckDB committed before rejecting staged vector changes.
 
             Parameters
             ----------
-            self : codira_vector_store_sqlite.SQLiteVectorStore
-                Active vector-store instance receiving the incremental write.
-            root : pathlib.Path
-                Repository selecting vector storage.
-            identity : codira.contracts.VectorSetIdentity
-                Active vector-set identity.
-            rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
-                Materialized rows intentionally rejected.
-            config : collections.abc.Mapping[str, object]
-                Selected store configuration.
+            session : codira_vector_store_sqlite.SQLiteVectorStoreWriteSession
+                Active transaction containing staged vector changes.
 
             Returns
             -------
@@ -695,7 +740,7 @@ def test_duckdb_full_index_vector_failure_is_not_published_ready(
             RuntimeError
                 Always, after observing the committed DuckDB files table.
             """
-            del self, root, identity, rows, config
+            del session
             raw = duckdb.connect(str(_duckdb_db_path(source_root)))
             try:
                 row = raw.execute("SELECT COUNT(*) FROM files").fetchone()
@@ -707,20 +752,270 @@ def test_duckdb_full_index_vector_failure_is_not_published_ready(
             raise RuntimeError(msg)
 
         monkeypatch.setattr(
-            SQLiteVectorStore,
-            "store_vectors",
+            SQLiteVectorStoreWriteSession,
+            "commit",
             raise_after_structural_commit,
+        )
+        with pytest.raises(VectorStoreError, match="session commit failed"):
+            index_repo(source_root, full=True)
+        failed_generation = IndexGenerationStore(source_root).read()
+        vector_publication_after = _sqlite_vector_publication(source_root)
+
+    assert structural_file_counts == [1]
+    assert vector_publication_after == vector_publication_before
+    assert failed_generation is not None
+    assert failed_generation.state == "failed"
+    assert failed_generation.generation == first_generation.generation + 1
+    assert failed_generation.last_successful_generation == first_generation.generation
+
+
+def test_duckdb_stream_iterator_failure_aborts_staged_vector_batch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Abort staged vectors and the DuckDB transaction on an early stream error.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to observe staged batches and inject an iterator failure.
+    tmp_path : pathlib.Path
+        Temporary workspace containing isolated source and output roots.
+
+    Returns
+    -------
+    None
+        The failed generation retains the previous structural and vector
+        publications after one replacement vector batch was staged.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    source_root = tmp_path / "repo"
+    output_root = tmp_path / "out"
+    source_root.mkdir()
+    config_path = source_root / ".codira" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "\n".join(
+            (
+                "[backend]",
+                'name = "duckdb"',
+                "",
+                "[embeddings]",
+                "enabled = true",
+                'vector_store = "sqlite"',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    sample_path = source_root / "sample.py"
+    sample_path.write_text(
+        'def demo() -> int:\n    """Original documentation."""\n    return 1\n',
+        encoding="utf-8",
+    )
+
+    def fake_embed_texts(
+        texts: list[str],
+        root: Path | None = None,
+    ) -> list[list[float]]:
+        """Return deterministic vectors for both publication attempts.
+
+        Parameters
+        ----------
+        texts : list[str]
+            Text payloads requested by the embedding flush.
+        root : pathlib.Path | None, optional
+            Repository root supplied by the embedding helper.
+
+        Returns
+        -------
+        list[list[float]]
+            One fixed-size vector for each input text.
+        """
+        del root
+        return [[1.0] * 384 for _text in texts]
+
+    monkeypatch.setattr(duckdb_support_module, "embed_texts", fake_embed_texts)
+    monkeypatch.setattr(
+        duckdb_backend_module,
+        "_STRUCTURAL_ROW_FLUSH_THRESHOLD",
+        1,
+    )
+
+    def duckdb_file_rows() -> tuple[tuple[str, str], ...]:
+        """Read structural file identities visible in DuckDB.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        tuple
+            Ordered path and content-hash pairs from the committed files table.
+        """
+        raw = duckdb.connect(str(_duckdb_db_path(source_root)))
+        try:
+            rows = raw.execute("SELECT path, hash FROM files ORDER BY path").fetchall()
+        finally:
+            raw.close()
+        return tuple((str(path), str(content_hash)) for path, content_hash in rows)
+
+    with override_storage_root(source_root, output_root):
+        first_report = index_repo(source_root, full=True)
+        first_generation = IndexGenerationStore(source_root).read()
+        assert first_report.failed == 0
+        assert first_generation is not None
+        assert first_generation.state == "ready"
+        vector_publication_before = _sqlite_vector_publication(source_root)
+        duckdb_files_before = duckdb_file_rows()
+
+        sample_path.write_text(
+            'def demo() -> int:\n    """Replacement documentation."""\n    return 2\n',
+            encoding="utf-8",
+        )
+
+        staged_batches: list[tuple[str, ...]] = []
+        original_store_vectors = SQLiteVectorStoreWriteSession.store_vectors
+
+        def record_staged_vectors(
+            session: SQLiteVectorStoreWriteSession,
+            rows: Sequence[PreparedVectorRow],
+        ) -> None:
+            """Record vector rows after writing them into the active session.
+
+            Parameters
+            ----------
+            session : codira_vector_store_sqlite.SQLiteVectorStoreWriteSession
+                Active vector write transaction.
+            rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+                Bounded materialized batch staged by DuckDB.
+
+            Returns
+            -------
+            None
+                The batch has been staged and its identities recorded.
+            """
+            original_store_vectors(session, rows)
+            staged_batches.append(tuple(row.row.stable_id for row in rows))
+
+        monkeypatch.setattr(
+            SQLiteVectorStoreWriteSession,
+            "store_vectors",
+            record_staged_vectors,
+        )
+
+        original_persist_stream = DuckDBIndexBackend.persist_full_index_stream
+
+        def fail_after_staged_batch(
+            backend: DuckDBIndexBackend,
+            request: BackendPersistFullIndexStreamRequest,
+        ) -> BackendPersistFullIndexResult:
+            """Fail the file iterator after DuckDB stages its first vector batch.
+
+            Parameters
+            ----------
+            backend : codira_backend_duckdb.DuckDBIndexBackend
+                Backend consuming the full-index stream.
+            request : codira.index_stream_contracts.BackendPersistFullIndexStreamRequest
+                Streaming request whose file iterator is wrapped for failure.
+
+            Returns
+            -------
+            codira.contracts.BackendPersistFullIndexResult
+                Result from the original stream implementation if it completes.
+            """
+
+            def fail_on_second_read() -> Iterator[BackendPersistFullIndexFile]:
+                """Yield one file, then fail the next iterator read.
+
+                Parameters
+                ----------
+                None
+
+                Returns
+                -------
+                collections.abc.Iterator
+                    One source file followed by the injected failure.
+                """
+                files = iter(request.files)
+                try:
+                    first_file = next(files)
+                except StopIteration as exc:
+                    raise AssertionError("expected a streamed file") from exc
+                yield first_file
+                assert staged_batches, "the vector batch must stage before failure"
+                raise RuntimeError("injected DuckDB stream iterator failure")
+
+            return original_persist_stream(
+                backend,
+                replace(request, files=fail_on_second_read()),
+            )
+
+        monkeypatch.setattr(
+            DuckDBIndexBackend,
+            "persist_full_index_stream",
+            fail_after_staged_batch,
         )
         failed_report = index_repo(source_root, full=True)
         failed_generation = IndexGenerationStore(source_root).read()
+        vector_publication_after = _sqlite_vector_publication(source_root)
+        duckdb_files_after = duckdb_file_rows()
 
-    assert structural_file_counts == [1]
+    assert len(staged_batches) == 1
+    assert staged_batches[0]
+    assert vector_publication_after == vector_publication_before
+    assert duckdb_files_after == duckdb_files_before
     assert failed_report.failed == 1
     assert failed_report.publication_ready is False
     assert failed_generation is not None
     assert failed_generation.state == "failed"
     assert failed_generation.generation == first_generation.generation + 1
     assert failed_generation.last_successful_generation == first_generation.generation
+
+
+def _sqlite_vector_publication(
+    root: Path,
+) -> tuple[
+    tuple[tuple[object, ...], ...],
+    tuple[tuple[object, ...], ...],
+    tuple[tuple[object, ...], ...],
+]:
+    """Read durable vector revisions, bindings, and pending rows.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository owning the separated SQLite vector store.
+
+    Returns
+    -------
+    tuple
+        Stable database rows that define the visible vector publication.
+    """
+    conn = sqlite3.connect(get_vector_store_path(root))
+    try:
+        vector_sets = tuple(
+            conn.execute("SELECT id, revision FROM vector_sets ORDER BY id").fetchall()
+        )
+        bindings = tuple(
+            conn.execute(
+                """SELECT vector_set_id, object_type, stable_id, content_hash
+                FROM vector_bindings
+                ORDER BY vector_set_id, object_type, stable_id"""
+            ).fetchall()
+        )
+        pending = tuple(
+            conn.execute(
+                """SELECT vector_set_id, object_type, object_id, stable_id,
+                          content_hash, text
+                FROM pending_vectors
+                ORDER BY vector_set_id, object_type, object_id, stable_id"""
+            ).fetchall()
+        )
+    finally:
+        conn.close()
+    return vector_sets, bindings, pending
 
 
 def test_duckdb_cache_resolution_handles_large_sqlite_vector_store_lookups(

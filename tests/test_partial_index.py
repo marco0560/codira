@@ -16,7 +16,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 from unittest.mock import Mock
 
 import pytest
@@ -24,6 +24,8 @@ import pytest
 import codira.indexer as indexer_module
 from codira.cli import main
 from codira.cli_index import _ensure_index
+from codira.config import IndexConcurrencyConfig
+from codira.contracts import BackendPersistFullIndexResult
 from codira.index_coverage import index_coverage
 from codira.index_generation import IndexGenerationStore
 from codira.indexer import index_repo
@@ -32,6 +34,14 @@ from codira.registry import active_index_backend
 from codira.storage import get_metadata_path
 
 if TYPE_CHECKING:
+    from collections.abc import Generator, Iterable
+
+    from codira.contracts import (
+        BackendPersistFullIndexFile,
+        BackendQueryConnection,
+        LanguageAnalyzer,
+    )
+    from codira.index_stream_contracts import BackendPersistFullIndexStreamRequest
     from codira.models import AnalysisResult
 
 
@@ -95,8 +105,8 @@ def test_partial_queries_retry_and_recovery(
     )
     malformed.write_text(malformed.read_text() + "\n")
     active_index_backend(root=tmp_path).initialize(tmp_path)
-    analyze = Mock(wraps=indexer_module._collect_indexed_file_analyses)
-    monkeypatch.setattr(indexer_module, "_collect_indexed_file_analyses", analyze)
+    analyze = Mock(wraps=indexer_module._iter_indexed_file_analyses)
+    monkeypatch.setattr(indexer_module, "_iter_indexed_file_analyses", analyze)
     report = index_repo(tmp_path, full=full)
     assert report.publication_ready
     assert report.indexed == report.failed == 1
@@ -157,6 +167,335 @@ def test_partial_queries_retry_and_recovery(
         "dict[str, object]", MCPAdapter(tmp_path).symbol("recovered")["result"]
     )
     assert recovered["symbols"]
+
+
+@pytest.mark.parametrize("strategy", ["thread", "process"])
+@pytest.mark.parametrize("backend_name", ["sqlite", "duckdb"])
+def test_streamed_full_index_matches_serial_and_parallel_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    strategy: Literal["thread", "process"],
+    backend_name: str,
+) -> None:
+    """Persist equivalent content with serial and parallel analysis.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated repository and index root.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to select the local configuration.
+    strategy : str
+        Concurrent scheduler to compare with serial indexing.
+    backend_name : str
+        Structural backend whose streamed path is under test.
+
+    Returns
+    -------
+    None
+        Both modes produce equal source, symbol, and coverage rows.
+    """
+    (tmp_path / ".codira").mkdir()
+    config = tmp_path / ".codira/config.toml"
+    config.write_text(
+        f'[embeddings]\nenabled = false\n[backend]\nname = "{backend_name}"\n'
+    )
+    monkeypatch.setenv("CODIRA_CONFIG_FILE", str(config))
+    (tmp_path / "a.py").write_text("def first():\n    return second()\n")
+    (tmp_path / "b.py").write_text("def second():\n    return 2\n")
+    backend = active_index_backend(root=tmp_path)
+    backend.initialize(tmp_path)
+
+    def snapshot() -> tuple[list[object], list[object], list[object]]:
+        """Read relevant persisted content in deterministic order.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        tuple[list[object], list[object], list[object]]
+            File, function and coverage rows.
+        """
+        connection = backend.open_connection(tmp_path)
+        try:
+            query = cast("BackendQueryConnection", connection)
+            return (
+                list(
+                    query.execute(
+                        "SELECT path, hash FROM files ORDER BY path"
+                    ).fetchall()
+                ),
+                list(
+                    query.execute(
+                        "SELECT name, lineno, signature FROM functions ORDER BY name"
+                    ).fetchall()
+                ),
+                list(
+                    query.execute(
+                        "SELECT path, coverage_state FROM analysis_status ORDER BY path"
+                    ).fetchall()
+                ),
+            )
+        finally:
+            backend.close_connection(connection)
+
+    serial = index_repo(
+        tmp_path, full=True, analysis_concurrency=IndexConcurrencyConfig(strategy="off")
+    )
+    expected = snapshot()
+    parallel = index_repo(
+        tmp_path,
+        full=True,
+        analysis_concurrency=IndexConcurrencyConfig(strategy=strategy, max_workers=2),
+    )
+    assert snapshot() == expected
+    assert (serial.indexed, serial.failed, serial.coverage_issues) == (
+        parallel.indexed,
+        parallel.failed,
+        parallel.coverage_issues,
+    )
+    assert serial.indexed == 2
+
+
+def test_streaming_backend_cannot_publish_an_incomplete_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject a backend that returns before consuming every analyzed file.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source and index root.
+    monkeypatch : pytest.MonkeyPatch
+        Supplies an intentionally incomplete streaming backend.
+
+    Returns
+    -------
+    None
+        The generation is failed rather than published as complete.
+    """
+    (tmp_path / ".codira").mkdir()
+    config = tmp_path / ".codira/config.toml"
+    config.write_text('[embeddings]\nenabled = false\n[backend]\nname = "duckdb"\n')
+    monkeypatch.setenv("CODIRA_CONFIG_FILE", str(config))
+    (tmp_path / "a.py").write_text("def first():\n    return 1\n")
+    (tmp_path / "b.py").write_text("def second():\n    return 2\n")
+    backend = active_index_backend(root=tmp_path)
+    backend.initialize(tmp_path)
+    analyze = Mock(wraps=indexer_module._analyze_index_task)
+    monkeypatch.setattr(indexer_module, "_analyze_index_task", analyze)
+
+    def stop_early(
+        _backend: object, request: BackendPersistFullIndexStreamRequest
+    ) -> BackendPersistFullIndexResult:
+        """Return after consuming only the first input file.
+
+        Parameters
+        ----------
+        _backend : object
+            Backend receiving the stream.
+        request : codira.index_stream_contracts.BackendPersistFullIndexStreamRequest
+            Full-index stream to truncate.
+
+        Returns
+        -------
+        codira.contracts.BackendPersistFullIndexResult
+            A misleading successful result used to test fail-closed handling.
+        """
+        next(iter(request.files))
+        return BackendPersistFullIndexResult(0, 0, 0, 0)
+
+    monkeypatch.setattr(type(backend), "persist_full_index_stream", stop_early)
+    report = index_repo(tmp_path, full=True)
+    assert not report.publication_ready
+    assert report.failed == 2
+    assert analyze.call_count == 1
+    generation = IndexGenerationStore(tmp_path).read()
+    assert generation is not None and generation.state == "failed"
+
+
+def test_streaming_backend_unexpected_error_closes_analysis_stream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Close the analysis stream even for an unclassified backend exception.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source and index root.
+    monkeypatch : pytest.MonkeyPatch
+        Injects a backend error and observes stream cleanup.
+
+    Returns
+    -------
+    None
+        The original exception propagates and the stream is closed.
+    """
+    (tmp_path / ".codira").mkdir()
+    config = tmp_path / ".codira/config.toml"
+    config.write_text('[embeddings]\nenabled = false\n[backend]\nname = "duckdb"\n')
+    monkeypatch.setenv("CODIRA_CONFIG_FILE", str(config))
+    (tmp_path / "a.py").write_text("def first():\n    return 1\n")
+    (tmp_path / "b.py").write_text("def second():\n    return 2\n")
+    backend = active_index_backend(root=tmp_path)
+    backend.initialize(tmp_path)
+    original = indexer_module._stream_bulk_files
+    closed: list[bool] = []
+
+    def observed_stream(
+        root: Path,
+        analyses: Iterable[indexer_module.ParsedFile],
+        failures: list[indexer_module.IndexFailure],
+        accepted: list[tuple[str, str]],
+    ) -> Generator[BackendPersistFullIndexFile]:
+        """Record generator closure while forwarding the actual stream.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        analyses : collections.abc.Iterable
+            Analyzed file snapshots.
+        failures : list[IndexFailure]
+            Destination for analysis failures.
+        accepted : list[tuple[str, str]]
+            Accepted file identities.
+
+        Returns
+        -------
+        collections.abc.Generator
+            Actual validated backend requests.
+        """
+        try:
+            yield from original(root, analyses, failures, accepted)
+        finally:
+            closed.append(True)
+
+    def fail_early(
+        _backend: object, request: BackendPersistFullIndexStreamRequest
+    ) -> BackendPersistFullIndexResult:
+        """Raise an unexpected backend error after consuming one file.
+
+        Parameters
+        ----------
+        _backend : object
+            Backend receiving the stream.
+        request : codira.index_stream_contracts.BackendPersistFullIndexStreamRequest
+            Stream to partially consume.
+
+        Returns
+        -------
+        codira.contracts.BackendPersistFullIndexResult
+            This function never returns.
+
+        Raises
+        ------
+        TypeError
+            Always, after the first file.
+        """
+        next(iter(request.files))
+        message = "unexpected backend failure"
+        raise TypeError(message)
+
+    monkeypatch.setattr(indexer_module, "_stream_bulk_files", observed_stream)
+    monkeypatch.setattr(type(backend), "persist_full_index_stream", fail_early)
+    with pytest.raises(TypeError, match="unexpected backend failure"):
+        index_repo(tmp_path, full=True)
+    assert closed == [True]
+    generation = IndexGenerationStore(tmp_path).read()
+    assert generation is not None and generation.state == "failed"
+
+
+def test_streamed_full_index_rolls_back_after_analysis_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Restore the previous SQLite index when streaming fails after a write.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source and index root.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to inject an analysis failure.
+
+    Returns
+    -------
+    None
+        The previous committed file hashes remain in the structural index.
+    """
+    (tmp_path / ".codira").mkdir()
+    config = tmp_path / ".codira/config.toml"
+    config.write_text('[embeddings]\nenabled = false\n[backend]\nname = "sqlite"\n')
+    monkeypatch.setenv("CODIRA_CONFIG_FILE", str(config))
+    first = tmp_path / "a.py"
+    first.write_text("def before():\n    return 1\n")
+    (tmp_path / "b.py").write_text("def other():\n    return 2\n")
+    backend = active_index_backend(root=tmp_path)
+    backend.initialize(tmp_path)
+    index_repo(tmp_path, full=True)
+    connection = backend.open_connection(tmp_path)
+    try:
+        original = (
+            cast("BackendQueryConnection", connection)
+            .execute("SELECT path, hash FROM files ORDER BY path")
+            .fetchall()
+        )
+    finally:
+        backend.close_connection(connection)
+
+    first.write_text("def after():\n    return 3\n")
+    analyze = indexer_module._analyze_index_task
+    calls = 0
+
+    def fail_second(
+        task: indexer_module._AnalysisTask,
+        root: Path,
+        analyzers: list[LanguageAnalyzer],
+    ) -> indexer_module._AnalysisTaskResult:
+        """Raise after the first file has been analyzed.
+
+        Parameters
+        ----------
+        task : codira.indexer._AnalysisTask
+            Selected source file.
+        root : pathlib.Path
+            Repository root.
+        analyzers : list[codira.contracts.LanguageAnalyzer]
+            Configured analyzers.
+
+        Returns
+        -------
+        codira.indexer._AnalysisTaskResult
+            Original analysis result before the injected failure.
+
+        Raises
+        ------
+        RuntimeError
+            On the second file.
+        """
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            message = "injected analysis failure"
+            raise RuntimeError(message)
+        return analyze(task, root, analyzers)
+
+    monkeypatch.setattr(indexer_module, "_analyze_index_task", fail_second)
+    with pytest.raises(RuntimeError, match="injected analysis failure"):
+        index_repo(tmp_path, full=True)
+    assert calls == 2
+    connection = backend.open_connection(tmp_path)
+    try:
+        assert (
+            cast("BackendQueryConnection", connection)
+            .execute("SELECT path, hash FROM files ORDER BY path")
+            .fetchall()
+            == original
+        )
+    finally:
+        backend.close_connection(connection)
 
 
 def test_unusable_and_corrupt_publications_are_fatal(

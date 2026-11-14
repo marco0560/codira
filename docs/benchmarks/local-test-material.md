@@ -123,6 +123,42 @@ failures are not retried by that flag. Failed command stages can be explicitly
 retried with `--resume --retry-failed`, retaining prior attempts. Exclusion changes
 always require another prepared plan and run identity.
 
+### Memory-guarded execution
+
+On Linux with a user systemd manager and cgroup v2 memory accounting, an
+operator can cap the entire benchmark process tree. Select positive RAM and
+nonnegative swap bounds in MiB, a fresh launch directory, and a run ID before
+starting. Run from the Codira checkout with `PLAN_DIR`, `LAUNCH_DIR`, `RUN_ID`,
+`MEMORY_MIB`, and `SWAP_MIB` set to the intended values:
+
+```bash
+(
+mkdir "$LAUNCH_DIR" || exit 1
+systemd-run --user --scope --quiet \
+--property="MemoryMax=${MEMORY_MIB}M" \
+--property="MemorySwapMax=${SWAP_MIB}M" \
+uv run --offline --no-sync python scripts/run_test_material_benchmarks.py \
+"$PLAN_DIR/manifest.json" --run --run-id "$RUN_ID" \
+--memory-limit-mib "$MEMORY_MIB" --swap-limit-mib "$SWAP_MIB" \
+2>&1 | tee "$LAUNCH_DIR/run.log"
+statuses=("${PIPESTATUS[@]}")
+printf '%s\n' "${statuses[0]}" > "$LAUNCH_DIR/run.exit"
+printf '%s\n' "${statuses[1]}" > "$LAUNCH_DIR/tee.exit"
+if [ "${statuses[0]}" -ne 0 ]; then exit "${statuses[0]}"; fi
+exit "${statuses[1]}"
+)
+```
+
+The runner verifies effective cgroup limits, including inherited limits, before
+creating a run. If the limits cannot be read or are weaker than requested, it
+stops. Requested and effective limits become part of the immutable run identity;
+changing them requires a new run. A cgroup OOM-counter increase observed while
+a child was killed is recorded as supporting evidence, not proof that the
+counter belongs to that child. If the runner itself is killed, the outer
+`systemd-run` status and log remain in the launch directory. A completed failed
+stage is retained on resume unless `--retry-failed` is explicitly selected;
+an incomplete admission may instead require a fresh run ID.
+
 ### Backend profile registries
 
 The local runner gives each backend profile its own workspace registry under

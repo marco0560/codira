@@ -135,6 +135,204 @@ def measurement_capabilities() -> dict[str, str]:
     }
 
 
+def cgroup_mount_is_supported(mount: Path) -> bool:
+    """Reject non-root cgroup mounts when membership mapping is ambiguous.
+
+    Parameters
+    ----------
+    mount : pathlib.Path
+        Cgroup mount to inspect; alternate paths are used by isolated tests.
+
+    Returns
+    -------
+    bool
+        Whether the production mount exposes the unified hierarchy root.
+    """
+    if mount != Path("/sys/fs/cgroup"):
+        return True
+    try:
+        for line in Path("/proc/self/mountinfo").read_text().splitlines():
+            fields = line.split()
+            if len(fields) >= 10 and fields[4] == str(mount):
+                separator = fields.index("-")
+                return fields[3] == "/" and fields[separator + 1] == "cgroup2"
+    except (OSError, ValueError, IndexError):
+        return False
+    return False
+
+
+def cgroup_memory_limits(
+    membership: Path = Path("/proc/self/cgroup"),
+    mount: Path = Path("/sys/fs/cgroup"),
+) -> dict[str, int | None] | None:
+    """Read effective cgroup v2 memory and swap limits, including ancestors.
+
+    Parameters
+    ----------
+    membership : pathlib.Path, optional
+        Process cgroup membership file.
+    mount : pathlib.Path, optional
+        Cgroup v2 mount corresponding to that membership.
+
+    Returns
+    -------
+    dict[str, int | None] or None
+        Effective byte limits, with ``None`` for an unlimited resource; the
+        whole result is ``None`` when a reliable reading is unavailable.
+    """
+    try:
+        if not cgroup_mount_is_supported(mount):
+            return None
+        paths = [
+            line[3:]
+            for line in membership.read_text().splitlines()
+            if line.startswith("0::")
+        ]
+        if len(paths) != 1 or not paths[0].startswith("/"):
+            return None
+        root = mount.resolve()
+        current = (root / paths[0].lstrip("/")).resolve()
+        if not current.is_relative_to(root):
+            return None
+        limits: dict[str, list[int]] = {"memory": [], "swap": []}
+        while True:
+            # The cgroup-v2 filesystem root lacks these controls, whereas a
+            # delegated subtree mounted as the root can expose its own limits.
+            if (
+                current == root
+                and not (current / "memory.max").exists()
+                and not (current / "memory.swap.max").exists()
+            ):
+                break
+            for key, filename in (
+                ("memory", "memory.max"),
+                ("swap", "memory.swap.max"),
+            ):
+                value = (current / filename).read_text().strip()
+                if value != "max":
+                    parsed = int(value)
+                    if parsed < 0:
+                        return None
+                    limits[key].append(parsed)
+            if current == root:
+                break
+            current = current.parent
+        return {key: min(values) if values else None for key, values in limits.items()}
+    except (OSError, ValueError):
+        return None
+
+
+def require_cgroup_memory_limits(
+    actual: dict[str, int | None] | None, memory_mib: int | None, swap_mib: int | None
+) -> None:
+    """Reject a guarded run unless effective limits meet its declared bounds.
+
+    Parameters
+    ----------
+    actual : dict[str, int | None] or None
+        Effective cgroup v2 byte limits, or unavailable accounting.
+    memory_mib : int or None
+        Maximum permitted RAM in MiB, or no guard request.
+    swap_mib : int or None
+        Maximum permitted swap in MiB, or no guard request.
+
+    Returns
+    -------
+    None
+        Requested bounds are checked before the campaign can start.
+
+    Raises
+    ------
+    ValueError
+        If the requested pair is invalid, unavailable, or not enforced.
+    """
+    if memory_mib is None and swap_mib is None:
+        return
+    if memory_mib is None or swap_mib is None or memory_mib <= 0 or swap_mib < 0:
+        reject("memory guard requires a positive RAM bound and nonnegative swap bound")
+    if actual is None:
+        reject("cannot verify cgroup v2 memory limits for guarded run")
+    for key, bound in (("memory", memory_mib), ("swap", swap_mib)):
+        limit = actual[key]
+        if limit is None or limit > bound * 1024 * 1024:
+            reject(f"effective cgroup {key} limit does not enforce the requested bound")
+
+
+def cgroup_oom_kills(
+    membership: Path = Path("/proc/self/cgroup"),
+    mount: Path = Path("/sys/fs/cgroup"),
+) -> int | None:
+    """Read the current cgroup's hierarchical OOM-kill counter.
+
+    Parameters
+    ----------
+    membership : pathlib.Path, optional
+        Process cgroup membership file.
+    mount : pathlib.Path, optional
+        Cgroup v2 mount corresponding to that membership.
+
+    Returns
+    -------
+    int or None
+        Observed OOM-kill count, or ``None`` when it cannot be read.
+    """
+    try:
+        if not cgroup_mount_is_supported(mount):
+            return None
+        paths = [
+            line[3:]
+            for line in membership.read_text().splitlines()
+            if line.startswith("0::")
+        ]
+        if len(paths) != 1 or not paths[0].startswith("/"):
+            return None
+        root = mount.resolve()
+        current = (root / paths[0].lstrip("/")).resolve()
+        if not current.is_relative_to(root):
+            return None
+        for line in (current / "memory.events").read_text().splitlines():
+            fields = line.split()
+            if len(fields) == 2 and fields[0] == "oom_kill":
+                count = int(fields[1])
+                return count if count >= 0 else None
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def record_cgroup_oom_evidence(
+    sample: dict[str, Any], before: int | None, after: int | None, exit_code: int | None
+) -> None:
+    """Attach cgroup OOM evidence to a killed command when counters changed.
+
+    Parameters
+    ----------
+    sample : dict[str, Any]
+        Sample outcome to update in place.
+    before : int or None
+        Cgroup OOM-kill count before command execution.
+    after : int or None
+        Cgroup OOM-kill count after command execution.
+    exit_code : int or None
+        Command exit status.
+
+    Returns
+    -------
+    None
+        Available counters and any supported failure diagnosis are retained.
+    """
+    if before is None or after is None:
+        return
+    sample["cgroup_oom_kills_before"] = before
+    sample["cgroup_oom_kills_after"] = after
+    if after > before and exit_code in {-signal.SIGKILL, 137}:
+        sample.update(
+            status="failed",
+            reason="process was killed while the cgroup OOM counter increased",
+            timing_valid=False,
+        )
+
+
 def wait_for_resources(process: subprocess.Popen[str], timeout: float) -> int | None:
     """Wait for one exact child and collect its independent resource usage.
 
@@ -1173,6 +1371,43 @@ def retains_checkpoint(status: str, retry_failed: bool) -> bool:
     )
 
 
+def equivalent_index_coverage(
+    reference: Mapping[str, Any], candidate: Mapping[str, Any]
+) -> bool:
+    """Require scheduler runs to index the same selected files and failures.
+
+    Parameters
+    ----------
+    reference, candidate : Mapping
+        Baseline and scheduler results containing index coverage.
+
+    Returns
+    -------
+    bool
+        Whether required coverage counts and failed paths match.
+    """
+    left = reference.get("index_coverage")
+    right = candidate.get("index_coverage")
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return False
+    dimensions = (
+        "attempted_file_count",
+        "indexed_file_count",
+        "failed_file_count",
+        "complete",
+        "usable",
+    )
+    if any(field not in left or field not in right for field in dimensions):
+        return False
+    if any(left[field] != right[field] for field in dimensions):
+        return False
+    if left.get("failed_file_count", 0) and (
+        "failed_paths" not in left or "failed_paths" not in right
+    ):
+        return False
+    return set(left.get("failed_paths", [])) == set(right.get("failed_paths", []))
+
+
 def outcome_description(status: str, result: Mapping[str, object] | None = None) -> str:
     """Explain terminal outcomes without changing stored machine statuses.
 
@@ -1583,6 +1818,7 @@ class Campaign:
         interrupted = False
         for number in range(repeats):
             start = time.perf_counter()
+            oom_before = cgroup_oom_kills()
             with (
                 (attempts / f"{number}.stdout").open("w") as out,
                 (attempts / f"{number}.stderr").open("w") as err,
@@ -1652,6 +1888,9 @@ class Campaign:
                         process.returncode,
                     ),
                 }
+            )
+            record_cgroup_oom_evidence(
+                samples[-1], oom_before, cgroup_oom_kills(), process.returncode
             )
             samples[-1]["embedding_profile_journals"] = self.profile_journals(
                 self.profile_directory(key, attempt=attempts.name, sample=number)
@@ -1997,6 +2236,10 @@ class Campaign:
             embeddings
             and embeddings["status"] in QUERYABLE_STATUSES
             and embeddings.get("embedding_complete")
+            and (
+                not indexed["key"].endswith(("/index-process", "/index-thread"))
+                or indexed.get("embedding_complete") is True
+            )
         )
         inventory = self.cli(
             prefix + "/symlist",
@@ -2240,7 +2483,7 @@ class Campaign:
     def measure_concurrency(
         self, prefix: str, name: str, profile: dict[str, Any], indexed: dict[str, Any]
     ) -> dict[str, Any]:
-        """Measure optional schedulers when selected sources have no failures.
+        """Measure schedulers on usable indexes with equivalent file coverage.
 
         Parameters
         ----------
@@ -2256,15 +2499,15 @@ class Campaign:
         Returns
         -------
         dict
-            Latest structural outcome; partial failures are never retried.
+            Latest structural outcome; mismatched scheduler coverage is invalid.
         """
         if (
             indexed["status"] in QUERYABLE_STATUSES
             and indexed.get("usable", True)
-            and not has_analysis_failures(indexed)
             and self.spec["extended"]
             and profile["id"] == self.spec["profiles"][0]["id"]
         ):
+            baseline = indexed
             for strategy in ("process", "thread"):
                 result = self.cli(
                     prefix + "/index-" + strategy,
@@ -2280,15 +2523,31 @@ class Campaign:
                     ],
                 )
                 indexed = result
-                if (
-                    result["status"] not in QUERYABLE_STATUSES
-                    or not result.get("usable", True)
-                    or has_analysis_failures(result)
+                if result["status"] in QUERYABLE_STATUSES and result.get(
+                    "usable", True
                 ):
-                    self.progress.omit(
-                        prefix + "/index-thread",
-                        "preceding concurrency index was unusable or had analysis failures",
-                    )
+                    equivalent = equivalent_index_coverage(baseline, result)
+                    result["concurrency_coverage_equivalent"] = equivalent
+                    if not equivalent:
+                        result.update(
+                            status="invalid_measurement",
+                            reason="concurrency index coverage differs from index-full",
+                            timing_valid=False,
+                            partial_timing_valid=False,
+                        )
+                    record = self.root / "stages" / result["key"] / "result.json"
+                    write(record, result)
+                    history = result.get("attempt_history", [])
+                    if history:
+                        write(Path(history[-1]), result)
+                if result["status"] not in QUERYABLE_STATUSES or not result.get(
+                    "usable", True
+                ):
+                    if strategy == "process":
+                        self.progress.omit(
+                            prefix + "/index-thread",
+                            "preceding concurrency index was unusable or had different coverage",
+                        )
                     return result
         else:
             self.progress.omit(
@@ -3535,6 +3794,12 @@ def main() -> int:
     parser.add_argument("--run-id")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--retry-failed", action="store_true")
+    parser.add_argument(
+        "--memory-limit-mib", type=int, help="Required cgroup RAM ceiling in MiB"
+    )
+    parser.add_argument(
+        "--swap-limit-mib", type=int, help="Required cgroup swap ceiling in MiB"
+    )
     parser.add_argument("--prepare-recovery", type=Path, metavar="ORIGINAL_RUN")
     parser.add_argument("--prepare-plan", action="store_true")
     parser.add_argument("--recovery-dir", type=Path)
@@ -3597,10 +3862,18 @@ def main() -> int:
         "model_readiness_timeout_seconds": args.model_readiness_timeout_seconds,
         "architecture_timeout_seconds": args.architecture_timeout_seconds,
         "svg_timeout_seconds": args.svg_timeout_seconds,
+        "memory_guard_mib": {
+            "memory": args.memory_limit_mib,
+            "swap": args.swap_limit_mib,
+        },
     }
     print(json.dumps(plan, indent=2), flush=True)
     if not args.run:
         return 0
+    effective_memory_limits = cgroup_memory_limits()
+    require_cgroup_memory_limits(
+        effective_memory_limits, args.memory_limit_mib, args.swap_limit_mib
+    )
     root = resolve_run_root(spec, args.run_id, args.resume)
     identity = {
         "manifest_sha256": digest(args.manifest),
@@ -3608,6 +3881,11 @@ def main() -> int:
         "runtime": runtime_identity(),
         "version_provenance": version_provenance(),
         "measurement_capabilities": measurement_capabilities(),
+        "memory_guard_mib": {
+            "memory": args.memory_limit_mib,
+            "swap": args.swap_limit_mib,
+        },
+        "cgroup_memory_limits_bytes": effective_memory_limits,
         "native_acceleration": native_acceleration_identity(),
         "runtime_controls": controlled_runtime_environment(os.environ),
         "model_readiness_timeout_seconds": args.model_readiness_timeout_seconds,

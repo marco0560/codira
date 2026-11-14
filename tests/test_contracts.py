@@ -2785,10 +2785,10 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-documentation-audit-tsdoc==2.0.0",
         "codira-documentation-audit-go-doc-comments==2.0.0",
         "codira-backend-sqlite==2.0.9",
-        "codira-backend-duckdb==2.0.13",
+        "codira-backend-duckdb==2.0.14",
         "codira-embedding-sentence-transformers==2.0.1",
         "codira-embedding-onnx==2.0.0",
-        "codira-vector-store-sqlite==2.0.1",
+        "codira-vector-store-sqlite==2.0.2",
         "codira-vector-store-duckdb==2.0.0",
     ]
     assert pyproject.get("tool", {}).get("poetry") is None

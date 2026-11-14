@@ -85,28 +85,39 @@ in-place migration.
 
 ## Full-Index Bulk Contract
 
-DuckDB also implements the optional `FullIndexBulkBackend` contract for
-`codira index --full`. The core indexer uses it only when both conditions hold:
-
-- the active backend implements `FullIndexBulkBackend`
-- the current run is a full rebuild
-
-SQLite intentionally remains on the `IndexWriteSession` path and is the
-control backend for performance comparisons.
+DuckDB implements the optional `FullIndexBulkBackend` contract for
+`codira index --full`. It also implements `FullIndexStreamingBulkBackend`,
+which accepts ordered analyses incrementally. The indexer selects the
+streaming capability when embeddings are disabled or the selected vector
+store supports an isolated write session. Otherwise it retains the legacy
+bulk path. SQLite uses the `IndexWriteSession` path with the same vector-store
+condition; stores without the optional session retain eager analysis.
 
 The DuckDB bulk path owns the complete full-rebuild lifecycle:
 
-- collect successful analyzer output in the core indexer
-- validate duplicate stable IDs before backend mutation
+- validate duplicate stable IDs for each analyzed file
 - rebuild index-owned DuckDB tables in one backend-native lifecycle
 - assign full-rebuild row IDs without per-file `SELECT MAX(id)` allocation
 - flush structural, relationship, reference-scan, and embedding rows in
   backend batches
-- skip vector-cache reads for fresh full-index outputs
+- reuse compatible cached vectors when available
 - insert full-index embedding rows without stale-row deletes or SQL window
   deduplication after the embedding table has been recreated
 - rebuild derived indexes, persist runtime inventory, and emit DuckDB profile
   spans named `bulk_full_index.*`
+
+Concurrent analysis submits a bounded number of tasks and consumes results in
+planned path order. Streaming releases each analysis after persistence instead
+of retaining the complete parsed repository. File planning, coverage reports,
+and an individual file's analysis can still grow with input size; this is not
+a fixed bound on the total memory of an index operation.
+
+The optional vector-store write session keeps staged vector bindings and
+pending rows isolated until commit. The structural and vector stores remain
+separate transactions: if the structural commit succeeds but vector commit
+fails, the generation is marked failed and readers must not treat it as ready.
+This does not restore the previously committed structural database or provide
+crash-atomic rollback across both stores.
 
 The legacy `_store_analysis` helper remains available for incremental and
 session-based writes. DuckDB full-index bulk code must call the lower-level row

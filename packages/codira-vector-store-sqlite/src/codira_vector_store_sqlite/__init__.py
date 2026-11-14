@@ -9,6 +9,14 @@ Responsibilities
 Architectural role
 ------------------
 This module belongs to the **first-party vector-store plugin layer**.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
 """
 
 from __future__ import annotations
@@ -49,6 +57,7 @@ if TYPE_CHECKING:
 __all__ = [
     "PACKAGE_VERSION",
     "SQLiteVectorStore",
+    "SQLiteVectorStoreWriteSession",
     "build_vector_store",
     "get_vector_store_path",
 ]
@@ -133,12 +142,80 @@ def _connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _ensure_vector_set_on_connection(
+    conn: sqlite3.Connection,
+    identity: VectorSetIdentity,
+) -> int:
+    """Ensure vector-set metadata and its sqlite-vec table on one connection.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Connection whose transaction owns any created state.
+    identity : codira.contracts.VectorSetIdentity
+        Complete vector-set identity.
+
+    Returns
+    -------
+    int
+        Persistent vector-set identifier.
+
+    Raises
+    ------
+    sqlite3.Error
+        If vector-set metadata or its sqlite-vec table cannot be created.
+    """
+    values = (
+        identity.engine.engine,
+        identity.engine.engine_version,
+        identity.engine.model,
+        identity.engine.model_version,
+        identity.engine.dimension,
+        identity.engine.precision,
+        identity.vector_store.store,
+        identity.vector_store.store_version,
+        identity.vector_store.format_version,
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO vector_sets(
+            engine, engine_version, model, model_version, dimension, precision,
+            store, store_version, format_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        values,
+    )
+    row = conn.execute(
+        """
+        SELECT id FROM vector_sets
+        WHERE engine = ? AND engine_version = ? AND model = ?
+          AND model_version = ? AND dimension = ? AND precision = ?
+          AND store = ? AND store_version = ? AND format_version = ?
+        """,
+        values,
+    ).fetchone()
+    assert row is not None
+    vector_set_id = int(row[0])
+    table_name = _payload_table_name(vector_set_id)
+    conn.execute(
+        f"CREATE VIRTUAL TABLE IF NOT EXISTS {table_name} USING vec0("
+        f"content_hash TEXT, embedding float[{identity.engine.dimension}] "
+        "distance_metric=cosine"
+        ")"
+    )
+    return vector_set_id
+
+
 class SQLiteVectorStore:
     """
     SQLite-backed vector store.
 
     Parameters
     ----------
+    None
+
+    Returns
+    -------
     None
     """
 
@@ -317,65 +394,51 @@ class SQLiteVectorStore:
         -------
         int
             Persistent vector-set identifier.
+
+        Raises
+        ------
+        VectorStoreError
+            If existing vector-store state has an unsupported format.
+        sqlite3.Error
+            If vector-set metadata or its sqlite-vec table cannot be created.
         """
         del config
         self.initialize(root, {})
-        values = (
-            identity.engine.engine,
-            identity.engine.engine_version,
-            identity.engine.model,
-            identity.engine.model_version,
-            identity.engine.dimension,
-            identity.engine.precision,
-            identity.vector_store.store,
-            identity.vector_store.store_version,
-            identity.vector_store.format_version,
-        )
         with _connect(get_vector_store_path(root)) as conn:
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO vector_sets(
-                    engine,
-                    engine_version,
-                    model,
-                    model_version,
-                    dimension,
-                    precision,
-                    store,
-                    store_version,
-                    format_version
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                values,
-            )
-            row = conn.execute(
-                """
-                SELECT id
-                FROM vector_sets
-                WHERE engine = ?
-                  AND engine_version = ?
-                  AND model = ?
-                  AND model_version = ?
-                  AND dimension = ?
-                  AND precision = ?
-                  AND store = ?
-                  AND store_version = ?
-                  AND format_version = ?
-                """,
-                values,
-            ).fetchone()
-        assert row is not None
-        vector_set_id = int(row[0])
-        table_name = _payload_table_name(vector_set_id)
-        with _connect(get_vector_store_path(root)) as conn:
-            conn.execute(
-                f"CREATE VIRTUAL TABLE IF NOT EXISTS {table_name} USING vec0("
-                f"content_hash TEXT, embedding float[{identity.engine.dimension}] "
-                "distance_metric=cosine"
-                ")"
-            )
-        return vector_set_id
+            return _ensure_vector_set_on_connection(conn, identity)
+
+    def begin_write_session(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        config: Mapping[str, object],
+    ) -> SQLiteVectorStoreWriteSession:
+        """Open an isolated transaction for bounded writes to one vector set.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root owning the vector-store database.
+        identity : codira.contracts.VectorSetIdentity
+            Vector-set identity to mutate within the session.
+        config : collections.abc.Mapping[str, object]
+            Vector-store configuration; SQLite currently accepts no options.
+
+        Returns
+        -------
+        SQLiteVectorStoreWriteSession
+            Session whose writes remain invisible until commit.
+
+        Raises
+        ------
+        VectorStoreError
+            If existing vector-store state has an unsupported format.
+        sqlite3.Error
+            If the transaction or vector-set initialization fails.
+        """
+        del config
+        self.initialize(root, {})
+        return SQLiteVectorStoreWriteSession(self, root, identity)
 
     def load_cached_vectors(
         self,
@@ -1072,6 +1135,411 @@ class SQLiteVectorStore:
                 removed.append(str(candidate.relative_to(request.root)))
         self.reset_runtime_caches()
         return VectorStoreResetResult(self.name, tuple(sorted(removed)))
+
+
+class SQLiteVectorStoreWriteSession:
+    """Transaction-scoped writer for one SQLite vector set.
+
+    The database schema is initialized before opening the transaction. Vector
+    set creation, sqlite-vec virtual-table creation, cache payloads, bindings,
+    pending rows, and revisions then share the session-owned transaction.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+
+    def __init__(
+        self,
+        store: SQLiteVectorStore,
+        root: Path,
+        identity: VectorSetIdentity,
+    ) -> None:
+        """Open the transaction and bind its vector-set identity.
+
+        Parameters
+        ----------
+        store : codira_vector_store_sqlite.SQLiteVectorStore
+            Owning vector-store plugin.
+        root : pathlib.Path
+            Repository root containing the vector-store database.
+        identity : codira.contracts.VectorSetIdentity
+            Vector-set identity used by every session operation.
+
+        Returns
+        -------
+        None
+            A write transaction is active after successful construction.
+
+        Raises
+        ------
+        sqlite3.Error
+            If the transaction or vector-set initialization fails.
+        """
+        self._store = store
+        self._root = root
+        self._identity = identity
+        self._conn = _connect(get_vector_store_path(root))
+        self._active = False
+        self._closed = False
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._active = True
+            self._vector_set_id = _ensure_vector_set_on_connection(self._conn, identity)
+        except BaseException:
+            self._conn.rollback()
+            self._conn.close()
+            self._closed = True
+            raise
+
+    def _require_active(self) -> None:
+        """Reject operations after the transaction has been finalized.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Returns only while the session is active.
+
+        Raises
+        ------
+        RuntimeError
+            If the session has been committed, aborted, or closed.
+        """
+        if self._closed or not self._active:
+            raise RuntimeError("SQLite vector-store write session is not active")
+
+    def ensure_vector_set(self) -> int:
+        """Return this session's vector-set identifier without another connection.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        int
+            Store-local identifier for this session's vector set.
+
+        Raises
+        ------
+        RuntimeError
+            If the session is no longer active.
+        """
+        self._require_active()
+        return self._vector_set_id
+
+    def load_cached_vectors(self, content_hashes: Sequence[str]) -> dict[str, bytes]:
+        """Load cache rows in bounded batches, including uncommitted own writes.
+
+        Parameters
+        ----------
+        content_hashes : collections.abc.Sequence[str]
+            Content hashes whose cached vectors are requested.
+
+        Returns
+        -------
+        dict[str, bytes]
+            Matching vectors keyed by content hash.
+
+        Raises
+        ------
+        RuntimeError
+            If the session is no longer active.
+        sqlite3.Error
+            If the cache query fails.
+        """
+        self._require_active()
+        cached: dict[str, bytes] = {}
+        table_name = _payload_table_name(self._vector_set_id)
+        ordered_hashes = list(dict.fromkeys(content_hashes))
+        for batch in iter_batched(
+            ordered_hashes, batch_size=_CACHE_LOOKUP_HASH_BATCH_SIZE
+        ):
+            if not batch:
+                continue
+            placeholders = ",".join("?" for _ in batch)
+            rows = self._conn.execute(
+                f"""
+                SELECT payloads.content_hash, payload_index.embedding
+                FROM vector_payloads payloads
+                JOIN {table_name} payload_index
+                  ON payload_index.rowid = payloads.id
+                WHERE payloads.vector_set_id = ?
+                  AND payloads.content_hash IN ({placeholders})
+                """,
+                (self._vector_set_id, *batch),
+            ).fetchall()
+            cached.update(
+                {str(content_hash): bytes(vector) for content_hash, vector in rows}
+            )
+        return cached
+
+    def store_cached_vectors(self, vectors: Mapping[str, bytes]) -> None:
+        """Store one bounded cache batch in the session transaction.
+
+        Parameters
+        ----------
+        vectors : collections.abc.Mapping[str, bytes]
+            Serialized vectors keyed by content hash.
+
+        Returns
+        -------
+        None
+            Payloads remain private until the session commits.
+
+        Raises
+        ------
+        RuntimeError
+            If the session is no longer active.
+        sqlite3.Error
+            If payload persistence fails.
+        ValueError
+            If a serialized vector does not match the configured dimension.
+        """
+        self._require_active()
+        self._store._store_payloads(
+            self._conn,
+            vector_set_id=self._vector_set_id,
+            dimension=self._identity.engine.dimension,
+            vectors=vectors,
+        )
+
+    def store_vectors(self, rows: Sequence[PreparedVectorRow]) -> None:
+        """Store materialized bindings from one bounded batch.
+
+        Parameters
+        ----------
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Materialized rows to bind to vector payloads.
+
+        Returns
+        -------
+        None
+            Payloads and bindings remain private until commit.
+
+        Raises
+        ------
+        RuntimeError
+            If the session is no longer active.
+        sqlite3.Error
+            If payload or binding persistence fails.
+        ValueError
+            If a serialized vector does not match the configured dimension.
+        """
+        self._require_active()
+        materialized = [row for row in rows if row.vector is not None]
+        if not materialized:
+            return
+        self._store._store_payloads(
+            self._conn,
+            vector_set_id=self._vector_set_id,
+            dimension=self._identity.engine.dimension,
+            vectors={
+                row.content_hash: row.vector
+                for row in materialized
+                if row.vector is not None
+            },
+        )
+        changed = [
+            row
+            for row in materialized
+            if self._conn.execute(
+                """SELECT content_hash FROM vector_bindings
+                WHERE vector_set_id = ? AND object_type = ? AND stable_id = ?""",
+                (self._vector_set_id, row.row.object_type, row.row.stable_id),
+            ).fetchone()
+            != (row.content_hash,)
+        ]
+        if changed:
+            self._conn.executemany(
+                """INSERT OR REPLACE INTO vector_bindings(
+                vector_set_id, object_type, stable_id, content_hash
+                ) VALUES (?, ?, ?, ?)""",
+                (
+                    (
+                        self._vector_set_id,
+                        row.row.object_type,
+                        row.row.stable_id,
+                        row.content_hash,
+                    )
+                    for row in changed
+                ),
+            )
+            self._store._bump_revision(self._conn, self._vector_set_id)
+
+    def store_pending_vectors(self, rows: Sequence[PreparedVectorRow]) -> None:
+        """Store one bounded batch of deferred vectors.
+
+        Parameters
+        ----------
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Deferred rows to persist.
+
+        Returns
+        -------
+        None
+            Pending rows remain private until commit.
+
+        Raises
+        ------
+        RuntimeError
+            If the session is no longer active.
+        sqlite3.Error
+            If pending-row persistence fails.
+        """
+        self._require_active()
+        self._conn.executemany(
+            """INSERT OR REPLACE INTO pending_vectors(
+            vector_set_id, object_type, object_id, stable_id, content_hash, text
+            ) VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                (
+                    self._vector_set_id,
+                    row.row.object_type,
+                    row.row.object_id,
+                    row.row.stable_id,
+                    row.content_hash,
+                    row.row.text,
+                )
+                for row in rows
+            ),
+        )
+
+    def delete_pending_vectors(self, rows: Sequence[PreparedVectorRow]) -> None:
+        """Delete pending objects identified by one bounded batch.
+
+        Parameters
+        ----------
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Rows identifying pending objects by object type and object ID.
+
+        Returns
+        -------
+        None
+            Matching rows are staged for deletion.
+
+        Raises
+        ------
+        RuntimeError
+            If the session is no longer active.
+        sqlite3.Error
+            If the delete operation fails.
+        """
+        self._require_active()
+        self._conn.executemany(
+            """DELETE FROM pending_vectors
+            WHERE vector_set_id = ? AND object_type = ? AND object_id = ?""",
+            (
+                (self._vector_set_id, row.row.object_type, row.row.object_id)
+                for row in rows
+            ),
+        )
+
+    def clear_pending_vectors(self) -> None:
+        """Clear all pending vectors for this vector set.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Pending-row deletions remain private until commit.
+
+        Raises
+        ------
+        RuntimeError
+            If the session is no longer active.
+        sqlite3.Error
+            If the delete operation fails.
+        """
+        self._require_active()
+        self._conn.execute(
+            "DELETE FROM pending_vectors WHERE vector_set_id = ?",
+            (self._vector_set_id,),
+        )
+
+    def commit(self) -> None:
+        """Commit all vector-store writes as one SQLite transaction.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Other connections can observe all committed session writes.
+
+        Raises
+        ------
+        RuntimeError
+            If the session is no longer active.
+        sqlite3.Error
+            If SQLite rejects the commit; the transaction is rolled back.
+        """
+        self._require_active()
+        try:
+            self._conn.commit()
+        except BaseException:
+            self._conn.rollback()
+            self._active = False
+            raise
+        self._active = False
+
+    def abort(self) -> None:
+        """Roll back all writes while the session remains active.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Uncommitted writes are discarded; repeated aborts are harmless.
+
+        Raises
+        ------
+        sqlite3.Error
+            If SQLite cannot roll back the transaction.
+        """
+        if self._closed or not self._active:
+            return
+        self._conn.rollback()
+        self._active = False
+
+    def close(self) -> None:
+        """Close the connection, rolling back an unfinished transaction.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The connection is closed; repeated closes are harmless.
+
+        Raises
+        ------
+        sqlite3.Error
+            If rollback or connection closure fails.
+        """
+        if self._closed:
+            return
+        self.abort()
+        self._conn.close()
+        self._closed = True
 
 
 def build_vector_store() -> VectorStore:

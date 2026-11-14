@@ -98,7 +98,9 @@ scripts/characterize_similarity_indexes.py:306 PLR0913 — the reproducible
     corpus runner keeps independently selectable corpus and timing inputs.
 scripts/generate_github_snapshot.py:118 S607 — the fixed `gh` executable is
     intentionally invoked by argument vector; there is no shell interpolation.
-src/codira/indexer.py:1371 PLR0913 — bulk indexing keeps backend, transaction,
+packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py:2297 PLR0913 —
+    bulk publication keeps its transaction, profiler, and staged row inputs explicit.
+src/codira/indexer.py:1587 PLR0913 — bulk indexing keeps backend, transaction,
     artifact, coverage, and embedding ownership explicit at the orchestration seam.
 src/codira/contracts.py:3441 PLR0913 — the plugin protocol signature is a
     public compatibility contract and cannot be bundled without breaking providers.
@@ -322,8 +324,8 @@ host parser.
 
 
 - `scripts/clang_parity_qualification.py:3108` (BLE001): Retain terminal evidence for every failed native preparation attempt.
-- `scripts/run_test_material_benchmarks.py:2915` (TRY003): Raise the dedicated daemon prerequisite exception with the repository, upstream index status, and retained evidence path in one actionable diagnostic.
-- `scripts/run_test_material_benchmarks.py:3718` (BLE001): Persist extension failures uniformly while the logger keeps concise diagnostics for expected prerequisites and tracebacks for unexpected faults.
+- `scripts/run_test_material_benchmarks.py:3174` (TRY003): Raise the dedicated daemon prerequisite exception with the repository, upstream index status, and retained evidence path in one actionable diagnostic.
+- `scripts/run_test_material_benchmarks.py:3996` (BLE001): Persist extension failures uniformly while the logger keeps concise diagnostics for expected prerequisites and tracebacks for unexpected faults.
 - `scripts/clang_reference_facts.py:624` (C901): The reference normalizer applies one physical ownership policy across declaration, type, field and call categories.
 - `scripts/clang_reference_facts.py:804` (C901, PLR0912): The nested AST visitor keeps lexical owner and callable stacks together with the corresponding source-range checks.
 - `scripts/clang_reference_facts.py:1372` (C901, PLR0912): Profile input validation checks each source, dependency, compiler, resource and receipt binding before capture or reuse.
