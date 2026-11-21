@@ -1,3 +1,9 @@
+## [2.5.3](https://github.com/marco0560/codira/compare/v2.5.2...v2.5.3) (2026-11-21)
+
+### Bug Fixes
+
+* **storage:** stream DuckDB vector writes transactionally ([eab60dc](https://github.com/marco0560/codira/commit/eab60dc59a25c92ec9b60cb50985791251a68025))
+
 ## [2.5.2](https://github.com/marco0560/codira/compare/v2.5.1...v2.5.2) (2026-11-14)
 
 ### Bug Fixes
