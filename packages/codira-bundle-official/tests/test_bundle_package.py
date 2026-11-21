@@ -22,7 +22,7 @@ def test_bundle_package_declares_expected_first_party_dependencies() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.92"
+    assert project["project"]["version"] == "2.0.93"
     assert project["project"]["dependencies"] == [
         "codira[semantic]==2.0.0",
         "einops>=0.8,<1.0",
@@ -49,7 +49,7 @@ def test_bundle_package_declares_expected_first_party_dependencies() -> None:
         "codira-embedding-sentence-transformers==2.0.1",
         "codira-embedding-onnx==2.0.0",
         "codira-vector-store-sqlite==2.0.2",
-        "codira-vector-store-duckdb==2.0.0",
+        "codira-vector-store-duckdb==2.0.1",
         "codira-similarity-index-qdrant==2.0.0",
         "codira-installer==2.0.8",
     ]

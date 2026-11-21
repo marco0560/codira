@@ -92,6 +92,8 @@ streaming capability when embeddings are disabled or the selected vector
 store supports an isolated write session. Otherwise it retains the legacy
 bulk path. SQLite uses the `IndexWriteSession` path with the same vector-store
 condition; stores without the optional session retain eager analysis.
+Both first-party SQLite and DuckDB vector stores provide isolated write
+sessions, including when embeddings are deferred.
 
 The DuckDB bulk path owns the complete full-rebuild lifecycle:
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
 __all__ = [
     "PACKAGE_VERSION",
     "DuckDBVectorStore",
+    "DuckDBVectorStoreWriteSession",
     "build_vector_store",
     "get_vector_store_path",
 ]
@@ -612,6 +614,32 @@ class DuckDBVectorStore:
         vector_set_id = int(row[0])
         self._vector_set_ids[cache_key] = vector_set_id
         return vector_set_id
+
+    def begin_write_session(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        config: Mapping[str, object],
+    ) -> DuckDBVectorStoreWriteSession:
+        """Open an isolated DuckDB transaction for one vector set.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root owning the vector-store database.
+        identity : codira.contracts.VectorSetIdentity
+            Vector-set identity to mutate within the session.
+        config : collections.abc.Mapping[str, object]
+            Vector-store configuration; DuckDB currently accepts no options.
+
+        Returns
+        -------
+        DuckDBVectorStoreWriteSession
+            Session whose writes remain invisible until commit.
+        """
+        del config
+        self.initialize(root, {})
+        return DuckDBVectorStoreWriteSession(self, root, identity)
 
     def load_cached_vectors(
         self,
@@ -1513,6 +1541,481 @@ class DuckDBVectorStore:
             removed = (str(path.relative_to(request.root)),)
         self.reset_runtime_caches()
         return VectorStoreResetResult(self.name, removed)
+
+
+class DuckDBVectorStoreWriteSession:
+    """Transaction-scoped writer for one DuckDB vector set.
+
+    Schema initialization is completed before the transaction starts. Vector
+    set creation and every staged mutation then use the same connection.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+
+    def __init__(
+        self,
+        store: DuckDBVectorStore,
+        root: Path,
+        identity: VectorSetIdentity,
+    ) -> None:
+        """Open a transaction and bind its vector-set identity.
+
+        Parameters
+        ----------
+        store : DuckDBVectorStore
+            Owning vector-store plugin.
+        root : pathlib.Path
+            Repository root containing the vector-store database.
+        identity : codira.contracts.VectorSetIdentity
+            Identity used by each session operation.
+
+        Returns
+        -------
+        None
+            A transaction is active after successful construction.
+        """
+        self._store = store
+        self._identity = identity
+        self._conn = _connect(get_vector_store_path(root))
+        self._active = False
+        self._closed = False
+        try:
+            self._conn.execute("BEGIN TRANSACTION")
+            self._active = True
+            values = (
+                identity.engine.engine,
+                identity.engine.engine_version,
+                identity.engine.model,
+                identity.engine.model_version,
+                identity.engine.dimension,
+                identity.engine.precision,
+                identity.vector_store.store,
+                identity.vector_store.store_version,
+                identity.vector_store.format_version,
+            )
+            row = self._conn.execute(
+                """
+                SELECT id FROM vector_sets
+                WHERE engine = ? AND engine_version = ? AND model = ?
+                  AND model_version = ? AND dimension = ? AND precision = ?
+                  AND store = ? AND store_version = ? AND format_version = ?
+                """,
+                values,
+            ).fetchone()
+            if row is None:
+                self._conn.execute(
+                    """
+                    INSERT INTO vector_sets(
+                        id, engine, engine_version, model, model_version,
+                        dimension, precision, store, store_version, format_version
+                    ) VALUES (
+                        nextval('vector_sets_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    )
+                    """,
+                    values,
+                )
+                row = self._conn.execute(
+                    """
+                    SELECT id FROM vector_sets
+                    WHERE engine = ? AND engine_version = ? AND model = ?
+                      AND model_version = ? AND dimension = ? AND precision = ?
+                      AND store = ? AND store_version = ? AND format_version = ?
+                    """,
+                    values,
+                ).fetchone()
+            assert row is not None
+            self._vector_set_id = int(row[0])
+        except BaseException:
+            if self._active:
+                with suppress(BaseException):
+                    self._conn.execute("ROLLBACK")
+            with suppress(BaseException):
+                self._conn.close()
+            self._active = False
+            self._closed = True
+            raise
+
+    def _require_active(self) -> None:
+        """Reject operations after finalization.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Returns only while the session is active.
+
+        Raises
+        ------
+        RuntimeError
+            If the transaction has been finalized or closed.
+        """
+        if self._closed or not self._active:
+            raise RuntimeError("DuckDB vector-store write session is not active")
+
+    def ensure_vector_set(self) -> int:
+        """Return this session's vector-set identifier.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        int
+            Store-local identifier for this vector set.
+        """
+        self._require_active()
+        return self._vector_set_id
+
+    def load_cached_vectors(self, content_hashes: Sequence[str]) -> dict[str, bytes]:
+        """Read cache rows, including payloads staged by this session.
+
+        Parameters
+        ----------
+        content_hashes : collections.abc.Sequence[str]
+            Content hashes to look up.
+
+        Returns
+        -------
+        dict[str, bytes]
+            Matching serialized vectors keyed by content hash.
+        """
+        self._require_active()
+        hashes = list(dict.fromkeys(content_hashes))
+        cached: dict[str, bytes] = {}
+        for batch in iter_batched(hashes, batch_size=_CACHE_LOOKUP_HASH_BATCH_SIZE):
+            if not batch:
+                continue
+            placeholders = ",".join("?" for _item in batch)
+            rows = self._conn.execute(
+                f"""
+                SELECT content_hash, vector FROM vector_cache
+                WHERE vector_set_id = ? AND content_hash IN ({placeholders})
+                """,
+                (self._vector_set_id, *batch),
+            ).fetchall()
+            cached.update({str(key): bytes(vector) for key, vector in rows})
+        return cached
+
+    def store_cached_vectors(self, vectors: Mapping[str, bytes]) -> None:
+        """Stage cache payloads in the session transaction.
+
+        Parameters
+        ----------
+        vectors : collections.abc.Mapping[str, bytes]
+            Serialized vectors keyed by content hash.
+
+        Returns
+        -------
+        None
+            Payloads remain private until commit.
+        """
+        self._require_active()
+        if not vectors:
+            return
+        import pyarrow as pa
+
+        ordered = sorted(vectors.items())
+        table = pa.table(
+            {
+                "vector_set_id": pa.array(
+                    [self._vector_set_id for _key, _vector in ordered], type=pa.uint64()
+                ),
+                "content_hash": pa.array(
+                    [key for key, _vector in ordered], type=pa.string()
+                ),
+                "vector": pa.array(
+                    [vector for _key, vector in ordered], type=pa.binary()
+                ),
+                "vector_values": pa.array(
+                    [
+                        deserialize_vector(vector, dim=self._identity.engine.dimension)
+                        for _key, vector in ordered
+                    ],
+                    type=pa.list_(pa.float64()),
+                ),
+            }
+        )
+        _flush_registered_arrow_table(
+            self._conn,
+            view_name="__codira_session_cache_rows",
+            table=table,
+            sql="""
+            INSERT OR REPLACE INTO vector_cache(
+                vector_set_id, content_hash, vector, vector_values
+            ) SELECT vector_set_id, content_hash, vector, vector_values
+            FROM __codira_session_cache_rows
+            """,
+        )
+
+    def store_vectors(self, rows: Sequence[PreparedVectorRow]) -> None:
+        """Stage materialized vectors and bindings.
+
+        Parameters
+        ----------
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows carrying materialized vector payloads.
+
+        Returns
+        -------
+        None
+            Payloads and bindings remain private until commit.
+        """
+        self._require_active()
+        materialized = [(row, row.vector) for row in rows if row.vector is not None]
+        if not materialized:
+            return
+        import pyarrow as pa
+
+        changed = [
+            (prepared, vector)
+            for prepared, vector in materialized
+            if self._conn.execute(
+                """SELECT content_hash FROM vectors
+                WHERE vector_set_id = ? AND object_type = ? AND stable_id = ?""",
+                (self._vector_set_id, prepared.row.object_type, prepared.row.stable_id),
+            ).fetchone()
+            != (prepared.content_hash,)
+        ]
+        if not changed:
+            return
+        table = pa.table(
+            {
+                "vector_set_id": pa.array(
+                    [self._vector_set_id for _row, _vector in changed], type=pa.uint64()
+                ),
+                "object_type": pa.array(
+                    [row.row.object_type for row, _vector in changed], type=pa.string()
+                ),
+                "stable_id": pa.array(
+                    [row.row.stable_id for row, _vector in changed], type=pa.string()
+                ),
+                "content_hash": pa.array(
+                    [row.content_hash for row, _vector in changed], type=pa.string()
+                ),
+                "vector": pa.array(
+                    [vector for _row, vector in changed], type=pa.binary()
+                ),
+                "vector_values": pa.array(
+                    [
+                        deserialize_vector(vector, dim=self._identity.engine.dimension)
+                        for _row, vector in changed
+                    ],
+                    type=pa.list_(pa.float64()),
+                ),
+            }
+        )
+        _flush_registered_arrow_table(
+            self._conn,
+            view_name="__codira_session_vector_rows",
+            table=table,
+            sql="""
+            INSERT OR REPLACE INTO vectors(
+                vector_set_id, object_type, stable_id, content_hash, vector, vector_values
+            ) SELECT vector_set_id, object_type, stable_id, content_hash, vector,
+                     vector_values
+            FROM __codira_session_vector_rows
+            """,
+        )
+        self._store._bump_revision(self._conn, self._vector_set_id)
+
+    def store_pending_vectors(self, rows: Sequence[PreparedVectorRow]) -> None:
+        """Stage deferred vector rows.
+
+        Parameters
+        ----------
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows to persist as pending.
+
+        Returns
+        -------
+        None
+            Pending rows remain private until commit.
+        """
+        self._require_active()
+        if not rows:
+            return
+        import pyarrow as pa
+
+        table = pa.table(
+            {
+                "vector_set_id": pa.array(
+                    [self._vector_set_id] * len(rows), type=pa.uint64()
+                ),
+                "object_type": pa.array(
+                    [row.row.object_type for row in rows], type=pa.string()
+                ),
+                "object_id": pa.array(
+                    [row.row.object_id for row in rows], type=pa.int64()
+                ),
+                "stable_id": pa.array(
+                    [row.row.stable_id for row in rows], type=pa.string()
+                ),
+                "content_hash": pa.array(
+                    [row.content_hash for row in rows], type=pa.string()
+                ),
+                "text": pa.array([row.row.text for row in rows], type=pa.string()),
+            }
+        )
+        _flush_registered_arrow_table(
+            self._conn,
+            view_name="__codira_session_pending_rows",
+            table=table,
+            sql="""
+            INSERT OR REPLACE INTO pending_vectors(
+                vector_set_id, object_type, object_id, stable_id, content_hash, text
+            ) SELECT vector_set_id, object_type, object_id, stable_id, content_hash, text
+            FROM __codira_session_pending_rows
+            """,
+        )
+
+    def delete_pending_vectors(self, rows: Sequence[PreparedVectorRow]) -> None:
+        """Stage deletion of pending rows identified by object type and ID.
+
+        Parameters
+        ----------
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows identifying pending entries.
+
+        Returns
+        -------
+        None
+            Matching deletions remain private until commit.
+        """
+        self._require_active()
+        if not rows:
+            return
+        import pyarrow as pa
+
+        table = pa.table(
+            {
+                "vector_set_id": pa.array(
+                    [self._vector_set_id] * len(rows), type=pa.uint64()
+                ),
+                "object_type": pa.array(
+                    [row.row.object_type for row in rows], type=pa.string()
+                ),
+                "object_id": pa.array(
+                    [row.row.object_id for row in rows], type=pa.int64()
+                ),
+            }
+        )
+        _flush_registered_arrow_table(
+            self._conn,
+            view_name="__codira_session_pending_delete_rows",
+            table=table,
+            sql="""
+            DELETE FROM pending_vectors USING __codira_session_pending_delete_rows targets
+            WHERE pending_vectors.vector_set_id = targets.vector_set_id
+              AND pending_vectors.object_type = targets.object_type
+              AND pending_vectors.object_id = targets.object_id
+            """,
+        )
+
+    def clear_pending_vectors(self) -> None:
+        """Stage removal of every pending row for this vector set.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Deletions remain private until commit.
+        """
+        self._require_active()
+        self._conn.execute(
+            "DELETE FROM pending_vectors WHERE vector_set_id = ?",
+            (self._vector_set_id,),
+        )
+
+    def commit(self) -> None:
+        """Atomically publish all staged mutations.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Other connections can observe the committed changes.
+
+        Raises
+        ------
+        BaseException
+            If committing the transaction fails; rollback is attempted.
+        """
+        self._require_active()
+        try:
+            self._conn.execute("COMMIT")
+        except BaseException:
+            with suppress(BaseException):
+                self._conn.execute("ROLLBACK")
+            raise
+        finally:
+            self._active = False
+
+    def abort(self) -> None:
+        """Roll back staged mutations; repeated aborts are harmless.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Staged writes are discarded.
+        """
+        if self._closed or not self._active:
+            return
+        try:
+            self._conn.execute("ROLLBACK")
+        finally:
+            self._active = False
+
+    def close(self) -> None:
+        """Close the session, aborting unfinished work first.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The session connection is closed.
+
+        Raises
+        ------
+        BaseException
+            If rollback or connection closure fails.
+        """
+        if self._closed:
+            return
+        try:
+            self.abort()
+        except BaseException:
+            with suppress(BaseException):
+                self._conn.close()
+            self._closed = True
+            raise
+        else:
+            try:
+                self._conn.close()
+            finally:
+                self._closed = True
 
 
 def build_vector_store() -> VectorStore:
